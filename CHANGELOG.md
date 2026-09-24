@@ -86,6 +86,15 @@ says so where it does.
   matched to anything. Outbound documents now record all three numbers - the
   interchange's, the group's and the transaction set's - and record them as
   they were written, four digits and all.
+- A request could fail with `cannot commit - no transaction is active` when
+  two clients wrote at once. The request log was the one database write not
+  taken under the mock's lock, on the grounds that logging is harmless - but
+  `commit()` commits the *connection*, not the statement, so a log entry
+  written while another thread was mid-transaction committed that thread's
+  work early and left its own commit with nothing to do. The request that had
+  done the real work was the one that failed. Found by Python 3.9 on CI; 3.12
+  and later hide it, because their sqlite3 no longer raises. There is now a
+  test that drives six clients at once and asserts nothing answers 5xx.
 - `POST /_mock/reset` did not clear scheduled work, so promises made before a
   reset were kept after it ([#3]). Found by a test that counted one release
   and got two.

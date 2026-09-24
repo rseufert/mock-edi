@@ -68,6 +68,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | `test_change.py` | Changing an order already sent: quantities up and down, lines added and deleted, cancellation, the refusals (after the invoice, below what shipped, an order we never saw), an 850 restated as a change, and the EDIFACT side answered by an ORDRSP. |
 | `test_reconcile.py` | Acknowledgments coming back: a 997 marking a document accepted, rejected or accepted-with-errors, matching that needs both control numbers, an acknowledgment for something we never sent, the CONTRL equivalents, `/_mock/unacknowledged`, and that the control numbers recorded are the ones actually on the wire. |
 | `test_drop.py` | Reading a drop directory and writing a pickup directory: the same pipeline as a POST, files moved to `processed/` and `failed/`, half-written files left alone, temporary and hidden names ignored, and one test for the poller thread. |
+| `test_concurrency.py` | Several clients at once: concurrent writes and control-plane reads, asserting nothing answers 5xx. The one timing test in the suite, and it exists because the request log was committing other threads' transactions out from under them. |
 | `test_delivery.py` | Posting to a real listener: order, AS2 headers and their exact spelling, receipts recorded, failures recorded rather than raised, and mailbox partners left alone. |
 
 ## `tools/` - the checks CI runs beside the tests
