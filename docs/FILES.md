@@ -84,6 +84,8 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | --- | --- |
 | `demo.sh` | A guided curl tour: an order in both dialects, the four documents back, a behaviour changed and the difference shown, a broken document validated, and delayed delivery released with `advance`. |
 | `client.py` | The same tour in Python, with no dependencies - the shape of a test that drives the mock. |
+| `po_bridge.py` | An example of the code the mock exists to test: middleware that reads a purchase order from SAP over OData, sends it as an 850, and posts the 855 back into SAP as an `ORDRSP` IDoc. Uses [mock-sap](https://github.com/rseufert/mock-sap) for the SAP end. |
+| `test_po_bridge.py` | Integration tests for `po_bridge.py` against both mocks: a full confirmation, a short shipment, a rejected line, a partner that never answers, and an SAP outage that must not lose the 855. |
 
 ## `.github/workflows/`
 
