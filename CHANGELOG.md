@@ -31,8 +31,30 @@ says so where it does.
   `/_mock/advance` exists. `GET /_mock/drop` reports the directories, what is
   waiting and what the last scan did.
 
+- **An acknowledgment is now read, not only sent** ([#2]). A 997 or CONTRL
+  arriving for something the mock sent is matched against that document and
+  records the verdict on it, so the most expensive EDI failure - *nobody
+  acknowledged my invoice* - is finally testable.
+  `GET /_mock/unacknowledged?older-than=60` asks the question an operations
+  team actually asks, and `/_mock/documents?acknowledged=false` the same
+  question in the archive's terms.
+
+  The two dialects address what they acknowledge differently and both are
+  matched properly: X12 names a transaction set *inside a functional group*,
+  so `AK102` and `AK202` are both needed - ST02 is only unique within its
+  group - while EDIFACT names a message inside the interchange `UCI01` quotes.
+  An acknowledgment for something the mock never sent comes back
+  `"matched": false` rather than being dropped; it is a real condition and
+  usually evidence of the bug you are looking for.
+
 ### Fixed
 
+- An outbound document recorded the *interchange* control number as its own
+  ([#2]). ISA13 was being stored where ST02 belonged, so the archive disagreed
+  with the document on the wire and an inbound 997 could never have been
+  matched to anything. Outbound documents now record all three numbers - the
+  interchange's, the group's and the transaction set's - and record them as
+  they were written, four digits and all.
 - Test classes that called `MockServerCase.setUpClass()` unbound were starting
   their server on the *base* class, so their own `config_kwargs` never
   applied. Nothing was wrong with the package; the delivery suite had simply
@@ -96,6 +118,7 @@ documents a real one sends.
   check what it reads; it found six real bugs the first time it ran.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
+[#2]: https://github.com/rseufert/mock-edi/issues/2
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/rseufert/mock-edi/releases/tag/v0.1.0

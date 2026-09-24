@@ -120,6 +120,7 @@ bash examples/demo.sh
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
+| Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
 | Directory trading | `GET /_mock/drop`, `POST /_mock/drop/scan` |
 | The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850` |
 | Health and state | `GET /_mock/health`, `GET /_mock/state`, `GET /_mock/requests` |
@@ -232,6 +233,45 @@ Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
 
+## Acknowledgments, both ways
+
+The mock sends a 997 for everything it receives. It also *reads* one for
+everything it sends, which is what makes the most expensive EDI failure
+testable: nobody acknowledged my invoice.
+
+```bash
+curl "http://127.0.0.1:8080/_mock/unacknowledged?older-than=60"
+```
+
+```json
+[
+  {"code": "810", "kind": "invoice", "reference": "4500000042",
+   "group_control": "4", "control": "0004", "partner": "ACME", "at": "..."}
+]
+```
+
+Send a 997 back and the document it names is marked with the verdict:
+
+```json
+{"acknowledged": [
+  {"code": "810", "control": "0004", "matched": true, "status": "rejected",
+   "note": "BIG at segment 2: Segment has data element errors; element 4: Invalid code value ('BADPO')"}
+]}
+```
+
+The two dialects address what they are acknowledging differently, and both are
+matched properly. X12 names a *transaction set inside a functional group* —
+`AK102` quotes GS06, `AK202` quotes ST02, and both are needed because ST02 is
+only unique within its group. EDIFACT names a *message inside an interchange*,
+with `UCI01` quoting UNB's control reference and `UCM01` quoting UNH01.
+
+An acknowledgment naming something the mock never sent comes back
+`"matched": false` rather than being silently dropped — it is real and common,
+and usually evidence of the bug you are looking for.
+
+Set a partner to `no-ack` and nothing is ever acknowledged, so
+`/_mock/unacknowledged` keeps filling up. That is the point.
+
 ## Trading over a directory
 
 Not all EDI is AS2. A great deal of it is still a folder: the partner writes a
@@ -308,6 +348,7 @@ mockedi/x12.py           reading and writing ASC X12 interchanges
 mockedi/edifact.py       reading and writing UN/EDIFACT interchanges
 mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
+mockedi/reconcile.py     reading an acknowledgment for something we sent
 mockedi/transactions.py  business documents in, business documents out
 mockedi/documents.py     what the seller decides, and the shipment and invoice
 mockedi/partners.py      who we trade with, and how each one misbehaves
