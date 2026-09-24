@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mock-edi"
+version = "0.1.0"
+description = "A mock EDI trading partner: X12 and EDIFACT over AS2, with the whole order-to-cash choreography, over SQLite, with zero dependencies."
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+keywords = ["edi", "x12", "edifact", "as2", "mock", "850", "856", "810", "997",
+            "orders", "desadv", "invoic", "edi-integration", "testing"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Intended Audience :: Developers",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: OS Independent",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3.8",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: Implementation :: CPython",
+  "Topic :: Internet :: WWW/HTTP :: HTTP Servers",
+  "Topic :: Office/Business",
+  "Topic :: Software Development :: Testing",
+  "Topic :: Software Development :: Testing :: Mocking",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/rseufert/mock-edi"
+Repository = "https://github.com/rseufert/mock-edi"
+Issues = "https://github.com/rseufert/mock-edi/issues"
+Changelog = "https://github.com/rseufert/mock-edi/blob/main/CHANGELOG.md"
+
+[project.scripts]
+mock-edi = "mockedi.__main__:main"
+
+[tool.setuptools]
+packages = ["mockedi"]
