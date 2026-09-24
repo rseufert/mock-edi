@@ -22,7 +22,7 @@ class Accept(MockServerCase):
 
 class ShortShip(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.behaviour(ACME, "short-ship")
         self.send(x12_order("PO-SHORT"))
 
@@ -58,7 +58,7 @@ class ShortShip(MockServerCase):
 
 class RejectLine(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.behaviour(ACME, "reject-line")
         self.send(x12_order("PO-REJECT-LINE"))
 
@@ -83,7 +83,7 @@ class RejectLine(MockServerCase):
 
 class RejectAll(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.behaviour(ACME, "reject-all")
         self.summary = self.send(x12_order("PO-REJECT-ALL"))
 
@@ -105,7 +105,7 @@ class RejectAll(MockServerCase):
 
 class NoAcknowledgment(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.behaviour(ACME, "no-ack")
         self.summary = self.send(x12_order("PO-SILENT"))
 
@@ -119,7 +119,7 @@ class NoAcknowledgment(MockServerCase):
 
 class DuplicateInvoice(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.behaviour(ACME, "duplicate-invoice")
         self.send(x12_order("PO-DUP"))
         self.post("/_mock/advance?all")

@@ -14,7 +14,7 @@ from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
 
 class X12OrderToCash(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.summary = self.send(x12_order("4500000042"))
 
     def test_the_order_is_accepted_and_recorded(self):
@@ -83,7 +83,7 @@ class X12OrderToCash(MockServerCase):
 
 class EdifactOrderToCash(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.summary = self.send(edifact_order("PO-2026-00042"),
                                  headers={"Content-Type": "application/edifact"})
 

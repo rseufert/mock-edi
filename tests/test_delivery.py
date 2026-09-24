@@ -46,7 +46,7 @@ class DeliveryToAPartner(MockServerCase):
 
     @classmethod
     def setUpClass(cls):
-        MockServerCase.setUpClass()
+        super().setUpClass()
         cls.listener = HTTPServer(("127.0.0.1", 0), Listener)
         cls.listener_port = cls.listener.server_address[1]
         cls.listener_thread = threading.Thread(
@@ -57,10 +57,10 @@ class DeliveryToAPartner(MockServerCase):
     def tearDownClass(cls):
         cls.listener.shutdown()
         cls.listener.server_close()
-        MockServerCase.tearDownClass()
+        super().tearDownClass()
 
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         Listener.received = []
         Listener.reply_status = 200
         self.url = "http://127.0.0.1:%d/as2" % self.listener_port
@@ -141,7 +141,7 @@ class DeliveryToAPartner(MockServerCase):
 class AsynchronousReceipts(MockServerCase):
     @classmethod
     def setUpClass(cls):
-        MockServerCase.setUpClass()
+        super().setUpClass()
         cls.listener = HTTPServer(("127.0.0.1", 0), Listener)
         cls.listener_port = cls.listener.server_address[1]
         cls.listener_thread = threading.Thread(
@@ -152,7 +152,7 @@ class AsynchronousReceipts(MockServerCase):
     def tearDownClass(cls):
         cls.listener.shutdown()
         cls.listener.server_close()
-        MockServerCase.tearDownClass()
+        super().tearDownClass()
 
     def test_the_mdn_is_posted_to_the_url_the_sender_named(self):
         from support import as2_headers

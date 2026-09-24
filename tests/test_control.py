@@ -74,7 +74,7 @@ class Partners(MockServerCase):
 
 class Mailbox(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.send(x12_order("PO-BOX"))
 
     def test_peeking_leaves_everything_where_it_was(self):
@@ -129,7 +129,7 @@ class Delays(MockServerCase):
 
 class SendOnDemand(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.send(x12_order("PO-REPLAY"))
         self.mailbox(ACME, leave=False)
 
@@ -164,7 +164,7 @@ class SendOnDemand(MockServerCase):
 
 class Archive(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.send(x12_order("PO-LOG"))
 
     def test_every_transaction_set_is_listed_in_and_out(self):
