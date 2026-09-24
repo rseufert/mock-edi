@@ -128,11 +128,17 @@ class DropBox:
                 continue
             if name.startswith(".") or name.lower().endswith(IGNORED_SUFFIXES):
                 continue
-            try:
-                if os.path.getmtime(path) > cutoff:
+            # A settle time of zero means no waiting at all, and is checked
+            # for explicitly rather than falling out of the arithmetic: a
+            # file's modification time can read as very slightly *ahead* of
+            # the clock, so `mtime > now` is true for a file just written and
+            # zero would otherwise mean "never ready" rather than "always".
+            if self.settle_ms:
+                try:
+                    if os.path.getmtime(path) > cutoff:
+                        continue
+                except OSError:          # vanished between listing and stat
                     continue
-            except OSError:              # vanished between listing and stat
-                continue
             out.append(name)
         return out
 

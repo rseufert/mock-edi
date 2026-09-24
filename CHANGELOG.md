@@ -55,6 +55,11 @@ says so where it does.
   matched to anything. Outbound documents now record all three numbers - the
   interchange's, the group's and the transaction set's - and record them as
   they were written, four digits and all.
+- A drop directory configured with `--drop-settle-ms 0` never read anything
+  ([#1]). A file's modification time can read very slightly *ahead* of the
+  clock, so `mtime > now` was true for a file that had just been written and
+  zero meant "never ready" rather than "no waiting". Found by Windows CI,
+  where the two clocks disagree more often than they do elsewhere.
 - Test classes that called `MockServerCase.setUpClass()` unbound were starting
   their server on the *base* class, so their own `config_kwargs` never
   applied. Nothing was wrong with the package; the delivery suite had simply
