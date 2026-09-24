@@ -65,7 +65,11 @@ class Receipt:
     report: Optional[InterchangeReport] = None
     queued: List[Queued] = field(default_factory=list)
     orders: List[str] = field(default_factory=list)
+    changes: List[str] = field(default_factory=list)
+    change_requests: Dict[str, Any] = field(default_factory=dict)
+    change_outcomes: Dict[str, Any] = field(default_factory=dict)
     acknowledged: List[Dict[str, Any]] = field(default_factory=list)
+    refusals: List[Dict[str, str]] = field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
@@ -132,9 +136,23 @@ class Pipeline:
             if (message_report.kind == schema.ORDER and message_report.accepted):
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
-                    documents.record_order(self.conn, partner, order, self.now())
-                    receipt.orders.append(order.po_number)
                     reference = order.po_number
+                    # A buyer may restate a whole order rather than send an
+                    # 860, and BEG01 says so. Against an order the mock already
+                    # holds that is a change, not a replacement.
+                    known = documents.order_row(self.conn, order.po_number)
+                    if order.purpose in transactions.CHANGE_PURPOSES and known:
+                        self._apply_change(
+                            partner, transactions.change_from_order(order),
+                            receipt)
+                    else:
+                        documents.record_order(self.conn, partner, order,
+                                               self.now())
+                        receipt.orders.append(order.po_number)
+            elif (message_report.kind == schema.CHANGE and message_report.accepted):
+                change = transactions.read_change(message, dialect)
+                reference = change.po_number
+                self._apply_change(partner, change, receipt)
             elif message_report.kind == schema.ACKNOWLEDGMENT:
                 # A receipt for something the mock sent, rather than something
                 # for the mock to act on.
@@ -167,6 +185,29 @@ class Pipeline:
         self.conn.commit()
         return reference
 
+    def _apply_change(self, partner, change, receipt: Receipt) -> None:
+        """Hand a change to the seller, and remember what it decided.
+
+        A refusal still produces an answer - that is the whole point of a
+        change acknowledgment - so a refused change is recorded and reported
+        rather than quietly dropped.
+        """
+        outcome = documents.apply_change(self.conn, partner, change, self.now())
+        if outcome.refused:
+            receipt.refusals.append({"order": change.po_number,
+                                     "reason": outcome.reason})
+            return
+        receipt.changes.append(change.po_number)
+        receipt.change_requests[change.po_number] = change
+        receipt.change_outcomes[change.po_number] = outcome
+        if outcome.cancelled:
+            # Nothing more will be packed or billed for a cancelled order.
+            self.conn.execute(
+                "UPDATE scheduled SET done_at = ?, note = 'order cancelled'"
+                " WHERE po_number = ? AND done_at = ''",
+                (db.now(), change.po_number))
+            self.conn.commit()
+
     # -- planning the answers
 
     def _plan(self, partner: Dict[str, Any], interchange: Interchange,
@@ -188,9 +229,15 @@ class Pipeline:
             self._queue_response(partner, order, receipt, moment)
             if behaviour == "reject-all":
                 continue
-            self._queue_fulfilment(partner, po_number, receipt, moment)
+            self._schedule_fulfilment(partner, po_number, moment)
 
-        self.release(moment)
+        for po_number in receipt.changes:
+            order = documents.order_row(self.conn, po_number)
+            if order is not None:
+                self._queue_change_response(partner, order, po_number, receipt,
+                                            moment)
+
+        self.release(moment, receipt)
 
     def _queue_acknowledgment(self, partner, interchange, report, receipt,
                               moment) -> None:
@@ -214,29 +261,59 @@ class Pipeline:
         self._send(partner, schema.RESPONSE, body, order["po_number"], receipt,
                    moment, self.config.response_delay_ms)
 
-    def _queue_fulfilment(self, partner, po_number, receipt, moment) -> None:
-        """The shipment and the invoice, created now and sent when they are due.
+    def _schedule_fulfilment(self, partner, po_number, moment) -> None:
+        """Promise to pack and to invoice, without doing either yet.
 
-        Created now, not when they are released: the documents have to exist
-        for `/_mock/orders` to show the order progressing, and holding a
-        half-made shipment in the queue would mean two sources of truth.
+        The work is scheduled rather than done, because a despatch delay has
+        to postpone the *packing* and not merely the posting.  A shipment
+        created the instant the order arrives cannot reflect a change that
+        arrives a minute later - and refusing every change would not be
+        fidelity, it would be an artefact of having done the work too early.
+
+        With the default delays of zero both promises come due immediately and
+        are kept before the request returns, so nothing about the simple case
+        changes.
         """
-        despatch_at = moment + datetime.timedelta(
-            milliseconds=self.config.despatch_delay_ms)
-        shipment = documents.create_shipment(self.conn, po_number, despatch_at)
-        if shipment is None:
-            return
-        order = documents.order_row(self.conn, po_number)
-        lines = documents.order_lines(self.conn, po_number)
-        body = transactions.write_despatch(
-            partner["dialect"], self.us, partner, order, lines, shipment, despatch_at)
-        self._send(partner, schema.DESPATCH, body, po_number, receipt, moment,
-                   self.config.despatch_delay_ms)
+        for kind, delay in ((schema.DESPATCH, self.config.despatch_delay_ms),
+                            (schema.INVOICE, self.config.invoice_delay_ms)):
+            due = moment + datetime.timedelta(milliseconds=delay)
+            self.conn.execute(
+                "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
+                " VALUES (?,?,?,?,?)",
+                (partner["id"], po_number, kind, due.isoformat(), db.now()))
+        self.conn.commit()
 
-        invoice_at = moment + datetime.timedelta(
-            milliseconds=self.config.invoice_delay_ms)
+    def _fulfil(self, row, moment, receipt: Optional[Receipt] = None) -> None:
+        """Keep one promise: pack the goods, or bill for them.
+
+        A receipt is threaded through so that a document produced while
+        answering a request still appears in that request's summary - with
+        the default delays of zero, that is every document.
+        """
+        partner = partners.get(self.conn, row["partner"])
+        if partner is None:
+            return
+        po_number = row["po_number"]
+
+        if row["kind"] == schema.DESPATCH:
+            shipment = documents.create_shipment(self.conn, po_number, moment)
+            if shipment is None:
+                return
+            order = documents.order_row(self.conn, po_number)
+            lines = documents.order_lines(self.conn, po_number)
+            body = transactions.write_despatch(
+                partner["dialect"], self.us, partner, order, lines, shipment,
+                moment)
+            self._send(partner, schema.DESPATCH, body, po_number, receipt, moment)
+            return
+
+        shipment = documents.latest_shipment(self.conn, po_number)
+        if not shipment:
+            # An invoice due before the despatch: bill what can be billed, the
+            # way a seller who ships and invoices in one motion does.
+            shipment = documents.create_shipment(self.conn, po_number, moment) or {}
         invoice = documents.create_invoice(
-            self.conn, po_number, shipment["shipment_id"], invoice_at,
+            self.conn, po_number, shipment.get("shipment_id", ""), moment,
             self.config.tax_rate)
         if invoice is None:
             return
@@ -244,16 +321,47 @@ class Pipeline:
         lines = documents.order_lines(self.conn, po_number)
         body = transactions.write_invoice(
             partner["dialect"], self.us, partner, order, lines, invoice,
-            shipment, invoice_at)
-        self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
-                   self.config.invoice_delay_ms)
+            shipment, moment)
+        self._send(partner, schema.INVOICE, body, po_number, receipt, moment)
         if partner["behaviour"] == "duplicate-invoice":
             # The same invoice number, sent twice, a few moments apart: a
             # partner with a retry bug, which is where duplicate-payment
             # incidents come from.
             self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
-                       self.config.invoice_delay_ms + 1000,
-                       note="duplicate of the invoice above")
+                       1000, note="duplicate of the invoice above")
+
+    def _queue_change_response(self, partner, order, po_number, receipt,
+                               moment) -> None:
+        """Answer the change, line by line, about the lines it asked about.
+
+        The answer is about the *change*, not about the order: a line the
+        seller refused to alter is reported refused here while the stored
+        order keeps the quantity it already had. Reporting the order's state
+        instead would tell the buyer its request succeeded.
+        """
+        change = receipt.change_requests.get(po_number)
+        outcome = receipt.change_outcomes.get(po_number)
+        stored = {row["line"]: row for row in
+                  documents.order_lines(self.conn, po_number)}
+        lines = []
+        for entry in (outcome.lines if outcome else []):
+            row = dict(stored.get(entry["line"], {}))
+            if not row:
+                row = {"line": entry["line"], "sku": "", "upc": "",
+                       "description": "", "quantity": "0", "uom": "EA",
+                       "price": "0.00", "confirmed": "0", "scheduled_on": ""}
+            row["status"] = entry["status"]
+            row["reason"] = entry["reason"]
+            row["change_action"] = entry["action"]
+            if entry["status"] == transactions.REJECTED:
+                row["confirmed"] = "0"
+            lines.append(row)
+        if not lines:
+            lines = list(stored.values())
+        body = transactions.write_change_response(
+            partner["dialect"], self.us, partner, order, lines, change, moment)
+        self._send(partner, schema.CHANGE_RESPONSE, body, po_number, receipt,
+                   moment, self.config.response_delay_ms)
 
     # -- outbound
 
@@ -370,8 +478,31 @@ class Pipeline:
 
     # -- the queue
 
-    def release(self, moment: Optional[datetime.datetime] = None) -> List[int]:
-        """Mark everything due as ready to collect, and record it as sent."""
+    def run_due(self, moment: Optional[datetime.datetime] = None,
+                receipt: Optional[Receipt] = None) -> List[int]:
+        """Do the work that has come due, before releasing anything.
+
+        Ordered by due time and then by the order it was promised, so the
+        despatch is packed before the invoice is written even when both come
+        due at the same instant.
+        """
+        when = (moment or self.now())
+        rows = db.rows(self.conn,
+                       "SELECT * FROM scheduled WHERE done_at = '' AND due_at <= ?"
+                       " ORDER BY due_at, id", (when.isoformat(),))
+        done: List[int] = []
+        for row in rows:
+            self.conn.execute("UPDATE scheduled SET done_at = ? WHERE id = ?",
+                              (db.now(), row["id"]))
+            self.conn.commit()
+            self._fulfil(row, when if when.year < 9999 else self.now(), receipt)
+            done.append(int(row["id"]))
+        return done
+
+    def release(self, moment: Optional[datetime.datetime] = None,
+                receipt: Optional[Receipt] = None) -> List[int]:
+        """Do what is due, then mark everything ready to collect."""
+        self.run_due(moment, receipt)
         when = (moment or self.now()).isoformat()
         due = db.rows(self.conn,
                       "SELECT * FROM outbound WHERE status = ? AND due_at <= ?"

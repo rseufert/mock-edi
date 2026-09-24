@@ -197,6 +197,11 @@ ACK_TYPE_CODES = {         # 587
     "RF": "Reject - With Exception Detail Only",
     "RJ": "Rejected - No Detail",
 }
+CHANGE_TYPE_CODES = {      # 670, the line-level verb in a POC
+    "AI": "Add Item", "CA": "Changes to Line Items", "DI": "Delete Item",
+    "NC": "No Change", "PC": "Price Change", "QD": "Quantity Decrease",
+    "QI": "Quantity Increase", "RZ": "Reschedule", "SI": "Substitute Item",
+}
 LINE_STATUS_CODES = {      # 668
     "IA": "Item Accepted", "IB": "Item Backordered",
     "IC": "Item Accepted - Changes Made", "ID": "Item Deleted",
@@ -292,6 +297,8 @@ GROUP_ERROR_CODES = {      # 716
 FUNCTIONAL_GROUP_CODES = {  # 479
     "PO": "Purchase Order (850)", "PR": "Purchase Order Acknowledgment (855)",
     "SH": "Ship Notice/Manifest (856)", "IN": "Invoice (810)",
+    "PC": "Purchase Order Change Request (860)",
+    "CA": "Purchase Order Change Acknowledgment (865)",
     "FA": "Functional Acknowledgment (997)",
 }
 CURRENCY_CODES = {"USD": "US Dollar", "EUR": "Euro", "GBP": "Pound Sterling",
@@ -353,6 +360,43 @@ BAK = Segment("BAK", "Beginning Segment for Purchase Order Acknowledgment", (
     _e("373", "Acknowledgment Date", "DT", 8, 8),
     _e("326", "Request Reference Number", "AN", 1, 45),
 ), "Identifies the order being acknowledged and the overall verdict on it.")
+
+BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
+    _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
+    _e("92", "Purchase Order Type Code", "ID", 2, 2, MANDATORY, PO_TYPE_CODES),
+    _e("324", "Purchase Order Number", "AN", 1, 22, MANDATORY),
+    _e("328", "Release Number", "AN", 1, 30),
+    _e("327", "Change Order Sequence Number", "AN", 1, 8),
+    _e("373", "Date", "DT", 8, 8, MANDATORY),
+    _e("367", "Contract Number", "AN", 1, 30),
+    _e("587", "Acknowledgment Type", "ID", 2, 2, OPTIONAL, ACK_TYPE_CODES),
+    _e("326", "Request Reference Number", "AN", 1, 45),
+    _e("373", "Purchase Order Date", "DT", 8, 8),
+), "Identifies the order being changed, and which change this is.")
+
+BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment", (
+    _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
+    _e("587", "Acknowledgment Type", "ID", 2, 2, MANDATORY, ACK_TYPE_CODES),
+    _e("324", "Purchase Order Number", "AN", 1, 22, MANDATORY),
+    _e("328", "Release Number", "AN", 1, 30),
+    _e("327", "Change Order Sequence Number", "AN", 1, 8),
+    _e("373", "Date", "DT", 8, 8, MANDATORY),
+    _e("367", "Contract Number", "AN", 1, 30),
+    _e("326", "Request Reference Number", "AN", 1, 45),
+    _e("373", "Purchase Order Date", "DT", 8, 8),
+), "The seller's verdict on a change request, and which request it answers.")
+
+POC = Segment("POC", "Line Item Change", (
+    _e("350", "Assigned Identification", "AN", 1, 20),
+    _e("670", "Change or Response Type Code", "ID", 2, 2, MANDATORY,
+       CHANGE_TYPE_CODES),
+    _e("330", "Quantity Ordered", "R", 1, 15),
+    _e("671", "Quantity Left to Receive", "R", 1, 9),
+    _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
+    _e("212", "Unit Price", "R", 1, 17),
+    _e("639", "Basis of Unit Price Code", "ID", 2, 2),
+) + _product_ids(5), "One line of the change: which line, what to do to it, "
+                     "and the quantity and price it should end up with.")
 
 BSN = Segment("BSN", "Beginning Segment for Ship Notice", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -807,6 +851,53 @@ X12_810 = TransactionSet("810", "Invoice", "X12", (
 ), group="IN", version="004010",
    purpose="The seller asks to be paid, referencing the order and the shipment.")
 
+X12_860 = TransactionSet("860", "Purchase Order Change Request", "X12", (
+    Use(ST, MANDATORY),
+    Use(BCH, MANDATORY),
+    Use(CUR),
+    Use(REF, max_use=12),
+    Use(PER, max_use=3),
+    Use(FOB, max_use=5),
+    Use(ITD, max_use=5),
+    Use(DTM, max_use=10),
+    _address_loop(),
+    Loop("POC", (
+        Use(POC, MANDATORY),
+        Use(PID, max_use=200),
+        Use(PO4),
+        Use(REF, max_use=12),
+        Use(DTM, max_use=10),
+        Use(SAC, max_use=25),
+        _address_loop(),
+    ), OPTIONAL, 100000),
+    Use(CTT),
+    Use(SE, MANDATORY),
+), group="PC", version="004010",
+   purpose="The buyer changes an order it has already placed: a quantity, a "
+           "price, a line added or deleted, or the whole order cancelled.")
+
+X12_865 = TransactionSet("865", "Purchase Order Change Acknowledgment", "X12", (
+    Use(ST, MANDATORY),
+    Use(BCA, MANDATORY),
+    Use(CUR),
+    Use(REF, max_use=12),
+    Use(PER, max_use=3),
+    Use(DTM, max_use=10),
+    _address_loop(),
+    Loop("POC", (
+        Use(POC, MANDATORY),
+        Use(ACK, max_use=104),
+        Use(PID, max_use=200),
+        Use(REF, max_use=12),
+        Use(DTM, max_use=10),
+        _address_loop(),
+    ), OPTIONAL, 100000),
+    Use(CTT),
+    Use(SE, MANDATORY),
+), group="CA", version="004010",
+   purpose="The seller answers a change request, line by line, in the same "
+           "vocabulary the 855 uses.")
+
 X12_997 = TransactionSet("997", "Functional Acknowledgment", "X12", (
     Use(ST, MANDATORY),
     Use(AK1, MANDATORY),
@@ -840,7 +931,8 @@ X12_997 = TransactionSet("997", "Functional Acknowledgment", "X12", (
 # ---------------------------------------------------------------------------
 
 DOCUMENT_NAME_CODES = {    # 1001
-    "220": "Order", "231": "Purchase order response", "351": "Despatch advice",
+    "220": "Order", "230": "Purchase order change request",
+    "231": "Purchase order response", "351": "Despatch advice",
     "380": "Commercial invoice", "381": "Credit note", "83": "Credit note",
 }
 MESSAGE_FUNCTION_CODES = {  # 1225
@@ -896,6 +988,11 @@ EDIFACT_PRICE_QUALIFIERS = {  # 5125
 EDIFACT_TEXT_QUALIFIERS = {  # 4451
     "AAI": "General information", "AAO": "Error description",
     "ORI": "Order information", "ZZZ": "Mutually defined",
+}
+EDIFACT_LINE_ACTIONS = {   # 1229, the line-level verb in an ORDCHG
+    "1": "Added", "2": "Deleted", "3": "Changed", "4": "No action",
+    "5": "Accepted without amendment", "6": "Accepted with amendment",
+    "7": "Not accepted",
 }
 EDIFACT_ACTION_CODES = {   # 0083, in CONTRL
     "4": "This level and all lower levels rejected",
@@ -1085,7 +1182,8 @@ PAT = Segment("PAT", "Payment Terms Basis", (
 
 LIN_E = Segment("LIN", "Line Item", (
     _e("1082", "Line item identifier", "AN", 1, 6),
-    _e("1229", "Action request/notification description code", "ID", 1, 3),
+    _e("1229", "Action request/notification description code", "ID", 1, 3,
+       OPTIONAL, EDIFACT_LINE_ACTIONS),
     _c("C212", "Item Number Identification", (
         _e("7140", "Item identifier", "AN", 1, 35),
         _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
@@ -1317,6 +1415,16 @@ EDIFACT_ORDRSP = TransactionSet("ORDRSP", "Purchase Order Response Message", "ED
    purpose="The seller's answer. The verdict is in BGM's response type code and, "
            "line by line, in the confirmed quantity.")
 
+# ORDCHG has the same shape as ORDERS - it is the same message with a
+# different document code in BGM and a verb on each line - so it is built from
+# the same parts rather than written out again.
+EDIFACT_ORDCHG = TransactionSet("ORDCHG", "Purchase Order Change Request Message",
+                                "EDIFACT", EDIFACT_ORDERS.children,
+   version="D:96A:UN",
+   purpose="The EDIFACT change request. BGM carries document code 230 and "
+           "each LIN carries an action code; there is no separate change "
+           "acknowledgment message, so an ORDRSP answers it.")
+
 EDIFACT_DESADV = TransactionSet("DESADV", "Despatch Advice Message", "EDIFACT", (
     Use(UNH, MANDATORY),
     Use(BGM, MANDATORY),
@@ -1390,30 +1498,46 @@ EDIFACT_CONTRL = TransactionSet("CONTRL", "Syntax and Service Report Message", "
 # ---------------------------------------------------------------------------
 
 ORDER = "order"
+CHANGE = "change"
+CHANGE_RESPONSE = "change-response"
 RESPONSE = "response"
 DESPATCH = "despatch"
 INVOICE = "invoice"
 ACKNOWLEDGMENT = "acknowledgment"
 
-KINDS = (ORDER, RESPONSE, DESPATCH, INVOICE, ACKNOWLEDGMENT)
+KINDS = (ORDER, CHANGE, CHANGE_RESPONSE, RESPONSE, DESPATCH, INVOICE,
+         ACKNOWLEDGMENT)
 
-X12_SETS = {s.code: s for s in (X12_850, X12_855, X12_856, X12_810, X12_997)}
+X12_SETS = {s.code: s for s in (X12_850, X12_855, X12_856, X12_810, X12_860,
+                                X12_865, X12_997)}
 EDIFACT_SETS = {s.code: s for s in (EDIFACT_ORDERS, EDIFACT_ORDRSP,
-                                    EDIFACT_DESADV, EDIFACT_INVOIC, EDIFACT_CONTRL)}
+                                    EDIFACT_ORDCHG, EDIFACT_DESADV,
+                                    EDIFACT_INVOIC, EDIFACT_CONTRL)}
 SETS = {("X12", code): s for code, s in X12_SETS.items()}
 SETS.update({("EDIFACT", code): s for code, s in EDIFACT_SETS.items()})
 
 DIALECTS = ("X12", "EDIFACT")
 
 SET_FOR_KIND = {
-    "X12": {ORDER: "850", RESPONSE: "855", DESPATCH: "856",
-            INVOICE: "810", ACKNOWLEDGMENT: "997"},
-    "EDIFACT": {ORDER: "ORDERS", RESPONSE: "ORDRSP", DESPATCH: "DESADV",
-                INVOICE: "INVOIC", ACKNOWLEDGMENT: "CONTRL"},
+    "X12": {ORDER: "850", CHANGE: "860", CHANGE_RESPONSE: "865",
+            RESPONSE: "855", DESPATCH: "856", INVOICE: "810",
+            ACKNOWLEDGMENT: "997"},
+    # EDIFACT has no separate change acknowledgment: ORDRSP answers both an
+    # ORDERS and an ORDCHG, which is the difference most likely to catch out
+    # somebody porting a mapping from X12.
+    "EDIFACT": {ORDER: "ORDERS", CHANGE: "ORDCHG", CHANGE_RESPONSE: "ORDRSP",
+                RESPONSE: "ORDRSP", DESPATCH: "DESADV", INVOICE: "INVOIC",
+                ACKNOWLEDGMENT: "CONTRL"},
 }
+# Inverting the map is ambiguous where one code serves two kinds - EDIFACT's
+# ORDRSP is both a response and a change response - so the plain `response` is
+# declared to win, and the change path decides for itself from what the
+# document says.
 KIND_OF = {}
 for _dialect, _map in SET_FOR_KIND.items():
     for _kind, _code in _map.items():
+        if (_dialect, _code) in KIND_OF and _kind == CHANGE_RESPONSE:
+            continue
         KIND_OF[(_dialect, _code)] = _kind
 
 

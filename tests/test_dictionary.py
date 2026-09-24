@@ -101,6 +101,27 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
                                          ("GEAR-200", 500, "14.25"))))
         partners.update(self.conn, ACME, behaviour="accept")
 
+    def test_a_change_response_validates(self):
+        from mockedi import documents, partners
+        from support import x12_change, edifact_change
+        # A change needs an order that has not shipped, so this pipeline is
+        # configured with a window and the order is left unfulfilled.
+        self.config.despatch_delay_ms = 3600000
+        self.config.invoice_delay_ms = 3600000
+        try:
+            self._run(ACME, x12_order("VALID-CHANGE"))
+            self._run(ACME, x12_change("VALID-CHANGE",
+                                       [("1", "CA", 60, "12.50"),
+                                        ("2", "DI", 0, "0"),
+                                        ("3", "AI", 25, "8.90")],
+                                       skus={"3": "GEAR-100"}))
+            self._run(EURODIS, edifact_order("VALID-CHANGE-E"))
+            self._run(EURODIS, edifact_change("VALID-CHANGE-E",
+                                              [("1", "3", 60, "12.50")]))
+        finally:
+            self.config.despatch_delay_ms = 0
+            self.config.invoice_delay_ms = 0
+
     def test_an_acknowledgment_of_a_broken_document_validates(self):
         broken = x12_order("VALID-BROKEN", purpose="ZZ",
                            lines=(("WIDGET-001", 100, "12.50"),))
@@ -113,7 +134,9 @@ class TheEndpoint(MockServerCase):
         codes = {(t["dialect"], t["code"]) for t in data["transactionSets"]}
         self.assertIn(("X12", "850"), codes)
         self.assertIn(("EDIFACT", "DESADV"), codes)
-        self.assertEqual(len(codes), 10)
+        # Against the registry rather than a number: adding a transaction set
+        # should not need this test edited, only the registry.
+        self.assertEqual(codes, set(schema.SETS))
 
     def test_one_set_comes_with_its_segments_and_elements(self):
         _s, _h, data = self.get("/_mock/dictionary/X12/850")

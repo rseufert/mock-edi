@@ -121,6 +121,7 @@ bash examples/demo.sh
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
+| Work promised, not done | `GET /_mock/scheduled` |
 | Directory trading | `GET /_mock/drop`, `POST /_mock/drop/scan` |
 | The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850` |
 | Health and state | `GET /_mock/health`, `GET /_mock/state`, `GET /_mock/requests` |
@@ -133,6 +134,8 @@ bash examples/demo.sh
 | --- | --- | --- |
 | Purchase order | **850** | **ORDERS** |
 | Purchase order response | **855** | **ORDRSP** |
+| Purchase order change | **860** | **ORDCHG** |
+| Change acknowledgment | **865** | **ORDRSP** |
 | Despatch advice / ship notice | **856** | **DESADV** |
 | Invoice | **810** | **INVOIC** |
 | Syntax acknowledgment | **997** | **CONTRL** |
@@ -232,6 +235,44 @@ curl -X PATCH -H 'Content-Type: application/json' \
 Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
+
+## Changing an order
+
+A buyer changes an order it has already placed with an **860** (or an
+**ORDCHG**, or an 850 restated with `BEG01 = 04`), and the seller answers with
+an **865**. EDIFACT has no separate change acknowledgment message, so an
+ORDCHG is answered by an **ORDRSP** — the difference most likely to catch out
+someone porting a mapping from X12.
+
+```
+POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
+ACK*IA*60*EA*068*20260926~                 the seller agrees
+POC*2*DI*40**EA*4.15**VP*BRKT-050~         the buyer drops line 2
+ACK*IR*0*EA~
+REF*ZZ**Line deleted at the buyer's request~
+```
+
+**A change cannot unmake what has already happened.** A quantity cannot go
+below what shipped, a shipped line cannot be deleted, an order that shipped
+cannot be cancelled, and an order that has been invoiced cannot be changed at
+all. A refused line comes back `IR` with the reason, and the order keeps what
+it had — reporting the order's state instead would tell the buyer its request
+succeeded.
+
+**Give yourself a window.** A change is only meaningful before the goods
+leave, and with every delay at zero the order is invoiced before the POST
+returns, so every change would be refused. That is correct behaviour, not a
+limitation to work around:
+
+```bash
+mock-edi --despatch-delay 3600000 --invoice-delay 3600000
+```
+
+Delays postpone the *work*, not merely the posting. A despatch that is not due
+yet has not been packed, so a change arriving in the meantime affects it —
+which is the whole point, and why `GET /_mock/scheduled` shows work promised
+but not done, separately from `/_mock/outbox`, which shows documents that
+already exist.
 
 ## Acknowledgments, both ways
 

@@ -27,6 +27,7 @@ from __future__ import annotations
 import datetime
 import math
 import sqlite3
+from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
@@ -280,3 +281,192 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
     conn.commit()
     return db.one(conn, "SELECT * FROM invoice WHERE invoice_number = ?",
                   (invoice_number,))
+
+
+# ---------------------------------------------------------------------------
+# Changing an order that has already been sent
+#
+# The rule that matters, and the one most likely to be wrong in real code:
+# **a change cannot unmake what has already happened.**  A quantity cannot be
+# lowered below what has shipped, a shipped line cannot be deleted, and an
+# order that has been invoiced cannot be changed at all.  Everything else here
+# is bookkeeping.
+#
+# The window in which a change is possible is the window before despatch, so a
+# mock running with no delays - where an order is invoiced before the POST
+# returns - will refuse every change it is sent.  That is correct behaviour
+# and not a limitation to work around: give the mock a despatch delay and the
+# window opens.
+# ---------------------------------------------------------------------------
+
+REFUSED = "refused"
+APPLIED = "applied"
+
+NOT_FOUND = "no such purchase order"
+ALREADY_INVOICED = "the order has been invoiced and can no longer be changed"
+ALREADY_SHIPPED = "the goods have shipped"
+
+
+@dataclass
+class ChangeOutcome:
+    """What the seller did with a change request."""
+    po_number: str
+    status: str = APPLIED
+    reason: str = ""
+    cancelled: bool = False
+    lines: List[Dict[str, Any]] = field(default_factory=list)
+
+    @property
+    def refused(self) -> bool:
+        return self.status == REFUSED
+
+
+def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
+                 when: Optional[datetime.datetime] = None) -> ChangeOutcome:
+    """Apply a change request to an order the mock already holds."""
+    from .transactions import ADD, CHANGE_LINE, DELETE, NO_CHANGE
+    moment = when or datetime.datetime.now()
+    order = order_row(conn, change.po_number)
+    if order is None:
+        return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
+    if order["status"] == "invoiced":
+        return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)
+
+    existing = {row["line"]: row for row in order_lines(conn, change.po_number)}
+
+    if change.cancels:
+        shipped = [row for row in existing.values() if number(row["shipped"]) > 0]
+        if shipped:
+            return ChangeOutcome(
+                change.po_number, REFUSED,
+                "%s on line %s, so the order cannot be cancelled"
+                % (ALREADY_SHIPPED, shipped[0]["line"]))
+        for row in existing.values():
+            conn.execute(
+                "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
+                " WHERE po_number = ? AND line = ?",
+                (REJECTED, "Order cancelled at the buyer's request",
+                 change.po_number, row["line"]))
+        conn.execute("UPDATE purchase_order SET status = 'cancelled', total = ?"
+                     " WHERE po_number = ?", ("0.00", change.po_number))
+        conn.commit()
+        return ChangeOutcome(change.po_number, APPLIED, "Order cancelled",
+                             cancelled=True)
+
+    outcome = ChangeOutcome(change.po_number)
+    for line in change.lines:
+        row = existing.get(line.number)
+        action = line.action or CHANGE_LINE
+
+        if action == DELETE:
+            outcome.lines.append(_delete_line(conn, change, line, row))
+            continue
+        if action == NO_CHANGE and row is not None:
+            outcome.lines.append({"line": line.number, "action": action,
+                                  "status": row["status"], "reason": ""})
+            continue
+        if row is None or action == ADD:
+            outcome.lines.append(_add_line(conn, partner, change, line, moment))
+            continue
+        outcome.lines.append(_change_line(conn, partner, change, line, row, moment))
+
+    _retotal(conn, change.po_number)
+    conn.commit()
+    return outcome
+
+
+def _delete_line(conn, change, line, row) -> Dict[str, Any]:
+    if row is None:
+        return {"line": line.number, "action": "DI", "status": REJECTED,
+                "reason": "there is no line %s to delete" % line.number}
+    if number(row["shipped"]) > 0:
+        return {"line": line.number, "action": "DI", "status": REJECTED,
+                "reason": "%s, so line %s cannot be deleted"
+                          % (ALREADY_SHIPPED, line.number)}
+    conn.execute(
+        "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
+        " WHERE po_number = ? AND line = ?",
+        (REJECTED, "Line deleted at the buyer's request", change.po_number,
+         line.number))
+    return {"line": line.number, "action": "DI", "status": REJECTED,
+            "reason": "Line deleted at the buyer's request"}
+
+
+def _add_line(conn, partner, change, line, moment) -> Dict[str, Any]:
+    """A line the order did not have, decided the way a new order line is."""
+    from .transactions import Line, Order
+    stand_in = Order(po_number=change.po_number, currency=change.currency)
+    stand_in.lines.append(Line(number=line.number, sku=line.sku, upc=line.upc,
+                               description=line.description,
+                               quantity=line.quantity, uom=line.uom,
+                               price=line.price))
+    status, confirmed, price, reason, scheduled = decide(
+        conn, partner, stand_in, moment)[0]
+    item = _catalog(conn, line)
+    conn.execute(
+        "INSERT OR REPLACE INTO order_line (po_number, line, sku, upc,"
+        " description, quantity, uom, price, ordered_price, status, confirmed,"
+        " shipped, invoiced, reason, scheduled_on)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (change.po_number, line.number, (item["sku"] if item else line.sku),
+         line.upc or (item["upc"] if item else ""),
+         line.description or (item["description"] if item else ""),
+         quantity_text(line.quantity), line.uom, db.money(price),
+         db.money(line.price), status, quantity_text(confirmed), "0", "0",
+         reason, scheduled))
+    return {"line": line.number, "action": "AI", "status": status,
+            "reason": reason}
+
+
+def _change_line(conn, partner, change, line, row, moment) -> Dict[str, Any]:
+    """A quantity or a price restated on a line that already exists."""
+    from .transactions import CHANGE_LINE
+    shipped = number(row["shipped"])
+    wanted = line.quantity if line.quantity > 0 else number(row["quantity"])
+
+    # The answer echoes the verb the buyer used - QD, QI, PC - rather than
+    # flattening everything to CA, so the buyer can match the response to the
+    # request it made.
+    action = line.action or CHANGE_LINE
+    if wanted < shipped:
+        return {"line": line.number, "action": action, "status": REJECTED,
+                "reason": "%s of line %s already shipped; the quantity cannot "
+                          "be lowered to %s"
+                          % (quantity_text(shipped), line.number,
+                             quantity_text(wanted))}
+
+    from .transactions import Line, Order
+    stand_in = Order(po_number=change.po_number, currency=change.currency)
+    stand_in.lines.append(Line(number=line.number, sku=line.sku or row["sku"],
+                               upc=line.upc or row["upc"],
+                               description=row["description"], quantity=wanted,
+                               uom=line.uom or row["uom"],
+                               price=line.price or number(row["ordered_price"], "0.00")))
+    status, confirmed, price, reason, scheduled = decide(
+        conn, partner, stand_in, moment)[0]
+    # Never confirm less than has already left the building.
+    if confirmed < shipped:
+        confirmed = shipped
+    conn.execute(
+        "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
+        " ordered_price = ?, status = ?, confirmed = ?, reason = ?,"
+        " scheduled_on = ? WHERE po_number = ? AND line = ?",
+        (quantity_text(wanted), line.uom or row["uom"], db.money(price),
+         db.money(line.price or number(row["ordered_price"], "0.00")), status,
+         quantity_text(confirmed), reason, scheduled or row["scheduled_on"],
+         change.po_number, line.number))
+    return {"line": line.number, "action": action, "status": status,
+            "reason": reason}
+
+
+def _retotal(conn: sqlite3.Connection, po_number: str) -> None:
+    total = Decimal("0.00")
+    for row in order_lines(conn, po_number):
+        total += (number(row["confirmed"]) * number(row["price"], "0.00")
+                  ).quantize(Decimal("0.01"))
+    status = "received" if total > 0 else "cancelled"
+    current = order_row(conn, po_number)
+    if current and current["status"] in ("shipped", "invoiced"):
+        status = current["status"]
+    conn.execute("UPDATE purchase_order SET total = ?, status = ?"
+                 " WHERE po_number = ?", (db.money(total), status, po_number))

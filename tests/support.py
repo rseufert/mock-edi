@@ -206,6 +206,42 @@ def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS
                                        sender, receiver, control), newline=True)
 
 
+def x12_change(po_number="4500000001", lines=(("1", "CA", 60, "12.50"),),
+               sender=ACME, receiver="MOCKEDI", control="000000078",
+               group="78", purpose="04", sequence="1",
+               ordered_on="20260924", qualifier="VP", skus=None):
+    """An 860. Each line is `(line_number, change_code, quantity, price)`."""
+    body = [seg("BCH", purpose, "SA", po_number, "", sequence, "20260925", "",
+                "", "", ordered_on)]
+    names = skus or {}
+    for number, action, quantity, price in lines:
+        body.append(seg("POC", number, action, str(quantity), "", "EA",
+                        str(price), "", qualifier,
+                        names.get(number, "WIDGET-001")))
+    body.append(seg("CTT", str(len(lines))))
+    return x12.render(x12.wrap([x12.message("860", "0001", body)], sender,
+                               receiver, control, group, "PC"), newline=True)
+
+
+def edifact_change(po_number="PO-2026-00001", lines=(("1", "3", 60, "12.50"),),
+                   sender=EURODIS, receiver="MOCKEDI", control="9002",
+                   purpose="4", skus=None):
+    """An ORDCHG. Each line is `(line_number, 1229 action, quantity, price)`."""
+    body = [seg("BGM", ["230"], [po_number], purpose),
+            seg("DTM", ["137", "20260925", "102"]),
+            seg("RFF", ["ON", po_number])]
+    names = skus or {}
+    for number, action, quantity, price in lines:
+        body.append(seg("LIN", number, action,
+                        [names.get(number, "WIDGET-001"), "VP"]))
+        body.append(seg("QTY", ["21", str(quantity), "PCE"]))
+        body.append(seg("PRI", ["AAA", str(price)]))
+    body.append(seg("UNS", "S"))
+    return edifact.render(edifact.wrap(
+        [edifact.message("ORDCHG", "1", body)], sender, receiver, control),
+        newline=True)
+
+
 def as2_headers(sender=ACME, receiver="MOCKEDI", message_id="<m1@acme.example>",
                 mdn=True, micalg="sha256", async_url=""):
     headers = {"Content-Type": "application/edi-x12",

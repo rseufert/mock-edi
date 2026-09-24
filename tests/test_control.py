@@ -108,23 +108,36 @@ class Delays(MockServerCase):
         self.assertEqual([r["code"] for r in self.mailbox(ACME)],
                          ["997", "855", "856"])
 
-    def test_it_is_visible_in_the_outbox_as_pending(self):
-        self.send(x12_order("PO-LATER"))
-        _s, _h, rows = self.get("/_mock/outbox")
-        pending = [r for r in rows if r["status"] == "pending"]
-        self.assertEqual([r["code"] for r in pending], ["810"])
+    def test_the_work_not_done_yet_is_visible_as_scheduled(self):
+        """A delayed invoice is not an unsent document; it is unwritten.
 
-    def test_advance_all_releases_it_without_waiting(self):
+        Delaying the despatch has to delay the *packing*, not merely the
+        posting, or a change arriving in the meantime could never affect it.
+        So a delayed invoice does not exist yet, and shows up as promised
+        work rather than as a document waiting in the outbox.
+        """
+        self.send(x12_order("PO-LATER"))
+        _s, _h, rows = self.get("/_mock/scheduled")
+        self.assertEqual([r["kind"] for r in rows], ["invoice"])
+        self.assertEqual(rows[0]["po_number"], "PO-LATER")
+        _s, _h, state = self.get("/_mock/state")
+        self.assertEqual(state["scheduled"]["waiting"], 1)
+
+    def test_advance_all_does_the_work_and_releases_it(self):
         self.send(x12_order("PO-LATER"))
         status, _h, data = self.post("/_mock/advance?all")
         self.assertEqual(status, 200)
         self.assertEqual(data["count"], 1)
         self.assertEqual([r["code"] for r in self.mailbox(ACME, "invoice")], ["810"])
+        _s, _h, rows = self.get("/_mock/scheduled")
+        self.assertEqual(rows, [])
 
-    def test_advancing_by_too_little_releases_nothing(self):
+    def test_advancing_by_too_little_does_nothing(self):
         self.send(x12_order("PO-LATER"))
         _s, _h, data = self.post("/_mock/advance?seconds=60")
         self.assertEqual(data["count"], 0)
+        _s, _h, rows = self.get("/_mock/scheduled")
+        self.assertEqual([r["kind"] for r in rows], ["invoice"])
 
 
 class SendOnDemand(MockServerCase):
