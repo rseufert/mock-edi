@@ -253,12 +253,17 @@ class ThePoller(unittest.TestCase):
                 with open(os.path.join(root, "in", "order.edi"), "w",
                           encoding="utf-8") as handle:
                     handle.write(x12_order("PO-POLLED"))
+                # Wait for the *finished* state, not merely for the row to
+                # appear: the order is inserted as `received` and advanced to
+                # `shipped` and then `invoiced` in separate commits, so a
+                # reader on another thread can catch it part way through.
                 deadline = time.time() + 15
+                row = None
                 while time.time() < deadline:
                     row = httpd.mock.conn.execute(
                         "SELECT * FROM purchase_order WHERE po_number = ?",
                         ("PO-POLLED",)).fetchone()
-                    if row is not None:
+                    if row is not None and row["status"] == "invoiced":
                         break
                     time.sleep(0.05)
                 self.assertIsNotNone(row, "the poller never read the file")
