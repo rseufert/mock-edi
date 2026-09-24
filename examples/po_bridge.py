@@ -6,7 +6,9 @@ the supplier's answer back into SAP.
 
 An example of the code mock-edi exists to test, with mock-sap
 (https://github.com/rseufert/mock-sap) standing in for SAP. The tests are in
-test_po_bridge.py.
+test_po_bridge.py.  mock-sap's examples/invoice_check.py is the other half of
+the same integration: the 856 and 810 that follow, checked against the
+purchase order before the invoice is posted.
 """
 import datetime
 import http.cookiejar
