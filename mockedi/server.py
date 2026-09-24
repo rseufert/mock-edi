@@ -29,8 +29,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, db, delivery, documents, drop, partners, pipeline, schema,
-               transactions, validate)
+from . import (as2, db, delivery, documents, drop, partners, pipeline,
+               reconcile, schema, transactions, validate)
 from .envelope import EdiSyntaxError
 
 JSON = "application/json; charset=utf-8"
@@ -311,6 +311,7 @@ class Handler(BaseHTTPRequestHandler):
                 for m in (report.messages if report else [])],
             "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
                         "dueAt": q.due_at} for q in receipt.queued],
+            "acknowledged": receipt.acknowledged,
         })
 
     # -- the control plane
@@ -460,6 +461,11 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(201, {"id": queued.id, "kind": queued.kind,
                                     "code": queued.code, "dueAt": queued.due_at})
 
+        if head == "unacknowledged":
+            return self._json(200, reconcile.unacknowledged(
+                conn, float(_first(query, "older-than") or 0),
+                _first(query, "partner"), _limit(query)))
+
         if head == "mdns":
             return self._json(200, db.rows(
                 conn, "SELECT id, partner, direction, original_id, message_id,"
@@ -487,7 +493,7 @@ class Handler(BaseHTTPRequestHandler):
             "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
                           "catalog", "orders", "documents", "interchanges",
                           "mailbox", "outbox", "drop", "advance", "send", "mdns",
-                          "requests", "validate", "reset"]})
+                          "unacknowledged", "requests", "validate", "reset"]})
 
     def _partners(self, method: str, rest: List[str], query, body: bytes):
         conn = self.mock.conn
@@ -712,6 +718,11 @@ def _receipt_text(receipt) -> str:
 
 def _document_query(query: Dict[str, List[str]]) -> str:
     clauses = []
+    if "acknowledged" in query:
+        # `?acknowledged=false` is the useful one: what have we sent that
+        # nobody has answered for?
+        clauses.append("ack_status %s ''"
+                       % ("!=" if _flag(query, "acknowledged") else "="))
     if _first(query, "direction"):
         clauses.append("direction = ?")
     if _first(query, "partner"):
@@ -840,6 +851,7 @@ def _index_page(mock: Mock, base: str) -> str:
         ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything."),
         ("POST", "/_mock/send", "Send a document out of band."),
         ("GET", "/_mock/mdns", "Receipts, sent and received."),
+        ("GET", "/_mock/unacknowledged", "What we sent that nobody has acknowledged."),
         ("GET", "/_mock/dictionary", "The segment dictionary the mock validates against."),
         ("POST", "/_mock/reset", "Back to a freshly seeded system."),
     ]

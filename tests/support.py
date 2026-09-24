@@ -219,3 +219,61 @@ def as2_headers(sender=ACME, receiver="MOCKEDI", message_id="<m1@acme.example>",
     if async_url:
         headers["Receipt-Delivery-Option"] = async_url
     return headers
+
+
+def acknowledge(payload: str, verdict: str = "A", errors=(), control: str = "7001"):
+    """Build the acknowledgment a partner would send for `payload`.
+
+    Reads the control numbers out of the document the mock actually sent
+    rather than assuming them, which is what a real partner's translator does
+    and what makes these tests prove the matching works.
+
+    `errors` is a list of `(segment_tag, position, segment_error_code,
+    element_position, element_error_code, bad_value)` tuples, rendered as
+    AK3/AK4 in X12 and UCS/UCD in EDIFACT.
+    """
+    interchange = parse(payload)
+    if interchange.dialect == "X12":
+        return _x12_997(interchange, verdict, errors, control)
+    return _edifact_contrl(interchange, verdict, errors, control)
+
+
+def _x12_997(interchange, verdict, errors, control):
+    accepted = 0
+    body = []
+    for group in interchange.groups:
+        body.append(seg("AK1", group.functional_id, group.control, group.version))
+        for message in group.messages:
+            body.append(seg("AK2", message.code, message.control))
+            for tag, position, segment_code, element, element_code, value in errors:
+                body.append(seg("AK3", tag, str(position), "", segment_code))
+                if element:
+                    body.append(seg("AK4", str(element), "", element_code, value))
+            body.append(seg("AK5", verdict))
+            if verdict in ("A", "E"):
+                accepted += 1
+        body.append(seg("AK9", verdict, str(len(group.messages)),
+                        str(len(group.messages)), str(accepted)))
+    return x12.render(x12.wrap(
+        [x12.message("997", control, body)],
+        interchange.receiver, interchange.sender, control, control, "FA"),
+        newline=True)
+
+
+def _edifact_contrl(interchange, verdict, errors, control):
+    action = "7" if verdict in ("A", "E", "7") else "4"
+    body = [seg("UCI", interchange.control,
+                [interchange.sender, interchange.sender_qualifier],
+                [interchange.receiver, interchange.receiver_qualifier], action)]
+    for group in interchange.groups:
+        for message in group.messages:
+            version = (message.version or "D:96A:UN").split(":")
+            body.append(seg("UCM", message.control,
+                            [message.code] + version[:3], action))
+            for tag, position, segment_code, element, element_code, _value in errors:
+                body.append(seg("UCS", str(position), segment_code))
+                if element:
+                    body.append(seg("UCD", element_code, [str(element), "1"]))
+    return edifact.render(edifact.wrap(
+        [edifact.message("CONTRL", control, body, "D:3:UN")],
+        interchange.receiver, interchange.sender, control), newline=True)

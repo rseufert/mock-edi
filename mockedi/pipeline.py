@@ -26,7 +26,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import ack, db, documents, edifact, partners, schema, transactions, x12
+from . import (ack, db, documents, edifact, partners, reconcile, schema,
+               transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
 from .validate import InterchangeReport, validate
@@ -64,6 +65,7 @@ class Receipt:
     report: Optional[InterchangeReport] = None
     queued: List[Queued] = field(default_factory=list)
     orders: List[str] = field(default_factory=list)
+    acknowledged: List[Dict[str, Any]] = field(default_factory=list)
 
     @property
     def accepted(self) -> bool:
@@ -133,6 +135,19 @@ class Pipeline:
                     documents.record_order(self.conn, partner, order, self.now())
                     receipt.orders.append(order.po_number)
                     reference = order.po_number
+            elif message_report.kind == schema.ACKNOWLEDGMENT:
+                # A receipt for something the mock sent, rather than something
+                # for the mock to act on.
+                for result in reconcile.apply(self.conn, partner["id"], dialect,
+                                              message, interchange.control):
+                    receipt.acknowledged.append({
+                        "code": result.code, "control": result.control,
+                        "groupControl": result.group_control,
+                        "status": result.status, "verdict": result.verdict,
+                        "note": result.note, "matched": result.matched,
+                        "document": result.document_id,
+                        "reference": result.reference,
+                    })
 
         self._plan(partner, interchange, report, receipt)
         return receipt
@@ -143,11 +158,11 @@ class Pipeline:
         reference = _reference_of(message, dialect, message_report.kind)
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
-            " partner, code, kind, control, reference, accepted, findings, at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " partner, code, kind, control, group_control, reference, accepted,"
+            " findings, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (interchange_id, "in", dialect, partner["id"], message.code,
-             message_report.kind, message.control, reference,
-             1 if message_report.accepted else 0,
+             message_report.kind, message.control, message_report.group_control,
+             reference, 1 if message_report.accepted else 0,
              json.dumps(_findings(message_report)), db.now()))
         self.conn.commit()
         return reference
@@ -254,11 +269,17 @@ class Pipeline:
 
         control = str(db.next_number(self.conn, "transaction", partner_id))
         interchange_control = str(db.next_number(self.conn, "interchange", partner_id))
+        group_control = ""
+        # What goes on the wire, not what was drawn from the range: ST02 is
+        # padded to four digits, and an acknowledgment will quote it back
+        # exactly as it was written.
+        set_control = control
 
         if dialect == "X12":
             group_control = str(db.next_number(self.conn, "group", partner_id))
             version = partner["version"] if partner["version"].isdigit() else "004010"
-            message = x12.message(code, control.rjust(4, "0"), body, version)
+            set_control = control.rjust(4, "0")
+            message = x12.message(code, set_control, body, version)
             interchange = x12.wrap(
                 [message], self.config.as2_id, partner_id, interchange_control,
                 group_control, definition.group,
@@ -282,10 +303,11 @@ class Pipeline:
         due = moment + datetime.timedelta(milliseconds=delay_ms)
         cursor = self.conn.execute(
             "INSERT INTO outbound (partner, dialect, code, kind, reference,"
-            " payload, message_id, control, status, due_at, note, at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " payload, message_id, control, group_control, set_control, status,"
+            " due_at, note, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
-             interchange_control, PENDING, due.isoformat(), note, db.now()))
+             interchange_control, group_control, set_control, PENDING,
+             due.isoformat(), note, db.now()))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
@@ -359,12 +381,16 @@ class Pipeline:
             interchange_id = self._store_interchange_row(
                 "out", row["dialect"], row["partner"], row["control"],
                 row["payload"], "queue", row["message_id"])
+            # The transaction set's own control number, not the interchange's:
+            # an inbound 997 quotes ST02 in AK202, and matching it against
+            # ISA13 - which is what this recorded before - matches nothing.
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
-                " partner, code, kind, control, reference, accepted, findings, at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " partner, code, kind, control, group_control, reference,"
+                " accepted, findings, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
-                 row["kind"], row["control"], row["reference"], 1, "", db.now()))
+                 row["kind"], row["set_control"], row["group_control"],
+                 row["reference"], 1, "", db.now()))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(), row["id"]))

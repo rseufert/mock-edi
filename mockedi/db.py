@@ -78,9 +78,15 @@ CREATE TABLE IF NOT EXISTS transaction_set (
     code           TEXT NOT NULL,
     kind           TEXT NOT NULL DEFAULT '',
     control        TEXT NOT NULL DEFAULT '',
+    group_control  TEXT NOT NULL DEFAULT '',
     reference      TEXT NOT NULL DEFAULT '',
     accepted       INTEGER NOT NULL DEFAULT 1,
     findings       TEXT NOT NULL DEFAULT '',
+    -- Filled in when the other side acknowledges a document we sent.
+    ack_status     TEXT NOT NULL DEFAULT '',
+    ack_code       TEXT NOT NULL DEFAULT '',
+    ack_note       TEXT NOT NULL DEFAULT '',
+    ack_at         TEXT NOT NULL DEFAULT '',
     at             TEXT NOT NULL
 );
 
@@ -161,7 +167,12 @@ CREATE TABLE IF NOT EXISTS outbound (
     reference    TEXT NOT NULL DEFAULT '',
     payload      TEXT NOT NULL,
     message_id   TEXT NOT NULL DEFAULT '',
+    -- Three control numbers, because a 997 needs all three to be matched:
+    -- ISA13 identifies the interchange, GS06 the functional group, ST02 the
+    -- transaction set inside it.
     control      TEXT NOT NULL DEFAULT '',
+    group_control TEXT NOT NULL DEFAULT '',
+    set_control  TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'pending',
     due_at       TEXT NOT NULL,
     released_at  TEXT NOT NULL DEFAULT '',
@@ -206,6 +217,7 @@ CREATE TABLE IF NOT EXISTS request_log (
 
 CREATE INDEX IF NOT EXISTS ix_ts_reference ON transaction_set (reference);
 CREATE INDEX IF NOT EXISTS ix_ts_kind ON transaction_set (kind, direction);
+CREATE INDEX IF NOT EXISTS ix_ts_ack ON transaction_set (direction, ack_status);
 CREATE INDEX IF NOT EXISTS ix_outbound_status ON outbound (status, due_at);
 CREATE INDEX IF NOT EXISTS ix_line_po ON order_line (po_number);
 """
