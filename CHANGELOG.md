@@ -10,6 +10,15 @@ says so where it does.
 
 ### Added
 
+- **An example integration, tested against both mocks.**
+  `examples/po_bridge.py` reads a purchase order from SAP, sends it as an 850,
+  and posts the 855 back into SAP as an `ORDRSP` IDoc, with
+  [mock-sap](https://github.com/rseufert/mock-sap) standing in for SAP.
+  `examples/test_po_bridge.py` covers a full confirmation, a short shipment, a
+  rejected line, a partner that never answers, and an SAP outage while the
+  855 is in hand - the test that shows why collecting from a mailbox has to
+  be store-and-forward. CI runs it with the other documented examples.
+
 - **Trading over a directory** ([#1]). `--drop-dir` is watched for inbound
   interchanges, which go through the same pipeline a POST does; `--pickup-dir`
   receives the answers as `<partner>-<code>-<control>.edi`. A great deal of

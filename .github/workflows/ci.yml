@@ -81,6 +81,21 @@ jobs:
           bash examples/demo.sh
           curl -sf -X POST http://127.0.0.1:8080/_mock/reset >/dev/null
           python examples/client.py
+      - name: Run the example integration against mock-edi and mock-sap
+        run: |
+          set -eu
+          python -m pip install mock-sap
+          python -m mockedi --port 8080 -q &
+          EDI_PID=$!
+          mock-sap --port 8000 -q &
+          SAP_PID=$!
+          trap 'kill $EDI_PID $SAP_PID 2>/dev/null || true' EXIT
+          for _ in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8080/_mock/health >/dev/null \
+              && curl -sf http://127.0.0.1:8000/_mock/health >/dev/null && break
+            sleep 0.25
+          done
+          cd examples && python -m unittest -v test_po_bridge
 
   package:
     name: package builds and installs

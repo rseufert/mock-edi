@@ -104,6 +104,12 @@ A guided tour of every endpoint, in curl:
 bash examples/demo.sh
 ```
 
+And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
+sends SAP purchase orders as 850s and posts the 855s back into SAP, and
+[`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
+this mock and [mock-sap](https://github.com/rseufert/mock-sap). There is a
+[walkthrough](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration).
+
 ## What it serves
 
 | Surface | Endpoint |
@@ -430,4 +436,4 @@ a good pull request carries.
 OData V2 and V4, BAPI/RFC and IDoc shapes over SQLite, also with zero
 dependencies. An IDoc `ORDERS05` and an X12 850 are the same business
 document, so the two mocks make a reasonable pair of ends for testing a
-middleware layer.
+middleware layer. [`examples/po_bridge.py`](examples/po_bridge.py) is one.
