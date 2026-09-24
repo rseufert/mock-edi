@@ -8,6 +8,16 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.0] - 2026-09-24
+
+Three ways the mock was not yet a trading partner: it only spoke HTTP, it
+never read the receipts it was sent, and an order once placed could not be
+changed. All three are closed, and a delay now postpones the *work* rather
+than merely the posting - which is what made the third possible. There is
+also a worked example that drives mock-edi and mock-sap together.
+
 ### Added
 
 - **An example integration, tested against both mocks.**
@@ -178,5 +188,6 @@ documents a real one sends.
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.0...HEAD
+[0.2.0]: https://github.com/rseufert/mock-edi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rseufert/mock-edi/releases/tag/v0.1.0
