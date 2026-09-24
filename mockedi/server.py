@@ -642,13 +642,24 @@ class Handler(BaseHTTPRequestHandler):
 
     def _log_request_row(self, method: str, path: str, status: int,
                          bytes_in: int, bytes_out: int) -> None:
+        """Record the request - under the lock, like every other write.
+
+        This was the one database write outside it, on the grounds that
+        logging is harmless. It is not: `commit()` commits the *connection*,
+        not the statement, so a log entry written while another thread was
+        mid-transaction committed that thread's work early and left its own
+        `commit()` with nothing to do. sqlite3 answers that with "cannot
+        commit - no transaction is active", and the request that had done the
+        real work failed with a 500.
+        """
         try:
-            self.mock.conn.execute(
-                "INSERT INTO request_log (method, path, status, bytes_in,"
-                " bytes_out, partner, at) VALUES (?,?,?,?,?,?,?)",
-                (method, path, status, bytes_in, bytes_out,
-                 self.headers.get("AS2-From", "") or "", db.now()))
-            self.mock.conn.commit()
+            with self.mock.lock:
+                self.mock.conn.execute(
+                    "INSERT INTO request_log (method, path, status, bytes_in,"
+                    " bytes_out, partner, at) VALUES (?,?,?,?,?,?,?)",
+                    (method, path, status, bytes_in, bytes_out,
+                     self.headers.get("AS2-From", "") or "", db.now()))
+                self.mock.conn.commit()
         except sqlite3.Error:            # pragma: no cover - logging must not fail a request
             pass
 
