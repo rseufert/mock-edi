@@ -122,8 +122,9 @@ class Mock:
         """Back to a freshly seeded system, without restarting the process."""
         with self.lock:
             for table in ("interchange", "transaction_set", "purchase_order",
-                          "order_line", "shipment", "invoice", "outbound", "mdn",
-                          "control_number", "request_log", "partner", "catalog"):
+                          "order_line", "shipment", "invoice", "outbound",
+                          "scheduled", "mdn", "control_number", "request_log",
+                          "partner", "catalog"):
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
             db.seed(self.conn, self.config.seed_value, self.config.as2_id)
@@ -312,6 +313,8 @@ class Handler(BaseHTTPRequestHandler):
             "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
                         "dueAt": q.due_at} for q in receipt.queued],
             "acknowledged": receipt.acknowledged,
+            "changed": receipt.changes,
+            "refusals": receipt.refusals,
         })
 
     # -- the control plane
@@ -338,7 +341,10 @@ class Handler(BaseHTTPRequestHandler):
                 "counts": {name: _count(conn, name) for name in (
                     "partner", "catalog", "interchange", "transaction_set",
                     "purchase_order", "order_line", "shipment", "invoice",
-                    "outbound", "mdn")},
+                    "outbound", "scheduled", "mdn")},
+                "scheduled": {
+                    "waiting": _count(conn, "scheduled", "done_at = ''"),
+                    "done": _count(conn, "scheduled", "done_at != ''")},
                 "queue": {status: _count(conn, "outbound", "status = '%s'" % status)
                           for status in ("pending", "ready", "delivered",
                                          "collected", "failed")},
@@ -437,6 +443,16 @@ class Handler(BaseHTTPRequestHandler):
                                         "files": [vars(item) for item in found]})
             return self._json(200, self.mock.dropbox.state())
 
+        if head == "scheduled":
+            # Work the seller has promised but not done: the despatch that is
+            # not packed yet, the invoice that is not written yet. Distinct
+            # from the outbox, which holds documents that already exist.
+            clause = "" if _flag(query, "all") else " WHERE done_at = ''"
+            return self._json(200, db.rows(
+                conn, "SELECT id, partner, po_number, kind, due_at, done_at,"
+                      " note, at FROM scheduled%s ORDER BY due_at, id LIMIT ?"
+                      % clause, (_limit(query),)))
+
         if head == "advance":
             if method != "POST":
                 return self._text(405, "POST to advance the queue")
@@ -492,7 +508,7 @@ class Handler(BaseHTTPRequestHandler):
             "error": "no control endpoint %r" % head,
             "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
                           "catalog", "orders", "documents", "interchanges",
-                          "mailbox", "outbox", "drop", "advance", "send", "mdns",
+                          "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
                           "unacknowledged", "requests", "validate", "reset"]})
 
     def _partners(self, method: str, rest: List[str], query, body: bytes):
@@ -845,7 +861,8 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
         ("GET", "/_mock/interchanges", "Raw payloads. Add <code>?raw</code> for one."),
         ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),
-        ("GET", "/_mock/outbox", "The queue, including what is not due yet."),
+        ("GET", "/_mock/outbox", "Documents produced, and what became of them."),
+        ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice."),
         ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
         ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
         ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything."),

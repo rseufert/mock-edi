@@ -182,6 +182,22 @@ CREATE TABLE IF NOT EXISTS outbound (
     at           TEXT NOT NULL
 );
 
+-- Work the seller has decided to do, but has not done yet. A despatch
+-- delay must postpone the *packing*, not merely the posting: a shipment
+-- created the instant the order arrives cannot reflect a change that arrives
+-- a minute later, and refusing every change is not fidelity, it is an
+-- artefact of doing the work too early.
+CREATE TABLE IF NOT EXISTS scheduled (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner      TEXT NOT NULL,
+    po_number    TEXT NOT NULL,
+    kind         TEXT NOT NULL,
+    due_at       TEXT NOT NULL,
+    done_at      TEXT NOT NULL DEFAULT '',
+    note         TEXT NOT NULL DEFAULT '',
+    at           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS mdn (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     partner      TEXT NOT NULL,
@@ -219,6 +235,7 @@ CREATE INDEX IF NOT EXISTS ix_ts_reference ON transaction_set (reference);
 CREATE INDEX IF NOT EXISTS ix_ts_kind ON transaction_set (kind, direction);
 CREATE INDEX IF NOT EXISTS ix_ts_ack ON transaction_set (direction, ack_status);
 CREATE INDEX IF NOT EXISTS ix_outbound_status ON outbound (status, due_at);
+CREATE INDEX IF NOT EXISTS ix_scheduled_due ON scheduled (done_at, due_at);
 CREATE INDEX IF NOT EXISTS ix_line_po ON order_line (po_number);
 """
 

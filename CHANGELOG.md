@@ -47,6 +47,37 @@ says so where it does.
   `"matched": false` rather than being dropped; it is a real condition and
   usually evidence of the bug you are looking for.
 
+- **Changing an order that has already been sent** ([#3]). An **860** or an
+  **ORDCHG** - or an 850 restated with `BEG01 = 04` - changes an order the
+  mock holds, and is answered with an **865**. EDIFACT has no change
+  acknowledgment message of its own, so an ORDCHG is answered by an ORDRSP,
+  which is the difference most likely to catch out somebody porting a mapping
+  from X12.
+
+  The rule that matters is that a change cannot unmake what has already
+  happened: a quantity cannot go below what shipped, a shipped line cannot be
+  deleted, a shipped order cannot be cancelled, and an invoiced order cannot
+  be changed at all. A refused line comes back `IR` with its reason while the
+  stored order keeps what it had - reporting the order's state instead would
+  tell the buyer its request had succeeded.
+
+- `GET /_mock/scheduled` shows work the seller has promised but not done,
+  separately from `/_mock/outbox`, which shows documents that already exist.
+
+### Changed
+
+- **A delay now postpones the work, not merely the posting** ([#3]). The
+  shipment and the invoice used to be created the instant the order arrived,
+  with only their *delivery* deferred - so a change arriving during a despatch
+  delay could never affect the despatch, and every change was refused against
+  an order that was already invoiced. Fulfilment is now scheduled and carried
+  out when it comes due, which is both what a seller does and what makes a
+  change window exist at all.
+
+  With the default delays of zero nothing observable changes: the work still
+  happens before the request returns. With delays configured, a despatch that
+  is not due yet has not been packed, and `/_mock/scheduled` says so.
+
 ### Fixed
 
 - An outbound document recorded the *interchange* control number as its own
@@ -55,6 +86,9 @@ says so where it does.
   matched to anything. Outbound documents now record all three numbers - the
   interchange's, the group's and the transaction set's - and record them as
   they were written, four digits and all.
+- `POST /_mock/reset` did not clear scheduled work, so promises made before a
+  reset were kept after it ([#3]). Found by a test that counted one release
+  and got two.
 - A drop directory configured with `--drop-settle-ms 0` never read anything
   ([#1]). A file's modification time can read very slightly *ahead* of the
   clock, so `mtime > now` was true for a file that had just been written and
@@ -124,6 +158,7 @@ documents a real one sends.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#2]: https://github.com/rseufert/mock-edi/issues/2
+[#3]: https://github.com/rseufert/mock-edi/issues/3
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/rseufert/mock-edi/releases/tag/v0.1.0

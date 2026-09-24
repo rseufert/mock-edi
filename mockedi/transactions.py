@@ -61,6 +61,52 @@ class Line:
         return (self.quantity * self.price).quantize(Decimal("0.01"))
 
 
+# The line-level verbs of a change request, in the vocabulary the X12 670
+# element uses. The EDIFACT reader translates 1229 into these so that
+# `documents.apply_change` has one set of words to reason about.
+ADD = "AI"
+CHANGE_LINE = "CA"
+DELETE = "DI"
+NO_CHANGE = "NC"
+PRICE_CHANGE = "PC"
+QUANTITY_DOWN = "QD"
+QUANTITY_UP = "QI"
+
+EDIFACT_ACTION_TO_CHANGE = {"1": ADD, "2": DELETE, "3": CHANGE_LINE,
+                            "4": NO_CHANGE, "": CHANGE_LINE}
+CHANGE_TO_EDIFACT_ACTION = {ADD: "1", DELETE: "2", CHANGE_LINE: "3",
+                            NO_CHANGE: "4", PRICE_CHANGE: "3",
+                            QUANTITY_DOWN: "3", QUANTITY_UP: "3"}
+
+# BEG01 / BGM 1225 values that mean "cancel the whole thing".
+CANCEL_PURPOSES = ("01", "03")
+# BEG01 values that mean an 850 is restating an order rather than placing one.
+CHANGE_PURPOSES = ("01", "03", "04", "05")
+
+
+@dataclass
+class ChangeLine(Line):
+    """One line of a change request: a line, and what to do to it."""
+    action: str = CHANGE_LINE
+
+
+@dataclass
+class Change:
+    """A change to an order that has already been sent."""
+    po_number: str = ""
+    purpose: str = "04"
+    sequence: str = ""
+    changed_on: Optional[datetime.date] = None
+    ordered_on: Optional[datetime.date] = None
+    currency: str = ""
+    lines: List[ChangeLine] = field(default_factory=list)
+
+    @property
+    def cancels(self) -> bool:
+        """Whether this asks for the whole order to be withdrawn."""
+        return self.purpose in CANCEL_PURPOSES
+
+
 @dataclass
 class Order:
     """A purchase order, whichever dialect carried it."""
@@ -647,3 +693,167 @@ def _edifact_invoic(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
     out.append(seg("MOA", ["139", price_text(number(invoice["total"], "0.00"))]))
     out.append(seg("CNT", ["2", str(len(billed))]))
     return out
+
+
+# ---------------------------------------------------------------------------
+# Reading a change request
+#
+# X12 has a transaction set of its own for this (the 860, with BCH and POC);
+# EDIFACT reuses the order message with a different document code and an
+# action verb per line. Both read into the same `Change`.
+# ---------------------------------------------------------------------------
+
+def read_change(message: Message, dialect: str) -> Change:
+    return (_read_change_x12(message) if dialect == "X12"
+            else _read_change_edifact(message))
+
+
+def _read_change_x12(message: Message) -> Change:
+    change = Change()
+    bch = message.find("BCH")
+    if bch is not None:
+        change.purpose = bch.get(1) or "04"
+        change.po_number = bch.get(3)
+        change.sequence = bch.get(5)
+        change.changed_on = parse_date(bch.get(6))
+        change.ordered_on = parse_date(bch.get(10))
+    cur = message.find("CUR")
+    if cur is not None and cur.get(2):
+        change.currency = cur.get(2)
+
+    for index, block in enumerate(group_by(message.body, "POC",
+                                           stop=("CTT", "SE")), start=1):
+        head = block[0]
+        ids = _ids(head, 8)
+        line = ChangeLine(
+            number=head.get(1) or str(index),
+            action=head.get(2) or CHANGE_LINE,
+            sku=_pick(ids, SKU_QUALIFIERS),
+            upc=_pick(ids, UPC_QUALIFIERS),
+            quantity=number(head.get(3)),
+            uom=head.get(5) or "EA",
+            price=number(head.get(6), "0.00"),
+        )
+        for item in block[1:]:
+            if item.tag == "PID" and item.get(5):
+                line.description = line.description or item.get(5)
+        change.lines.append(line)
+    return change
+
+
+def _read_change_edifact(message: Message) -> Change:
+    change = Change()
+    bgm = message.find("BGM")
+    if bgm is not None:
+        change.po_number = bgm.comp(2, 1)
+        # BGM's message function code says whether this is a change or a
+        # cancellation; 1 is cancellation in both dialects' vocabulary.
+        change.purpose = "01" if bgm.get(3) == "1" else "04"
+        change.sequence = bgm.comp(2, 3)
+
+    header: List[Seg] = []
+    for item in message.body:
+        if item.tag == "LIN":
+            break
+        header.append(item)
+    for item in header:
+        if item.tag == "DTM" and item.comp(1, 1) == "137":
+            change.changed_on = parse_date(item.comp(1, 2))
+        elif item.tag == "CUX" and item.comp(1, 2):
+            change.currency = item.comp(1, 2)
+        elif item.tag == "RFF" and item.comp(1, 1) == "ON":
+            change.po_number = change.po_number or item.comp(1, 2)
+
+    detail = message.body[len(header):]
+    for index, block in enumerate(group_by(detail, "LIN", stop=("UNS", "UNT")),
+                                  start=1):
+        base = _line_edifact(block, index)
+        line = ChangeLine(
+            number=base.number, sku=base.sku, upc=base.upc,
+            description=base.description, quantity=base.quantity,
+            uom=base.uom, price=base.price,
+            action=EDIFACT_ACTION_TO_CHANGE.get(block[0].get(2), CHANGE_LINE),
+        )
+        change.lines.append(line)
+    return change
+
+
+def change_from_order(order: Order) -> Change:
+    """An 850 sent with a change purpose, read as the change it is.
+
+    A buyer may restate a whole order rather than send an 860, and `BEG01`
+    says so with `04`.  Every line is a change to the line of the same number,
+    and a line the order no longer mentions has been deleted - which the
+    caller works out, because only it knows what the order used to hold.
+    """
+    change = Change(po_number=order.po_number, purpose=order.purpose,
+                    changed_on=order.ordered_on, ordered_on=order.ordered_on,
+                    currency=order.currency)
+    for line in order.lines:
+        change.lines.append(ChangeLine(
+            number=line.number, sku=line.sku, upc=line.upc,
+            description=line.description, quantity=line.quantity,
+            uom=line.uom, price=line.price, action=CHANGE_LINE))
+    return change
+
+
+# ---------------------------------------------------------------------------
+# Writing the answer to a change request
+# ---------------------------------------------------------------------------
+
+def write_change_response(dialect: str, us: Party, partner: Dict, order: Dict,
+                          lines: Sequence[Dict], change: Change,
+                          when: datetime.datetime) -> List[Seg]:
+    builder = _x12_865 if dialect == "X12" else _edifact_ordrsp_change
+    return builder(us, partner, order, lines, change, when)
+
+
+def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
+             change: Change, when: datetime.datetime) -> List[Seg]:
+    out: List[Seg] = [seg(
+        "BCA", "00", acknowledgment_type(lines, "X12"), order["po_number"],
+        "", change.sequence, when.strftime("%Y%m%d"), "", "",
+        _iso(order.get("ordered_on")))]
+    out.append(seg("CUR", "SE", order.get("currency") or "USD"))
+    out.append(seg("REF", "VN", order.get("seller_order") or ""))
+    out.append(seg("DTM", "137", when.strftime("%Y%m%d")))
+    out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
+
+    for row in lines:
+        out.append(seg("POC", row["line"], row.get("change_action") or CHANGE_LINE,
+                       quantity_text(number(row["quantity"])), "", row["uom"],
+                       price_text(number(row["price"], "0.00")), "",
+                       "VP", row["sku"],
+                       *(("UP", row["upc"]) if row.get("upc") else ())))
+        status = row.get("status") or ACCEPTED
+        confirmed = quantity_text(number(str(row.get("confirmed") or "0")))
+        if status == REJECTED:
+            out.append(seg("ACK", status, "0", row["uom"]))
+        else:
+            out.append(seg("ACK", status, confirmed, row["uom"], "068",
+                           _iso(row.get("scheduled_on"))))
+        if row.get("description"):
+            out.append(seg("PID", "F", "", "", "", row["description"]))
+        if row.get("reason"):
+            out.append(seg("REF", "ZZ", "", row["reason"]))
+    out.append(seg("CTT", str(len(lines))))
+    return out
+
+
+def _edifact_ordrsp_change(us: Party, partner: Dict, order: Dict,
+                           lines: Sequence[Dict], change: Change,
+                           when: datetime.datetime) -> List[Seg]:
+    """An ORDRSP answering an ORDCHG.
+
+    EDIFACT has no separate change acknowledgment message, so the response to
+    a change is the same message that answers an order - with each line
+    carrying the action it was given, so the buyer can tell which of its
+    requested changes were taken.
+    """
+    body = _edifact_ordrsp(us, partner, order, lines, when)
+    actions = {row["line"]: CHANGE_TO_EDIFACT_ACTION.get(
+        row.get("change_action") or CHANGE_LINE, "3") for row in lines}
+    for item in body:
+        if item.tag == "LIN" and item.get(1) in actions:
+            item.elements[1] = actions[item.get(1)]
+    return body
