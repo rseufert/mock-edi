@@ -48,6 +48,22 @@ def build_parser() -> argparse.ArgumentParser:
     behaviour.add_argument("--compact", dest="pretty", action="store_false",
                            help="write documents without a newline per segment")
 
+    directory = p.add_argument_group(
+        "directory trading - the half of real EDI that is not AS2")
+    directory.add_argument("--drop-dir", metavar="PATH",
+                           help="a directory to watch for inbound interchanges; "
+                                "read files are moved to processed/ or failed/")
+    directory.add_argument("--pickup-dir", metavar="PATH",
+                           help="write released outbound documents here as well "
+                                "as queueing them for the mailbox")
+    directory.add_argument("--drop-interval-ms", type=int, default=1000,
+                           help="how often to look in the drop directory "
+                                "(default: 1000; POST /_mock/drop/scan looks now)")
+    directory.add_argument("--drop-settle-ms", type=int, default=250,
+                           help="leave a file alone until it has been untouched "
+                                "this long, in case it is still being written "
+                                "(default: 250)")
+
     testing = p.add_argument_group("testing")
     testing.add_argument("--auth", dest="basic_auth", metavar="USER:PASSWORD",
                          help="require HTTP basic authentication")
@@ -74,7 +90,11 @@ def main(argv=None) -> int:
     except (AttributeError, ValueError):  # pragma: no cover - odd stdout
         pass
 
-    config = Config(**vars(args))
+    values = vars(args)
+    # argparse leaves an unset path as None; Config wants a string.
+    values["drop_dir"] = values.get("drop_dir") or ""
+    values["pickup_dir"] = values.get("pickup_dir") or ""
+    config = Config(**values)
     try:
         httpd = make_server(config)
     except OSError as error:
@@ -90,6 +110,10 @@ def main(argv=None) -> int:
     print("  Mailbox  GET  %s/_mock/mailbox" % base)
     print("  Control  GET  %s/_mock/state, /_mock/partners, /_mock/orders" % base)
     print("  Index    %s/" % base)
+    if config.drop_dir:
+        print("  Drop     %s  (every %dms)" % (config.drop_dir, config.drop_interval_ms))
+    if config.pickup_dir:
+        print("  Pickup   %s" % config.pickup_dir)
     for row in httpd.mock.conn.execute(
             "SELECT id, dialect, behaviour FROM partner ORDER BY id"):
         print("  partner  %-10s %-8s %s" % (row["id"], row["dialect"], row["behaviour"]))

@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, db, delivery, documents, partners, pipeline, schema,
+from . import (as2, db, delivery, documents, drop, partners, pipeline, schema,
                transactions, validate)
 from .envelope import EdiSyntaxError
 
@@ -66,6 +66,12 @@ class Config:
     mdn: bool = True
     deliver_timeout: float = 10.0
 
+    # Trading over a directory instead of over HTTP.
+    drop_dir: str = ""
+    pickup_dir: str = ""
+    drop_interval_ms: int = 1000
+    drop_settle_ms: int = 250
+
     # Testing knobs.
     basic_auth: Optional[str] = None
     seed_value: int = 42
@@ -84,7 +90,10 @@ class Mock:
         db.seed(self.conn, config.seed_value, config.as2_id)
         self.pipeline = pipeline.Pipeline(self.conn, config)
         self.courier = delivery.Courier(self.pipeline, config.deliver_timeout)
-        self.pipeline.on_release = self.courier.enqueue_many
+        self.dropbox = drop.DropBox(
+            self.pipeline, config.drop_dir, config.pickup_dir,
+            config.drop_settle_ms, config.drop_interval_ms)
+        self.pipeline.on_release = self._released
         # One lock over everything that touches the database. SQLite itself
         # copes with several threads on one connection, but the mock's
         # read-modify-write sequences do not - two interchanges arriving at
@@ -94,7 +103,18 @@ class Mock:
         self.started = datetime.datetime.now()
         self.random = random.Random(config.seed_value)
 
+    def _released(self, outbound_ids) -> None:
+        """A document became ready: post it, write it, or leave it to be collected.
+
+        The three are not alternatives. A partner can have an AS2 URL *and* a
+        pickup directory, and a document nobody takes stays in the mailbox
+        either way.
+        """
+        self.dropbox.write(outbound_ids)
+        self.courier.enqueue_many(outbound_ids)
+
     def close(self) -> None:
+        self.dropbox.stop()
         self.courier.stop()
         self.conn.close()
 
@@ -403,6 +423,19 @@ class Handler(BaseHTTPRequestHandler):
                       " delivery, note, at FROM outbound ORDER BY id DESC LIMIT ?",
                 (_limit(query),)))
 
+        if head == "drop":
+            if rest and rest[0] == "scan":
+                if method != "POST":
+                    return self._text(405, "POST to scan the drop directory")
+                if not self.mock.dropbox.drop_dir:
+                    return self._json(409, {
+                        "error": "no drop directory is configured; start the "
+                                 "mock with --drop-dir"})
+                found = self.mock.dropbox.scan()
+                return self._json(200, {"scanned": len(found),
+                                        "files": [vars(item) for item in found]})
+            return self._json(200, self.mock.dropbox.state())
+
         if head == "advance":
             if method != "POST":
                 return self._text(405, "POST to advance the queue")
@@ -453,7 +486,7 @@ class Handler(BaseHTTPRequestHandler):
             "error": "no control endpoint %r" % head,
             "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
                           "catalog", "orders", "documents", "interchanges",
-                          "mailbox", "outbox", "advance", "send", "mdns",
+                          "mailbox", "outbox", "drop", "advance", "send", "mdns",
                           "requests", "validate", "reset"]})
 
     def _partners(self, method: str, rest: List[str], query, body: bytes):
@@ -802,6 +835,8 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/interchanges", "Raw payloads. Add <code>?raw</code> for one."),
         ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),
         ("GET", "/_mock/outbox", "The queue, including what is not due yet."),
+        ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
+        ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
         ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything."),
         ("POST", "/_mock/send", "Send a document out of band."),
         ("GET", "/_mock/mdns", "Receipts, sent and received."),
@@ -864,4 +899,8 @@ def make_server(config: Config) -> _Server:
     httpd = _Server((config.host, config.port), Handler)
     httpd.mock = Mock(config)
     httpd.mock.courier.lock = httpd.mock.lock
+    httpd.mock.dropbox.lock = httpd.mock.lock
+    if httpd.mock.dropbox.active:
+        httpd.mock.dropbox.prepare()
+        httpd.mock.dropbox.start()
     return httpd

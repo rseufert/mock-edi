@@ -120,6 +120,7 @@ bash examples/demo.sh
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
+| Directory trading | `GET /_mock/drop`, `POST /_mock/drop/scan` |
 | The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850` |
 | Health and state | `GET /_mock/health`, `GET /_mock/state`, `GET /_mock/requests` |
 | Reset | `POST /_mock/reset` |
@@ -231,6 +232,37 @@ Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
 
+## Trading over a directory
+
+Not all EDI is AS2. A great deal of it is still a folder: the partner writes a
+file into it, you pick the file up; you write a file back, they pick it up.
+
+```bash
+mock-edi --drop-dir ./edi/in --pickup-dir ./edi/out
+```
+
+Anything dropped in `./edi/in` goes through the same pipeline a POST does, and
+the answers are written into `./edi/out` as `<partner>-<code>-<control>.edi` —
+written to a temporary name and renamed, so nothing watching the directory
+ever sees a half-written file.
+
+Two things every directory integration meets are handled rather than left to
+bite. A file still being written is not read: anything modified within
+`--drop-settle-ms` is left for the next pass, and `.tmp`, `.part` and dotfiles
+are never read at all. A file that has been read is not read again: it is
+moved into `processed/`, or into `failed/` if it could not be read — moved
+rather than deleted, because a mock that eats the evidence is no use when a
+test fails.
+
+The poller runs every `--drop-interval-ms`, but it is not the only way in:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/drop/scan
+```
+
+scans once and returns what it found, so a test never has to wait for a poll
+interval — the same reason `/_mock/advance` exists.
+
 ## Validation
 
 Every inbound document is checked against the dictionary, and the findings
@@ -282,6 +314,7 @@ mockedi/partners.py      who we trade with, and how each one misbehaves
 mockedi/pipeline.py      the choreography: an order in, four documents back
 mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
+mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
 mockedi/server.py        HTTP: AS2, /edi, and the control plane
 ```

@@ -15,7 +15,7 @@ from support import ACME, MockServerCase, as2_headers, x12_order
 
 class SynchronousMdn(MockServerCase):
     def setUp(self):
-        MockServerCase.setUp(self)
+        super().setUp()
         self.payload = x12_order("PO-AS2")
         self.status, self.headers, self.body = self.request(
             "POST", "/as2", self.payload, headers=as2_headers(), raw=True)

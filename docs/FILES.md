@@ -38,6 +38,7 @@ nothing, `server` sits at the top and depends on everything.
 | `pipeline.py` | The choreography. An interchange arrives, is validated, recorded and answered; the answers are queued with due times and released by `advance()`. | Changing what answers what, or when. |
 | `delivery.py` | The courier: posting released documents and asynchronous MDNs to partners that have a URL, on one background thread, with the header names spelled the way AS2 spells them. | Changing outbound delivery. |
 | `as2.py` | AS2 headers, the MIC, and MDN construction and parsing. No S/MIME, by design and by explicit refusal. | Changing AS2 handling. |
+| `drop.py` | Trading over a directory: the inbox the mock reads, the pickup directory it writes, the poller, and the two traps every directory integration meets - half-written files and files read twice. | Changing directory trading. |
 | `db.py` | SQLite: the schema, the number ranges, and the deterministic demo data - four partners, a twelve-item catalogue with valid UPC check digits, and two finished orders. | Changing demo data, or adding a table. |
 | `server.py` | The HTTP front end: `Config`, routing, the AS2 and plain endpoints, the whole `/_mock` control plane, the index page, and the lock that serialises database work. | Adding an endpoint or a configuration option. |
 | `__init__.py` | Re-exports `Config` and `make_server`, and derives `__version__` from `pyproject.toml` in a checkout (reporting `…+source`) or from the installed metadata otherwise. | Rarely. |
@@ -63,6 +64,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | `test_as2.py` | Synchronous and asynchronous MDNs, the MIC under each digest, the human-readable part, refusals (S/MIME, wrong recipient, unregistered sender), and receipts coming back in. |
 | `test_control.py` | Health and state, partner CRUD, the mailbox and its flags, delays and `advance`, sending out of band, the archive, reset, 404s, and basic authentication. |
 | `test_dictionary.py` | The model's own invariants, the published dictionary, `/_mock/validate` - and `GeneratedDocumentsAreValid`, which checks every document the mock writes against the dictionary it checks yours against. |
+| `test_drop.py` | Reading a drop directory and writing a pickup directory: the same pipeline as a POST, files moved to `processed/` and `failed/`, half-written files left alone, temporary and hidden names ignored, and one test for the poller thread. |
 | `test_delivery.py` | Posting to a real listener: order, AS2 headers and their exact spelling, receipts recorded, failures recorded rather than raised, and mailbox partners left alone. |
 
 ## `tools/` - the checks CI runs beside the tests
