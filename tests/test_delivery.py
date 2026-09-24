@@ -40,6 +40,10 @@ class Listener(BaseHTTPRequestHandler):
 
 
 class DeliveryToAPartner(MockServerCase):
+    # A short delivery timeout so that the "nobody is listening" case is
+    # bounded on platforms where a refused connection is not instant.
+    config_kwargs = {"deliver_timeout": 3.0}
+
     @classmethod
     def setUpClass(cls):
         MockServerCase.setUpClass()
@@ -64,7 +68,7 @@ class DeliveryToAPartner(MockServerCase):
 
     def deliver(self):
         self.send(x12_order("PO-PUSH"))
-        self.httpd.mock.courier.drain()
+        self.settle()
 
     def test_documents_are_posted_rather_than_waiting_to_be_collected(self):
         self.deliver()
@@ -122,15 +126,14 @@ class DeliveryToAPartner(MockServerCase):
         self.patch("/_mock/partners/" + ACME,
                    {"as2_url": "http://127.0.0.1:1/nowhere"})
         self.send(x12_order("PO-NOWHERE"))
-        self.httpd.mock.courier.drain()
-        _s, _h, rows = self.get("/_mock/outbox")
+        rows = self.settle()
         self.assertTrue(all(row["status"] == "failed" for row in rows))
         self.assertIn("delivery failed", rows[0]["note"])
 
     def test_a_mailbox_partner_is_left_alone(self):
         self.patch("/_mock/partners/" + ACME, {"as2_url": ""})
         self.send(x12_order("PO-MAILBOX"))
-        self.httpd.mock.courier.drain()
+        self.httpd.mock.courier.drain(5.0)
         self.assertEqual(Listener.received, [])
         self.assertEqual(len(self.mailbox(ACME)), 4)
 
@@ -159,7 +162,7 @@ class AsynchronousReceipts(MockServerCase):
             "POST", "/as2", x12_order("PO-ASYNC-REAL"),
             headers=as2_headers(async_url=url), raw=True)
         self.assertEqual(status, 202)
-        self.httpd.mock.courier.drain()
+        self.httpd.mock.courier.drain(20.0)
         self.assertEqual(len(Listener.received), 1)
         body = Listener.received[0]["body"]
         self.assertIn("Disposition: automatic-action", body)

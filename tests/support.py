@@ -15,6 +15,7 @@ import json
 import os
 import sys
 import threading
+import time
 import unittest
 import urllib.error
 import urllib.request
@@ -119,6 +120,24 @@ class MockServerCase(unittest.TestCase):
                          "expected one %s for %s, got %d"
                          % (kind or "document", partner or "anyone", len(rows)))
         return parse(rows[0]["payload"])
+
+    def settle(self, timeout=30.0):
+        """Wait until nothing in the outbox is still waiting to be delivered.
+
+        Not a sleep, and not a fixed number of drains: on some platforms a
+        connection to a dead port takes seconds to be refused rather than
+        failing immediately, so the only reliable signal is the state itself.
+        """
+        deadline = time.time() + timeout
+        rows = []
+        self.httpd.mock.courier.drain(timeout)
+        while time.time() < deadline:
+            _status, _headers, rows = self.get("/_mock/outbox")
+            if all(row["status"] != "ready" for row in rows):
+                return rows
+            time.sleep(0.05)
+        self.fail("the outbox still held undelivered documents after %gs: %s"
+                  % (timeout, [(r["code"], r["status"]) for r in rows]))
 
     def order(self, po_number):
         status, _headers, data = self.get("/_mock/orders/" + po_number)
