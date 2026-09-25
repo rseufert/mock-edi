@@ -27,6 +27,7 @@ from typing import List, Optional, Sequence
 
 from . import schema
 from .envelope import (Delimiters, EDIFACT_DEFAULTS, EdiSyntaxError, Group,
+                       cut_interchanges,
                        Interchange, Message, Seg, ccyymmdd, hhmm,
                        render_segment, seg, split_elements, split_segments,
                        yymmdd)
@@ -50,6 +51,11 @@ def read_delimiters(payload: str) -> Delimiters:
     return Delimiters(segment=segment, element=element, component=component,
                       repetition=EDIFACT_DEFAULTS.repetition,
                       release=release, decimal=decimal)
+
+
+def split(payload: str) -> List[str]:
+    """The payload cut into one string per interchange, UNB to UNZ."""
+    return cut_interchanges(payload, read_delimiters, "UNZ")
 
 
 def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:

@@ -99,35 +99,50 @@ class Pipeline:
     # -- inbound
 
     def receive(self, payload: bytes, transport: str = "http",
-                message_id: str = "", mic: str = "") -> Receipt:
-        """Read an interchange, decide what it means, and queue the answers.
+                message_id: str = "", mic: str = "") -> List[Receipt]:
+        """Read every interchange in the payload and queue the answers.
+
+        One receipt per interchange, in the order they arrived. A payload
+        usually holds one, and then this is a list of one; a file from a VAN
+        or an SFTP drop may hold several, and each is a separate interchange
+        with its own control number, its own acknowledgment and its own
+        verdict - one being refused does not touch the others.
 
         All of it or none of it: an exception anywhere leaves the database as
-        it was before the interchange arrived. Documents released along the
-        way are handed to the courier only once that is certain, so it never
-        posts one that was rolled back.
+        it was before the *payload* arrived. Documents released along the way
+        are handed to the courier only once that is certain, so it never posts
+        one that was rolled back.
         """
         notify, released = self.on_release, []
         if notify is not None:
             self.on_release = released.extend
         try:
             with self.conn.atomic():
-                receipt = self._receive(payload, transport, message_id, mic)
+                receipts = self._receive_all(payload, transport, message_id, mic)
         finally:
             self.on_release = notify
         if notify is not None and released:
             notify(released)
-        return receipt
+        return receipts
 
-    def _receive(self, payload: bytes, transport: str, message_id: str,
-                 mic: str) -> Receipt:
+    def _receive_all(self, payload: bytes, transport: str, message_id: str,
+                     mic: str) -> List[Receipt]:
         text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else payload
         try:
             dialect = sniff(text)
+            parts = x12.split(text) if dialect == "X12" else edifact.split(text)
+        except EdiSyntaxError as error:
+            return [Receipt(ok=False, error=str(error))]
+        return [self._receive(part, dialect, transport, message_id, mic)
+                for part in parts]
+
+    def _receive(self, text: str, dialect: str, transport: str,
+                 message_id: str, mic: str) -> Receipt:
+        try:
             interchange = (x12.parse(text) if dialect == "X12"
                            else edifact.parse(text))
         except EdiSyntaxError as error:
-            return Receipt(ok=False, error=str(error))
+            return Receipt(ok=False, dialect=dialect, error=str(error))
 
         partner = partners.get(self.conn, interchange.sender)
         if partner is None:
