@@ -513,6 +513,7 @@ mockedi/schema.py        elements, segments, loops, transaction sets  (add shape
 mockedi/envelope.py      the shape both dialects share, and delimiter handling
 mockedi/x12.py           reading and writing ASC X12 interchanges
 mockedi/edifact.py       reading and writing UN/EDIFACT interchanges
+mockedi/charsets.py      which character set a document is in, bytes and back
 mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
@@ -536,7 +537,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-524 tests, every one of them talking to a real mock over real HTTP. Nothing is
+530 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

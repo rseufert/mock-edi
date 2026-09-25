@@ -29,7 +29,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, db, delivery, documents, drop, partners, pipeline,
+from . import (as2, charsets, db, delivery, documents, drop, partners, pipeline,
                reconcile, schema, transactions, validate)
 from .envelope import EdiSyntaxError
 
@@ -310,7 +310,8 @@ class Handler(BaseHTTPRequestHandler):
 
         mic = as2.mic(body, inbound.micalg) if body else ""
         receipts = self.mock.pipeline.receive(
-            body, transport="as2", message_id=inbound.message_id, mic=mic)
+            body, transport="as2", message_id=inbound.message_id, mic=mic,
+            charset=charsets.from_content_type(self.headers.get("Content-Type", "")))
         if not any(receipt.ok for receipt in receipts):
             return self._mdn(inbound, body, as2.ERROR, receipts[0].error)
 
@@ -373,7 +374,9 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, {"recorded": True, "fields": fields})
 
     def _plain_inbound(self, body: bytes, query) -> Tuple[int, int]:
-        receipts = self.mock.pipeline.receive(body, transport="http")
+        receipts = self.mock.pipeline.receive(
+            body, transport="http",
+            charset=charsets.from_content_type(self.headers.get("Content-Type", "")))
         if len(receipts) == 1 and not receipts[0].ok:
             return self._json(422, {"accepted": False, "error": receipts[0].error})
 
@@ -484,8 +487,16 @@ class Handler(BaseHTTPRequestHandler):
                 if row is None:
                     return self._json(404, {"error": "no interchange %r" % rest[0]})
                 if _flag(query, "raw"):
-                    return self._raw(200, row["payload"].encode("utf-8"),
-                                     {"Content-Type": _edi_type(row["dialect"])})
+                    # The bytes as they arrived or left; a row from before
+                    # they were kept has only its text.
+                    raw = row["raw"] if row["raw"] is not None \
+                        else row["payload"].encode("utf-8")
+                    content_type = _edi_type(row["dialect"])
+                    if row["charset"]:
+                        content_type += "; charset=%s" % row["charset"]
+                    return self._raw(200, bytes(raw), {"Content-Type": content_type})
+                row = dict(row)
+                row.pop("raw", None)
                 return self._json(200, row)
             return self._json(200, db.rows(
                 conn, "SELECT id, direction, dialect, partner, control, transport,"
@@ -497,8 +508,8 @@ class Handler(BaseHTTPRequestHandler):
                 partner_id=_first(query, "partner"), kind=_first(query, "kind"),
                 leave=_flag(query, "leave"))
             if _flag(query, "raw"):
-                joined = "\n".join(row["payload"] for row in rows)
-                return self._raw(200, joined.encode("utf-8"), {"Content-Type": TEXT})
+                joined = b"\n".join(self.mock.pipeline.wire(row)[0] for row in rows)
+                return self._raw(200, joined, {"Content-Type": TEXT})
             return self._json(200, rows)
 
         if head == "outbox":
@@ -635,12 +646,18 @@ class Handler(BaseHTTPRequestHandler):
         """
         from . import edifact, x12
         from .envelope import sniff
-        text = body.decode("utf-8", "replace")
+        http_charset = charsets.from_content_type(self.headers.get("Content-Type", ""))
+        view = body.decode(charsets.BYTES)
         try:
-            dialect = sniff(text)
-            parts = x12.split(text) if dialect == "X12" else edifact.split(text)
-            interchanges = [x12.parse(part) if dialect == "X12"
-                            else edifact.parse(part) for part in parts]
+            dialect = sniff(view)
+            parts = x12.split(view) if dialect == "X12" else edifact.split(view)
+            texts = []
+            for part in parts:
+                raw = part.encode(charsets.BYTES)
+                texts.append(charsets.decode(
+                    raw, charsets.declared(dialect, raw, http_charset)))
+            interchanges = [x12.parse(text) if dialect == "X12"
+                            else edifact.parse(text) for text in texts]
         except EdiSyntaxError as error:
             return self._json(422, {"parsed": False, "error": str(error)})
         reports = [validate.validate(item) for item in interchanges]

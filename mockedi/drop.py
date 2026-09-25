@@ -231,8 +231,10 @@ class DropBox:
             temporary = final + ".tmp"
             try:
                 os.makedirs(self.pickup_dir, exist_ok=True)
-                with open(temporary, "w", encoding="utf-8") as handle:
-                    handle.write(row["payload"])
+                with self.lock:
+                    body, _charset = self.pipeline.wire(row)
+                with open(temporary, "wb") as handle:
+                    handle.write(body)
                 os.replace(temporary, final)
             except OSError:              # pragma: no cover - permissions
                 continue
