@@ -325,7 +325,7 @@ already exist.
 A retry bug on the sender's side is ordinary, and processing a duplicate order
 is expensive. An interchange control number a partner has used before is
 refused in the envelope's own words — a `TA1` with note code `025`, *duplicate
-interchange control number*, or a `CONTRL` whose `UCI` carries `0085 = 27`,
+interchange control number*, or a `CONTRL` whose `UCI` carries `0085 = 26`,
 *duplicate detected*.
 
 ```

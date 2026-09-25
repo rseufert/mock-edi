@@ -225,7 +225,7 @@ class Pipeline:
                 note="interchange control number %s was already received from "
                      "%s at %s" % (interchange.control, partner_id, seen["at"]))]
         return [EnvelopeFinding(
-            code="27",                 # 0085: duplicate detected
+            code="26",                 # 0085: duplicate detected
             tag="UNB", position=5,
             note="interchange control reference %s was already received from "
                  "%s at %s" % (interchange.control, partner_id, seen["at"]))]
