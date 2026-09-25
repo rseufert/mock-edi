@@ -7,8 +7,12 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
+from decimal import Decimal
+
+from mockedi import validate
+
 from support import (ACME, EURODIS, MockServerCase, edifact_change,
-                     edifact_order, x12_change, x12_order)
+                     edifact_order, parse, x12_change, x12_order)
 
 # A change is only meaningful before the goods leave. With every delay at
 # zero the order is invoiced before the POST returns, so these tests give
@@ -211,6 +215,115 @@ class ChangesAgainstShippedGoods(MockServerCase):
         line = self.order("PO-SHIPPED")["lines"][0]
         self.assertEqual(line["quantity"], "150")
         self.assertEqual(line["confirmed"], "150")
+
+
+class WhatAChangeConfirmsIsDelivered(MockServerCase):
+    """Every quantity an 865 confirms is shipped and billed - or refused.
+
+    The order has already despatched (the despatch delay is zero) and is
+    waiting to be invoiced, which is the window in which a change can still
+    raise a quantity or add a line. What it adds goes out as a second
+    consignment, with an 856 and an 810 of its own.
+    """
+
+    config_kwargs = {"invoice_delay_ms": 3600000}
+
+    def setUp(self):
+        super().setUp()
+        self.send(x12_order("PO-MORE"))      # 100 + 40, despatched at once
+        self.mailbox(ACME, leave=False)
+
+    def settled(self):
+        self.post("/_mock/advance?all")
+        order = self.order("PO-MORE")
+        for line in order["lines"]:
+            self.assertEqual((line["shipped"], line["invoiced"]),
+                             (line["confirmed"], line["confirmed"]),
+                             "line %s" % line["line"])
+        return order
+
+    def documents(self, kind):
+        return [parse(row["payload"]).groups[0].messages[0]
+                for row in self.mailbox(ACME, kind)]
+
+    def test_a_raised_quantity_ships_as_a_second_consignment(self):
+        self.send(x12_change("PO-MORE", [("1", "QI", 150, "12.50")]))
+        order = self.settled()
+        self.assertEqual(order["lines"][0]["confirmed"], "150")
+        first, second = [s["shipment_id"] for s in order["shipments"]]
+
+        # The second 856 carries the difference, not the running total.
+        despatch = self.documents("despatch")
+        self.assertEqual(len(despatch), 1)
+        self.assertEqual(despatch[0].find("BSN").get(2), second)
+        self.assertEqual([(s.get(1), s.get(2)) for s in despatch[0].find_all("SN1")],
+                         [("1", "50")])
+
+    def test_each_consignment_is_billed_once_and_named_by_its_own_810(self):
+        self.send(x12_change("PO-MORE", [("1", "QI", 150, "12.50")]))
+        order = self.settled()
+        invoices = self.documents("invoice")
+        self.assertEqual(len(invoices), 2)
+        named = [[r.get(2) for r in m.find_all("REF") if r.get(1) == "SI"][0]
+                 for m in invoices]
+        self.assertEqual(named, [s["shipment_id"] for s in order["shipments"]])
+        billed = [[(i.get(1), i.get(2)) for i in m.find_all("IT1")] for m in invoices]
+        self.assertEqual(billed, [[("1", "100"), ("2", "40")], [("1", "50")]])
+        # 1416.00 for the first consignment, 625.00 for the second: the
+        # order's total is what was billed, and it adds up.
+        for message in invoices + self.documents("despatch"):
+            report = validate.validate_message(message, "X12")
+            self.assertTrue(report.clean, report.summary())
+        tds = sum(Decimal(m.find("TDS").get(1)) / 100 for m in invoices)
+        self.assertEqual(tds, Decimal("2041.00"))
+        self.assertEqual(Decimal(order["total"]), tds)
+
+    def test_a_line_added_after_despatch_is_shipped_and_billed(self):
+        self.send(x12_change("PO-MORE", [("3", "AI", 20, "8.90")],
+                             skus={"3": "GEAR-100"}))
+        order = self.settled()
+        self.assertEqual(order["lines"][2]["confirmed"], "20")
+        self.assertEqual(len(order["shipments"]), 2)
+
+    def test_a_change_that_confirms_nothing_new_schedules_nothing(self):
+        self.send(x12_change("PO-MORE", [("1", "PC", 100, "12.00")]))
+        _status, _headers, rows = self.get("/_mock/scheduled")
+        despatches = [r for r in rows if r["po_number"] == "PO-MORE"
+                      and r["kind"] == "despatch" and not r["done_at"]]
+        self.assertEqual(despatches, [])
+
+
+class Reviving(MockServerCase):
+    """A change to a cancelled order that confirms something again."""
+
+    config_kwargs = WINDOW
+
+    def test_a_revived_order_is_fulfilled(self):
+        self.send(x12_order("PO-REVIVE"))
+        self.send(x12_change("PO-REVIVE", [("1", "DI", 0, "0")], purpose="01"))
+        self.send(x12_change("PO-REVIVE", [("1", "CA", 30, "12.50")],
+                             control="000000079"))
+        self.post("/_mock/advance?all")
+        order = self.order("PO-REVIVE")
+        line = order["lines"][0]
+        self.assertEqual((line["confirmed"], line["shipped"], line["invoiced"]),
+                         ("30", "30", "30"))
+        self.assertEqual(order["status"], "invoiced")
+
+
+class TheEdifactSideAfterDespatch(MockServerCase):
+    config_kwargs = {"invoice_delay_ms": 3600000}
+
+    def test_the_second_desadv_carries_the_difference(self):
+        self.send(edifact_order("PO-E-MORE"),
+                  headers={"Content-Type": "application/edifact"})
+        self.mailbox(EURODIS, leave=False)
+        self.send(edifact_change("PO-E-MORE", [("1", "3", 150, "12.50")]),
+                  headers={"Content-Type": "application/edifact"})
+        self.post("/_mock/advance?all")
+        desadv = self.document(EURODIS, "despatch").groups[0].messages[0]
+        self.assertEqual([q.comp(1, 2) for q in desadv.find_all("QTY")], ["50"])
+        self.assertEqual(len(self.mailbox(EURODIS, "invoice")), 2)
 
 
 class AnOrderRestatedAsAChange(MockServerCase):

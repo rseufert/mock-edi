@@ -283,6 +283,14 @@ all. A refused line comes back `IR` with the reason, and the order keeps what
 it had — reporting the order's state instead would tell the buyer its request
 succeeded.
 
+**Nor promise what will never happen.** Between despatch and invoice a
+quantity can still be raised and a line added, and what the 865 confirms then
+ships as a **second consignment**: its own 856 carrying the difference, and its
+own 810 naming it. Every consignment is billed by one invoice, so an order that
+shipped twice is invoiced twice — which is the buyer-side matching worth
+testing. A change that revives a cancelled order is packed and billed the same
+way.
+
 **Give yourself a window.** A change is only meaningful before the goods
 leave, and with every delay at zero the order is invoiced before the POST
 returns, so every change would be refused. That is correct behaviour, not a

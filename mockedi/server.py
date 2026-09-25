@@ -144,8 +144,9 @@ class Mock:
         """Back to a freshly seeded system, without restarting the process."""
         with self.lock:
             for table in ("interchange", "transaction_set", "purchase_order",
-                          "order_line", "shipment", "invoice", "outbound",
-                          "scheduled", "mdn", "control_number", "request_log",
+                          "order_line", "shipment", "shipment_line", "invoice",
+                          "outbound", "scheduled", "mdn", "control_number",
+                          "request_log",
                           "partner", "catalog"):
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
