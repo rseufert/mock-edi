@@ -94,6 +94,10 @@ class DropBox:
         # name, with the size and modification time they had and why. Left
         # alone until either changes.
         self.stuck: Dict[str, Tuple[int, float, str]] = {}
+        # Names that were already taken in the pickup directory, and what was
+        # written instead: the wire-visible sign of a control number reused,
+        # after a reset or by a partner's behaviour.
+        self.renamed: List[Dict[str, str]] = []
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
@@ -265,13 +269,7 @@ class DropBox:
         target_dir = os.path.join(self.drop_dir, folder)
         try:
             os.makedirs(target_dir, exist_ok=True)
-            stem, extension = os.path.splitext(name)
-            candidate = os.path.join(target_dir, name)
-            counter = 1
-            while os.path.exists(candidate):
-                candidate = os.path.join(
-                    target_dir, "%s-%d%s" % (stem, counter, extension))
-                counter += 1
+            candidate = _free_name(os.path.join(target_dir, name))
             os.replace(path, candidate)
             return os.path.join(folder, os.path.basename(candidate))
         except OSError as error:         # pragma: no cover - permissions
@@ -285,6 +283,11 @@ class DropBox:
         Written to a temporary name and renamed, so that whatever is watching
         the directory never sees a half-written file - the convention this
         module asks senders to follow.
+
+        Nothing already there is overwritten. A reset starts the control
+        numbers again, so a name can recur while the file from before is
+        still waiting to be collected; the new one is suffixed, as a filed-away
+        drop is, and the collision is reported in `renamed`.
         """
         if not self.pickup_dir:
             return []
@@ -307,10 +310,15 @@ class DropBox:
                     body, _charset = self.pipeline.wire(row)
                 with open(temporary, "wb") as handle:
                     handle.write(body)
-                os.replace(temporary, final)
+                target = _free_name(final)
+                os.replace(temporary, target)
             except OSError:              # pragma: no cover - permissions
                 continue
-            written.append(name)
+            written_as = os.path.basename(target)
+            if written_as != name:
+                with self.lock:
+                    self.renamed.append({"name": name, "writtenAs": written_as})
+            written.append(written_as)
         with self.lock:
             self.written.extend(written)
         return written
@@ -347,5 +355,16 @@ class DropBox:
                 "stuck": [{"name": name, "reason": reason}
                           for name, (_size, _mtime, reason)
                           in sorted(self.stuck.items())],
+                "renamed": list(self.renamed[-20:]),
                 "lastScan": [vars(item) for item in self.last_scan],
             }
+
+
+def _free_name(path: str) -> str:
+    """`path`, or the first `stem-N.ext` beside it that does not exist yet."""
+    stem, extension = os.path.splitext(path)
+    candidate, counter = path, 1
+    while os.path.exists(candidate):
+        candidate = "%s-%d%s" % (stem, counter, extension)
+        counter += 1
+    return candidate

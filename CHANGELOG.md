@@ -42,6 +42,15 @@ says so where it does.
 
 ### Fixed
 
+- **A pickup file was overwritten after a reset** ([#27]). Outbound files are
+  named `<partner>-<code>-<control>.edi`, a reset starts the control numbers
+  again, and the rename that finished each write replaced whatever had that
+  name - so the answers to an order sent before a reset were silently
+  replaced by the next order's, before anything had collected them. The
+  pickup writer now suffixes a name already taken, as the drop directory
+  always did when filing a read file away, and lists each collision under
+  `renamed` in `GET /_mock/drop`.
+
 - A dropped file could be read more than once ([#26]). The poller and
   `POST /_mock/drop/scan` could both read it - two interchanges with the same
   ISA13, eight documents back - and a file that could not be moved into
@@ -577,6 +586,7 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#27]: https://github.com/rseufert/mock-edi/issues/27
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
