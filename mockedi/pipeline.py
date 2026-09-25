@@ -335,7 +335,8 @@ class Pipeline:
                 # Nothing inside a refused envelope was read, so there is no
                 # group to acknowledge. The TA1 is the whole answer.
                 return
-            for functional_id, control, version, messages in ack.group_reports(report):
+            for functional_id, control, version, messages in ack.group_reports(
+                    interchange, report):
                 body = ack.functional_acknowledgment(
                     functional_id, control, version, messages,
                     report.group_errors.get((functional_id, control), []))

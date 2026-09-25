@@ -23,18 +23,26 @@ from .validate import InterchangeReport, MessageReport
 GroupReports = List[Tuple[str, str, str, List[MessageReport]]]
 
 
-def group_reports(report: InterchangeReport) -> GroupReports:
-    """The message reports, gathered back into the groups they came from."""
-    order: List[Tuple[str, str, str]] = []
-    buckets: Dict[Tuple[str, str, str], List[MessageReport]] = {}
+def group_reports(interchange: Interchange,
+                  report: InterchangeReport) -> GroupReports:
+    """Every functional group in the envelope, with its messages' reports.
+
+    Gathered from the *envelope* rather than from the reports, so that a group
+    carrying no transaction set still gets a 997 of its own.  It was sent, and
+    a receiver that says nothing about it cannot be told apart from one that
+    never received it - which is the outcome `docs/ARCHITECTURE.md` rules out.
+
+    The implicit group - the one the parser invents around a transaction set
+    that arrived outside any GS - is left out.  There is no GS to answer, and
+    answering anyway wrote `AK1*??*0`, which the mock's own dictionary
+    rejects.  That shape is refused at interchange level instead.
+    """
+    buckets: Dict[Tuple[str, str], List[MessageReport]] = {}
     for item in report.messages:
-        key = (item.group_id, item.group_control, item.group_version)
-        if key not in buckets:
-            buckets[key] = []
-            order.append(key)
-        buckets[key].append(item)
-    return [(gid, control, version, buckets[(gid, control, version)])
-            for gid, control, version in order]
+        buckets.setdefault((item.group_id, item.group_control), []).append(item)
+    return [(group.functional_id, group.control, group.version,
+             buckets.get((group.functional_id, group.control), []))
+            for group in interchange.groups if not group.implicit]
 
 
 # ---------------------------------------------------------------------------

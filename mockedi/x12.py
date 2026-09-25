@@ -134,6 +134,11 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
             position += 1
             item.position = position
             message.segments.append(item)
+        elif group is None:
+            # Between ISA and the first GS: the interchange's own content. A
+            # TA1 arrives here, and an interchange holding one holds no group
+            # by design, so it must not be read as an empty envelope.
+            interchange.preamble.append(item)
     return interchange
 
 

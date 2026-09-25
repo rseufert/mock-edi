@@ -216,12 +216,15 @@ def validate(interchange: Interchange, strict: bool = False,
         item.group_version = group.version
         report.messages.append(item)
         groups.append(group)
-    if not report.messages:
-        report.envelope_errors.append(
-            ("5", "the interchange holds no transaction sets"))
-
     _check_envelope(interchange, report)
     report.interchange_findings.extend(envelope_faults)
+    if (not report.messages and not report.interchange_rejected
+            and not _is_acknowledgment_only(interchange)):
+        # An empty *group* is a group's fault, and is answered by the 997 that
+        # group gets. An interchange with no group at all has been refused
+        # above, in terms of its own envelope, which says it better than this.
+        report.envelope_errors.append(
+            ("5", "the interchange holds no transaction sets"))
     for group, item in zip(groups, report.messages):
         if (report.interchange_rejected
                 or (group.functional_id, group.control) in report.group_errors):
@@ -281,6 +284,19 @@ def _check_envelope(interchange: Interchange, report: InterchangeReport) -> None
         _check_edifact_envelope(interchange, report)
 
 
+def _is_acknowledgment_only(interchange: Interchange) -> bool:
+    """Whether the interchange's whole content is a TA1.
+
+    A TA1 is not a transaction set and does not sit in a functional group: it
+    travels between ISA and IEA on its own.  So an interchange carrying one is
+    complete while holding no group and no message, and the two checks that
+    would otherwise call that empty have to know it - or the mock would refuse
+    the very shape it writes.
+    """
+    return (not interchange.groups
+            and any(item.tag == "TA1" for item in interchange.preamble))
+
+
 def _same_number(left: str, right: str) -> bool:
     """Control numbers compared as numbers when both are: 000000077 is 77."""
     left, right = (left or "").strip(), (right or "").strip()
@@ -306,6 +322,21 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
                      % (position, len(value), element.max_len)))
 
     explicit = [g for g in interchange.groups if not g.implicit]
+    if not explicit and not _is_acknowledgment_only(interchange):
+        # A 997 acknowledges a functional group, so an interchange holding no
+        # group cannot be answered at group level at all. Answered here, by a
+        # TA1, rather than with silence - or with a 997 for a group that was
+        # never sent, which is what a transaction set outside any GS used to
+        # get.
+        #
+        # A TA1 is the exception, and the reason this is not simply "no group
+        # means no content": it travels in an interchange of its own with no
+        # GS at all, so the mock would refuse the very shape it writes.
+        findings.append(EnvelopeFinding(
+            code="024", tag="ISA",
+            note="a transaction set arrived outside any functional group"
+                 if interchange.groups else
+                 "the interchange holds no functional group"))
     for group in explicit:
         errors: List[Tuple[str, str]] = []
         trailer = group.trailer

@@ -28,7 +28,7 @@ def x12_997(body, control="0001", group="88"):
                            "MOCKEDI", "1", group, "PO")
     report = validate.validate(interchange)
     segments = []
-    for functional_id, group_control, version, messages in ack.group_reports(report):
+    for functional_id, group_control, version, messages in ack.group_reports(interchange, report):
         segments.extend(ack.functional_acknowledgment(
             functional_id, group_control, version, messages))
     return segments, report
@@ -101,7 +101,7 @@ class FunctionalAcknowledgment(unittest.TestCase):
                 seg("BIG", "20260924", "INV1"), seg("TDS", "1000")])],
                 "ACME", "MOCKEDI", "1", "6", "IN").groups[0])
         report = validate.validate(interchange)
-        groups = ack.group_reports(report)
+        groups = ack.group_reports(interchange, report)
         self.assertEqual([g[0] for g in groups], ["PO", "IN"])
 
 
