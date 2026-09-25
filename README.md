@@ -178,6 +178,13 @@ curl -X PATCH -H 'Content-Type: application/json' \
      http://127.0.0.1:8080/_mock/partners/ACME
 ```
 
+A partner is refused anything the mock could not then act on: an unknown
+field is named rather than dropped, a `version` has to match the dialect
+(`004010` or `D:96A:UN`), `test` is a flag, `as2_url` needs a scheme the
+courier can use, and an id has to fit the envelope — fifteen characters for
+X12, because ISA06 is fixed at that width and a longer one would be truncated
+to something the partner could never be found by.
+
 | Behaviour | What the partner does |
 | --- | --- |
 | `accept` | Confirms everything in full and ships what was ordered. |

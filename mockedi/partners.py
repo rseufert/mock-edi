@@ -13,11 +13,17 @@ reproduces a specific failure without restarting anything.
 """
 from __future__ import annotations
 
+import re
 import sqlite3
+import urllib.parse
 from typing import Any, Dict, List, Optional
 
 from . import db
 from .transactions import Party
+
+# An outbound document that will never be sent, because the partner it was
+# addressed to has gone.
+CANCELLED = "cancelled"
 
 BEHAVIOURS = db.BEHAVIOURS
 
@@ -33,6 +39,120 @@ class UnknownPartner(KeyError):
     that turns up would hide the single most common AS2 misconfiguration,
     which is an AS2-From that does not match what the other side registered.
     """
+
+
+# Every column a caller may set, with its default. Anything not named here is
+# refused rather than dropped: a PATCH that silently ignores a misspelled
+# field sends whoever wrote it looking for the bug somewhere else entirely.
+FIELDS = {
+    "name": "", "qualifier": "ZZ", "dialect": "X12", "version": "004010",
+    "behaviour": "accept", "as2_url": "", "mdn_mode": "sync",
+    "street": "", "city": "", "region": "", "postal": "", "country": "US",
+    "duns": "", "test": 1,
+}
+
+DIALECTS = ("X12", "EDIFACT")
+MDN_MODES = ("sync", "async")
+
+# What the wire can carry, per dialect.
+#
+#   X12      ISA06/ISA08 are fixed at 15 characters and ISA05/ISA07 at 2, so
+#            anything longer is truncated and the partner becomes unreachable
+#            by its own identifier. GS08 is a six-character version code.
+#   EDIFACT  UNB's S002/0004 is up to 35 and its qualifier up to 4. The
+#            message version is a directory: D:96A:UN.
+LIMITS = {
+    "X12": {"id": 15, "qualifier": 2, "version": re.compile(r"^\d{6}$"),
+            "version_hint": "six digits, e.g. 004010 or 005010"},
+    "EDIFACT": {"id": 35, "qualifier": 4,
+                "version": re.compile(r"^D:\d{2}[A-Z]:UN$"),
+                "version_hint": "a directory, e.g. D:96A:UN"},
+}
+
+
+class Invalid(ValueError):
+    """A partner field the mock would not be able to act on."""
+
+
+def _known_fields() -> str:
+    return ", ".join(sorted(FIELDS))
+
+
+def check(fields: Dict[str, Any], dialect: str,
+          identifier: str = "") -> Dict[str, Any]:
+    """Validate and normalise the fields of a partner.
+
+    Returns the fields with the values the database should hold; raises
+    `Invalid` naming what is wrong and, where there is a fixed set, what
+    would have been accepted.
+    """
+    unknown = sorted(set(fields) - set(FIELDS))
+    if unknown:
+        raise Invalid("unknown field%s %s; a partner has: %s"
+                      % ("s" if len(unknown) > 1 else "",
+                         ", ".join(repr(u) for u in unknown), _known_fields()))
+
+    out = dict(fields)
+    if "dialect" in out:
+        dialect = out["dialect"]
+        if dialect not in DIALECTS:
+            raise Invalid("dialect must be one of %s, not %r"
+                          % (" or ".join(DIALECTS), dialect))
+    limits = LIMITS[dialect if dialect in LIMITS else "X12"]
+
+    if "behaviour" in out and out["behaviour"] not in BEHAVIOURS:
+        raise Invalid("unknown behaviour %r; known: %s"
+                      % (out["behaviour"], ", ".join(sorted(BEHAVIOURS))))
+
+    if "version" in out and not limits["version"].match(str(out["version"])):
+        raise Invalid("%s version %r is not one the mock can write: %s"
+                      % (dialect, out["version"], limits["version_hint"]))
+
+    if "mdn_mode" in out and out["mdn_mode"] not in MDN_MODES:
+        raise Invalid("mdn_mode must be one of %s, not %r"
+                      % (" or ".join(MDN_MODES), out["mdn_mode"]))
+
+    if "test" in out:
+        out["test"] = _flag(out["test"])
+
+    if "as2_url" in out and out["as2_url"]:
+        parsed = urllib.parse.urlsplit(str(out["as2_url"]))
+        if parsed.scheme not in ("http", "https") or not parsed.netloc:
+            raise Invalid("as2_url must be an http or https URL with a host, "
+                          "not %r" % out["as2_url"])
+
+    if "qualifier" in out:
+        width = len(str(out["qualifier"]))
+        if not 1 <= width <= limits["qualifier"]:
+            raise Invalid("qualifier %r is %d characters; %s allows at most %d"
+                          % (out["qualifier"], width, dialect,
+                             limits["qualifier"]))
+
+    if identifier:
+        _check_id(identifier, dialect, limits)
+    return out
+
+
+def _check_id(identifier: str, dialect: str, limits) -> None:
+    if not identifier.strip():
+        raise Invalid("a partner needs an id")
+    if len(identifier) > limits["id"]:
+        raise Invalid(
+            "id %r is %d characters; %s carries at most %d, and a longer one "
+            "is truncated on the wire, leaving the partner unable to be found "
+            "by the id it sends" % (identifier, len(identifier), dialect,
+                                    limits["id"]))
+
+
+def _flag(value: Any) -> int:
+    """`test` is a flag: accept what a JSON client plausibly sends, refuse prose."""
+    if isinstance(value, bool):
+        return int(value)
+    if isinstance(value, int) and value in (0, 1):
+        return value
+    if isinstance(value, str) and value.strip() in ("0", "1"):
+        return int(value.strip())
+    raise Invalid("test is a flag: 0 or 1, not %r" % value)
 
 
 def get(conn: sqlite3.Connection, identifier: str) -> Optional[Dict[str, Any]]:
@@ -52,20 +172,19 @@ def listing(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
 
 def create(conn: sqlite3.Connection, identifier: str, name: str = "",
            **fields: Any) -> Dict[str, Any]:
-    columns = {
-        "qualifier": "ZZ", "dialect": "X12", "version": "004010",
-        "behaviour": "accept", "as2_url": "", "mdn_mode": "sync",
-        "street": "", "city": "", "region": "", "postal": "", "country": "US",
-        "duns": "", "test": 1,
-    }
-    columns.update({k: v for k, v in fields.items() if k in columns})
-    if columns["dialect"] not in ("X12", "EDIFACT"):
-        raise ValueError("dialect must be X12 or EDIFACT, not %r" % columns["dialect"])
-    if columns["behaviour"] not in BEHAVIOURS:
-        raise ValueError("unknown behaviour %r; known: %s"
-                         % (columns["behaviour"], ", ".join(sorted(BEHAVIOURS))))
-    keys = ["id", "name"] + sorted(columns)
-    values = [identifier, name or identifier] + [columns[k] for k in sorted(columns)]
+    """Register a partner, refusing anything the mock could not then act on."""
+    given = dict(fields)
+    if name:
+        given["name"] = name
+    checked = check(given, given.get("dialect", FIELDS["dialect"]),
+                    identifier=identifier)
+
+    columns = dict(FIELDS)
+    columns.update(checked)
+    columns["name"] = columns["name"] or identifier
+
+    keys = ["id"] + sorted(columns)
+    values = [identifier] + [columns[k] for k in sorted(columns)]
     conn.execute("INSERT OR REPLACE INTO partner (%s) VALUES (%s)"
                  % (", ".join(keys), ", ".join("?" * len(keys))), values)
     conn.commit()
@@ -74,16 +193,20 @@ def create(conn: sqlite3.Connection, identifier: str, name: str = "",
 
 def update(conn: sqlite3.Connection, identifier: str,
            **fields: Any) -> Dict[str, Any]:
+    """Change a partner, refusing anything the mock could not then act on.
+
+    An id cannot be changed - it is what an arriving interchange is matched
+    on - but a *dialect* can, and that narrows what the id may be: moving a
+    30-character EDIFACT partner to X12 would leave it unreachable, so it is
+    refused rather than quietly broken.
+    """
     row = require(conn, identifier)
-    allowed = set(row) - {"id"}
-    changes = {k: v for k, v in fields.items() if k in allowed}
-    if "behaviour" in changes and changes["behaviour"] not in BEHAVIOURS:
-        raise ValueError("unknown behaviour %r; known: %s"
-                         % (changes["behaviour"], ", ".join(sorted(BEHAVIOURS))))
-    if "dialect" in changes and changes["dialect"] not in ("X12", "EDIFACT"):
-        raise ValueError("dialect must be X12 or EDIFACT")
-    if not changes:
+    if not fields:
         return row
+    changes = check(fields, row["dialect"])
+    if "dialect" in changes and changes["dialect"] != row["dialect"]:
+        _check_id(identifier, changes["dialect"], LIMITS[changes["dialect"]])
+
     conn.execute("UPDATE partner SET %s WHERE id = ?"
                  % ", ".join("%s = ?" % k for k in changes),
                  list(changes.values()) + [identifier])
@@ -91,10 +214,30 @@ def update(conn: sqlite3.Connection, identifier: str,
     return require(conn, identifier)
 
 
-def delete(conn: sqlite3.Connection, identifier: str) -> bool:
-    cursor = conn.execute("DELETE FROM partner WHERE id = ?", (identifier,))
+def delete(conn: sqlite3.Connection, identifier: str) -> Dict[str, Any]:
+    """Remove a partner, and the work that was still owed to it.
+
+    A partner with documents waiting and promises outstanding cannot simply
+    vanish: the mailbox would go on offering documents addressed to somebody
+    the mock no longer trades with, and the scheduler would go on packing
+    shipments for them. Both are stopped and *marked*, not deleted - what the
+    mock did before the partner went away is still the evidence a test needs.
+    """
+    if get(conn, identifier) is None:
+        return {"deleted": False, "cancelled": 0, "unscheduled": 0}
+
+    cancelled = conn.execute(
+        "UPDATE outbound SET status = ?, note = ? WHERE partner = ?"
+        " AND status IN ('pending', 'ready')",
+        (CANCELLED, "partner deleted", identifier)).rowcount
+    unscheduled = conn.execute(
+        "UPDATE scheduled SET done_at = ?, note = ? WHERE partner = ?"
+        " AND done_at = ''",
+        (db.now(), "partner deleted", identifier)).rowcount
+    conn.execute("DELETE FROM partner WHERE id = ?", (identifier,))
     conn.commit()
-    return cursor.rowcount > 0
+    return {"deleted": True, "cancelled": int(cancelled),
+            "unscheduled": int(unscheduled)}
 
 
 def us(config) -> Party:
