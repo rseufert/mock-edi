@@ -314,6 +314,26 @@ which is the whole point, and why `GET /_mock/scheduled` shows work promised
 but not done, separately from `/_mock/outbox`, which shows documents that
 already exist.
 
+## A replayed interchange is refused
+
+A retry bug on the sender's side is ordinary, and processing a duplicate order
+is expensive. An interchange control number a partner has used before is
+refused in the envelope's own words — a `TA1` with note code `025`, *duplicate
+interchange control number*, or a `CONTRL` whose `UCI` carries `0085 = 27`,
+*duplicate detected*.
+
+```
+TA1*000000077*260925*0820*R*025~
+```
+
+Nothing behind a refused envelope is read: no 997, no 855, and the order it
+carried is not shipped and invoiced a second time. The replay is still
+archived — refusing it is not forgetting it.
+
+Control numbers belong to a pair of partners, so another partner may use the
+same one. `--allow-duplicates` turns the check off for a test that wants the
+older behaviour of replacing the order.
+
 ## Acknowledgments, both ways
 
 The mock sends a 997 for everything it receives. It also *reads* one for

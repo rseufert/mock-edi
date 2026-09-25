@@ -240,6 +240,10 @@ CREATE TABLE IF NOT EXISTS request_log (
     at           TEXT NOT NULL
 );
 
+-- Every inbound interchange is checked against this pair to refuse a replay,
+-- so it is worth an index rather than a scan of everything ever received.
+CREATE INDEX IF NOT EXISTS ix_interchange_control
+    ON interchange (direction, partner, control);
 CREATE INDEX IF NOT EXISTS ix_ts_reference ON transaction_set (reference);
 CREATE INDEX IF NOT EXISTS ix_ts_kind ON transaction_set (kind, direction);
 CREATE INDEX IF NOT EXISTS ix_ts_ack ON transaction_set (direction, ack_status);

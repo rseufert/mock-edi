@@ -164,6 +164,27 @@ says so where it does.
   changed the price in silence. The cap is now in the precedence list in both
   the code and the README, and such a line names the price in its reason.
 
+- **A replayed interchange is refused rather than fulfilled twice** ([#44]).
+  The same `ISA13` from the same sender was accepted again: two shipments, two
+  invoices, four more documents, and a conversation with somebody's accounts
+  department. A retry bug on the sender's side is ordinary, so a real receiver
+  refuses the copy in the envelope's own words - a `TA1` with note code `025`,
+  or a `CONTRL` whose `UCI` carries `0085 = 27`. Nothing behind the refused
+  envelope is read, and the replay is still archived, because refusing it is
+  not forgetting it.
+
+  The mock could already *produce* this bug with the `duplicate-invoice`
+  behaviour; it can now detect one, which is what a buyer's retry logic needs
+  to be tested against. `--allow-duplicates` restores the older behaviour.
+
+  Two things fell out of it. A `TA1` was listed by `/_mock/unacknowledged` as
+  a document awaiting a receipt, though nothing acknowledges a `TA1`; both
+  acknowledgment kinds are now excluded. And the test builders reused one
+  interchange control number for every order, which no real sender does - they
+  now allocate a fresh one per call, and a test that wants a replay asks for
+  it by passing the same number twice.
+
+
 
 
 ## [0.2.1] - 2026-09-25
@@ -355,6 +376,7 @@ documents a real one sends.
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#36]: https://github.com/rseufert/mock-edi/issues/36
 [#39]: https://github.com/rseufert/mock-edi/issues/39
+[#44]: https://github.com/rseufert/mock-edi/issues/44
 [#40]: https://github.com/rseufert/mock-edi/issues/40
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2

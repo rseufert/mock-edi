@@ -78,8 +78,8 @@ class X12InterchangeTrailers(MockServerCase):
         self.refused(text[:text.index("GE*")], "023")
 
     def test_an_iea_that_renumbers_the_interchange_is_001(self):
-        self.refused(x12_order("IEA-CONTROL").replace("IEA*1*000000077",
-                                                      "IEA*1*000000001"), "001")
+        text = x12_order("IEA-CONTROL", control="000000077")
+        self.refused(text.replace("IEA*1*000000077", "IEA*1*000000001"), "001")
 
     def test_an_iea_that_miscounts_the_groups_is_021(self):
         self.refused(x12_order("IEA-COUNT").replace("IEA*1*", "IEA*7*"), "021")
@@ -96,12 +96,15 @@ class X12InterchangeTrailers(MockServerCase):
 
 class TheTA1(MockServerCase):
     def test_isa14_asks_for_one_and_a_clean_envelope_gets_an_a(self):
-        summary = self.send(isa_with(x12_order("TA1-ASKED"), I14="1"))
+        # Built once: each order carries a fresh control number, so a second
+        # call would not be the interchange that was sent.
+        sent = x12_order("TA1-ASKED")
+        summary = self.send(isa_with(sent, I14="1"))
         self.assertEqual([q["code"] for q in summary["queued"]][:2], ["TA1", "997"])
         payload = self.mailbox(ACME, "interchange-acknowledgment")[0]["payload"]
         segment = ta1(payload)
         # TA101-TA103 quote the ISA being answered: its control, date, time.
-        isa = x12_order("TA1-ASKED").split("~")[0].split("*")
+        isa = sent.split("~")[0].split("*")
         self.assertEqual(segment, ["TA1", isa[13], isa[9], isa[10], "A", "000"])
         # It travels in an envelope of its own, with no functional group.
         interchange = x12.parse(payload)
@@ -141,8 +144,8 @@ class EdifactTrailers(MockServerCase):
         self.assertEqual(uci.comp(7, 1), "1")        # UNZ element 1
 
     def test_a_unz_that_names_another_interchange_is_28(self):
-        self.refused(edifact_order("UNZ-REF").replace("UNZ+1+9001", "UNZ+1+9002"),
-                     "28")
+        text = edifact_order("UNZ-REF", control="9001")
+        self.refused(text.replace("UNZ+1+9001", "UNZ+1+9002"), "28")
 
     def test_a_file_cut_off_before_unz_is_13(self):
         text = edifact_order("UNZ-CUT")

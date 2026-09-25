@@ -14,6 +14,7 @@ import datetime
 import json
 import os
 import sys
+import itertools
 import threading
 import time
 import unittest
@@ -165,10 +166,23 @@ def parse(payload: str):
 DEFAULT_LINES = (("WIDGET-001", 100, "12.50"), ("BRKT-050", 40, "4.15"))
 
 
+# A real sender never reuses an interchange control number, and the mock now
+# refuses a replay, so the builders allocate a fresh one per call. A test that
+# wants a replay says so by passing the same number twice - which is the whole
+# point of being able to.
+_CONTROL = itertools.count(100)
+
+
+def _next_control(width: int = 9) -> str:
+    return str(next(_CONTROL)).rjust(width, "0")
+
+
 def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
-              receiver="MOCKEDI", control="000000077", group="77",
+              receiver="MOCKEDI", control=None, group=None,
               ordered_on="20260924", purpose="00", qualifier="VP", extra=()):
     """An 850, as a rendered interchange."""
+    control = control or _next_control(9)
+    group = group or control.lstrip("0") or "1"
     body = [seg("BEG", purpose, "SA", po_number, "", ordered_on),
             seg("CUR", "BY", "USD"),
             seg("DTM", "002", "20261010"),
@@ -185,8 +199,9 @@ def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
 
 
 def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS,
-                  receiver="MOCKEDI", control="9001", extra=(), delimiters=None):
+                  receiver="MOCKEDI", control=None, extra=(), delimiters=None):
     """An ORDERS, as a rendered interchange."""
+    control = control or _next_control(4)
     body = [seg("BGM", ["220"], [po_number], "9"),
             seg("DTM", ["137", "20260924", "102"]),
             seg("DTM", ["2", "20261010", "102"]),
@@ -208,10 +223,12 @@ def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS
 
 
 def x12_change(po_number="4500000001", lines=(("1", "CA", 60, "12.50"),),
-               sender=ACME, receiver="MOCKEDI", control="000000078",
-               group="78", purpose="04", sequence="1",
+               sender=ACME, receiver="MOCKEDI", control=None,
+               group=None, purpose="04", sequence="1",
                ordered_on="20260924", qualifier="VP", skus=None):
     """An 860. Each line is `(line_number, change_code, quantity, price)`."""
+    control = control or _next_control(9)
+    group = group or control.lstrip("0") or "1"
     body = [seg("BCH", purpose, "SA", po_number, "", sequence, "20260925", "",
                 "", "", ordered_on)]
     names = skus or {}
@@ -225,9 +242,10 @@ def x12_change(po_number="4500000001", lines=(("1", "CA", 60, "12.50"),),
 
 
 def edifact_change(po_number="PO-2026-00001", lines=(("1", "3", 60, "12.50"),),
-                   sender=EURODIS, receiver="MOCKEDI", control="9002",
+                   sender=EURODIS, receiver="MOCKEDI", control=None,
                    purpose="4", skus=None):
     """An ORDCHG. Each line is `(line_number, 1229 action, quantity, price)`."""
+    control = control or _next_control(4)
     body = [seg("BGM", ["230"], [po_number], purpose),
             seg("DTM", ["137", "20260925", "102"]),
             seg("RFF", ["ON", po_number])]
@@ -258,7 +276,7 @@ def as2_headers(sender=ACME, receiver="MOCKEDI", message_id="<m1@acme.example>",
     return headers
 
 
-def acknowledge(payload: str, verdict: str = "A", errors=(), control: str = "7001"):
+def acknowledge(payload: str, verdict: str = "A", errors=(), control: str = ""):
     """Build the acknowledgment a partner would send for `payload`.
 
     Reads the control numbers out of the document the mock actually sent
@@ -269,6 +287,7 @@ def acknowledge(payload: str, verdict: str = "A", errors=(), control: str = "700
     element_position, element_error_code, bad_value)` tuples, rendered as
     AK3/AK4 in X12 and UCS/UCD in EDIFACT.
     """
+    control = control or _next_control(4)
     interchange = parse(payload)
     if interchange.dialect == "X12":
         return _x12_997(interchange, verdict, errors, control)
