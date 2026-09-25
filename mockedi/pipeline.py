@@ -725,6 +725,44 @@ class Pipeline:
             self.on_release(released)
         return released
 
+    def redeliver(self, outbound_id: int = 0, partner_id: str = "") -> List[int]:
+        """Hand failed deliveries back to the courier, unchanged.
+
+        Not a resend: `/_mock/send` builds a *new* document with a *new*
+        control number, which is a different event on the wire. This is the
+        same bytes and the same control numbers going out a second time,
+        which is what happens when a partner's listener was down and their
+        AS2 software retried - and the only way to test that a listener is
+        idempotent about a control number it has already seen.
+
+        The document is not released again: it was released once, and its
+        interchange and transaction set are already recorded. Only its
+        delivery is tried again.
+
+        Nothing here runs on a timer. A test that wants a retry asks for one.
+        """
+        clauses, params = ["status = ?"], [FAILED]
+        if outbound_id:
+            clauses.append("id = ?")
+            params.append(outbound_id)
+        if partner_id:
+            clauses.append("partner = ?")
+            params.append(partner_id)
+        rows = db.rows(self.conn,
+                       "SELECT id FROM outbound WHERE %s ORDER BY id"
+                       % " AND ".join(clauses), tuple(params))
+        if not rows:
+            return []
+        ids = [int(row["id"]) for row in rows]
+        self.conn.execute(
+            "UPDATE outbound SET status = ?, note = ? WHERE id IN (%s)"
+            % ",".join("?" * len(ids)),
+            tuple([READY, "redelivering"] + ids))
+        self.conn.commit()
+        if self.on_release is not None:
+            self.on_release(ids)
+        return ids
+
     def advance(self, seconds: float = 0.0, everything: bool = False) -> List[int]:
         """Move the clock forward for the queue, without moving it for anyone else.
 

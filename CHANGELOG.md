@@ -10,6 +10,24 @@ says so where it does.
 
 ### Added
 
+- **A failed delivery can be tried again** ([#30]).
+  `POST /_mock/outbox/<id>/retry` delivers one document again, and
+  `POST /_mock/advance?failed` does the same for everything that failed, in
+  queue order - optionally for one partner. Once a delivery had failed it had
+  failed for good: nothing set a row back to ready, so a partner whose
+  listener restarted between the 997 and the 855 was left holding a response,
+  a ship notice and an invoice for an order whose acknowledgment it never got.
+
+  A retry is the same bytes and the same control numbers, which is what makes
+  it a retry and not a resend - `/_mock/send` builds a new document with a new
+  control number, a different event on the wire. The test that matters here,
+  a listener that has to be idempotent about a control number it has already
+  seen, could not be written before.
+
+  `/_mock/outbox` now carries `attempts`, `last_error` and `last_attempt_at`,
+  so a document delivered on the second try says so. Nothing retries on a
+  timer; a test that wants a retry asks for one.
+
 - **Python 3.14 is tested and declared** ([#20]). It had been out for a year
   with the matrix stopping at 3.13, so the interpreter where a removal would
   show up first was the one nobody watched. That entry runs with
@@ -593,6 +611,7 @@ documents a real one sends.
 [#17]: https://github.com/rseufert/mock-edi/issues/17
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#22]: https://github.com/rseufert/mock-edi/issues/22
+[#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52
 [#54]: https://github.com/rseufert/mock-edi/issues/54

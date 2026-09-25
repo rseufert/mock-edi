@@ -219,9 +219,19 @@ def _post(url: str, headers: Dict[str, str], body: bytes, timeout: float):
 
 def _finish(conn: sqlite3.Connection, outbound_id: int, status: str,
             url: str, note: str) -> None:
+    """Record what became of one delivery attempt.
+
+    `attempts` counts them all, successful or not, so that a row redelivered
+    after a failure says so rather than looking as though it went first time.
+    `last_error` is kept only while there is one: a retry that succeeds
+    clears it, and the note carries the outcome either way.
+    """
     conn.execute(
-        "UPDATE outbound SET status = ?, delivered_at = ?, delivery = ?, note = ?"
-        " WHERE id = ?", (status, db.now(), url, note, outbound_id))
+        "UPDATE outbound SET status = ?, delivered_at = ?, delivery = ?, note = ?,"
+        " attempts = attempts + 1, last_attempt_at = ?, last_error = ?"
+        " WHERE id = ?",
+        (status, db.now(), url, note, db.now(),
+         note if status == "failed" else "", outbound_id))
     conn.commit()
 
 
