@@ -36,6 +36,11 @@ says so where it does.
 
 ### Fixed
 
+- The README quoted a test count that had been wrong since 0.2.0 ([#17]) -
+  228, against a suite of 454. `tools/check_docs.py` now asks the loader how
+  many tests there are and fails when the README disagrees, so the number
+  cannot drift again without CI saying so.
+
 - A `--db` file written by 0.1.0 stopped the current version starting, with
   `no such column: ack_status` and no hint that the file was the cause
   ([#35]). A file database is now upgraded in place when it is opened:
@@ -398,6 +403,7 @@ documents a real one sends.
 [#39]: https://github.com/rseufert/mock-edi/issues/39
 [#44]: https://github.com/rseufert/mock-edi/issues/44
 [#40]: https://github.com/rseufert/mock-edi/issues/40
+[#17]: https://github.com/rseufert/mock-edi/issues/17
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3

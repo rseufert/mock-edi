@@ -6,11 +6,17 @@ still true, only whether a file exists that nobody documented, or a file is
 documented that no longer exists.  That catches the common failure - a module
 added without a line in the index - and leaves the judgement calls to review.
 
-Three checks:
+Four checks:
 
 1. every tracked file is named in docs/FILES.md
 2. every file named in docs/FILES.md exists
 3. every module of the package appears in the README's layout block
+4. the test count the README quotes is the number unittest discovers
+
+The fourth is the one number in the prose that can be checked mechanically,
+and it had drifted by eighty before anyone noticed.  It is counted by asking
+the loader rather than by grepping for `def test_`, so a test method that
+arrives through a base class is counted the way running the suite counts it.
 
 Run it directly (`python3 tools/check_docs.py`); CI runs it on every push.
 """
@@ -20,6 +26,7 @@ import os
 import re
 import subprocess
 import sys
+import unittest
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 INDEX = os.path.join("docs", "FILES.md")
@@ -27,6 +34,9 @@ README = "README.md"
 
 # Files that are their own documentation, or carry nothing worth describing.
 EXEMPT = {".gitignore"}
+
+# The sentence in the README's Tests section that quotes a count.
+COUNT_RE = re.compile(r"\b(\d+) tests, every one of them\b")
 
 # Tokens in the index that look like a path and are therefore checked to exist.
 PATH_RE = re.compile(r"`([\w./-]+\.(?:py|md|yml|yaml|toml|in|sh|cfg))`")
@@ -41,6 +51,21 @@ def tracked_files():
 def read(path):
     with open(os.path.join(ROOT, path), encoding="utf-8") as handle:
         return handle.read()
+
+
+def count_tests():
+    """How many tests the suite has, counted the way running it counts them."""
+    suite = unittest.defaultTestLoader.discover(os.path.join(ROOT, "tests"))
+    if unittest.defaultTestLoader.errors:
+        raise SystemExit("the test suite does not import:\n\n%s"
+                         % "\n".join(unittest.defaultTestLoader.errors))
+
+    def walk(item):
+        if isinstance(item, unittest.TestSuite):
+            return sum(walk(child) for child in item)
+        return 1
+
+    return walk(suite)
 
 
 def main():
@@ -81,6 +106,19 @@ def main():
                     problems.append(
                         "%s is missing from the layout block in %s" % (path, README))
 
+    # 4. the test count quoted in the README
+    quoted = COUNT_RE.search(readme)
+    if quoted is None:
+        problems.append(
+            "could not find the sentence in %s that quotes a test count - if the "
+            "wording changed, update COUNT_RE" % README)
+    else:
+        discovered = count_tests()
+        if int(quoted.group(1)) != discovered:
+            problems.append(
+                "%s says %s tests, the suite has %d - say %d"
+                % (README, quoted.group(1), discovered, discovered))
+
     if problems:
         print("documentation is out of date:\n")
         for problem in problems:
@@ -89,7 +127,8 @@ def main():
         return 1
 
     print("docs/FILES.md covers every tracked file, names nothing that is gone, "
-          "and the README layout block lists every module.")
+          "the README layout block lists every module, and it quotes the right "
+          "test count.")
     return 0
 
 
