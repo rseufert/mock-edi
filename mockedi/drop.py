@@ -72,6 +72,8 @@ class DropBox:
         self.last_scan: List[Scanned] = []
         self.scans = 0
         self.written: List[str] = []
+        # Names that would have landed outside the pickup directory.
+        self.refused: List[str] = []
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
@@ -217,7 +219,10 @@ class DropBox:
             if row is None:
                 continue
             name = "%s-%s-%s.edi" % (row["partner"], row["code"], row["control"])
-            final = os.path.join(self.pickup_dir, name)
+            final = self._inside_pickup(name)
+            if final is None:
+                self.refused.append(name)
+                continue
             temporary = final + ".tmp"
             try:
                 os.makedirs(self.pickup_dir, exist_ok=True)
@@ -230,6 +235,21 @@ class DropBox:
         with self.lock:
             self.written.extend(written)
         return written
+
+    def _inside_pickup(self, name: str) -> Optional[str]:
+        """The path to write `name` to, or None if it would leave the directory.
+
+        Partner ids are checked when a partner is created, but a row from an
+        older database, or one written some other way, has not been: a name
+        with a separator in it is refused rather than followed.
+        """
+        if os.path.basename(name) != name or name in ("", ".", ".."):
+            return None
+        root = os.path.realpath(self.pickup_dir)
+        final = os.path.realpath(os.path.join(root, name))
+        if os.path.dirname(final) != root:
+            return None
+        return final
 
     # -- reporting
 
@@ -244,5 +264,6 @@ class DropBox:
                 "scans": self.scans,
                 "waiting": self.ready(),
                 "written": list(self.written[-20:]),
+                "refused": list(self.refused[-20:]),
                 "lastScan": [vars(item) for item in self.last_scan],
             }

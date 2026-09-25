@@ -195,6 +195,20 @@ class TheIdentifier(PartnerCase):
         status, _h, data = self.create_partner({"id": "   "})
         self.assertEqual(status, 400, data)
 
+    def test_an_id_that_would_leave_the_pickup_directory_is_refused(self):
+        for identifier in ("../../trav", "A/B", "A\\B", ".HIDDEN"):
+            status, _h, data = self.create_partner({"id": identifier})
+            self.assertRefused(status, data, "letters, digits")
+
+    def test_an_id_with_a_space_or_a_delimiter_is_refused(self):
+        for identifier in ("TWO WORDS", "STAR*CO", "TILDE~CO", "PLUS+CO"):
+            status, _h, data = self.create_partner({"id": identifier})
+            self.assertEqual(status, 400, (identifier, data))
+
+    def test_letters_digits_and_dot_dash_underscore_are_accepted(self):
+        status, _h, data = self.create_partner({"id": "Acme-2.EU_1"})
+        self.assertEqual(status, 201, data)
+
     def test_moving_a_long_id_to_x12_is_refused_rather_than_broken(self):
         identifier = "E" * 30
         self.create_partner({"id": identifier, "dialect": "EDIFACT",
