@@ -131,12 +131,12 @@ class Courier:
                              (row["partner"],))
             if partner is None or not partner["as2_url"]:
                 return False   # a mailbox partner: leave it to be collected
+            body, _charset = self.pipeline.wire(row)
 
         headers = as2.outbound_headers(
             self.config.as2_id, partner["id"],
             "%s %s" % (row["code"], row["reference"]), row["dialect"],
             row["message_id"], request_mdn=True)
-        body = row["payload"].encode("utf-8")
         try:
             status, response_headers, response = self.opener(
                 partner["as2_url"], headers, body, self.timeout)

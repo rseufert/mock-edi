@@ -71,6 +71,21 @@ says so where it does.
   required signed receipt is the same request by another name.
   `signed-receipt-protocol=optional` is unaffected.
 
+- Every inbound payload was decoded as UTF-8 ([#28]). Real EDI mostly is
+  not: `UNOC`, which the mock itself writes, is ISO 8859-1, and a `Müller` in
+  one was stored with a replacement character where the `ü` was; `?raw` no
+  longer returned the bytes that arrived, though the MDN's MIC was computed
+  over them. A document is now read in the character set it declares - UNB
+  S001 for EDIFACT (`UNOA`..`UNOK`, `UNOY`), the HTTP `charset` for X12, and
+  ISO 8859-1 when X12 says nothing - and the archive keeps the bytes, so
+  `?raw` returns exactly what was received, with its charset in the
+  Content-Type. **Outbound documents change encoding**: EDIFACT is written in
+  the charset its UNB declares (ISO 8859-1 for `UNOC`), and X12 in the
+  charset the partner's last interchange came in, ISO 8859-1 by default,
+  where both were UTF-8 before. For ASCII content nothing changes. The
+  database gains `interchange.raw` and `.charset` (schema version 4); older
+  files are upgraded in place.
+
 - **A payload holding several interchanges was truncated to the first**
   ([#52]). `x12.parse` stopped at the first `IEA` and `edifact.parse` at the
   first `UNZ`, and everything after it was dropped without a word: one
@@ -515,6 +530,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#28]: https://github.com/rseufert/mock-edi/issues/28
 [#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
 [#24]: https://github.com/rseufert/mock-edi/issues/24

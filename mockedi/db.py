@@ -66,6 +66,11 @@ CREATE TABLE IF NOT EXISTS interchange (
     message_id   TEXT NOT NULL DEFAULT '',
     mic          TEXT NOT NULL DEFAULT '',
     payload      TEXT NOT NULL,
+    -- The bytes as they arrived or left, and the character set `payload`
+    -- was decoded from or encoded to. NULL for a row written before either
+    -- was kept; `payload` is then all there is.
+    raw          BLOB,
+    charset      TEXT NOT NULL DEFAULT '',
     at           TEXT NOT NULL
 );
 
@@ -325,7 +330,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 3
+SCHEMA_VERSION = 4
 
 
 class DatabaseError(Exception):

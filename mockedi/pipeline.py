@@ -26,7 +26,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import (ack, db, documents, edifact, partners, reconcile, schema,
+from . import (ack, charsets, db, documents, edifact, partners, reconcile, schema,
                transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
@@ -99,7 +99,8 @@ class Pipeline:
     # -- inbound
 
     def receive(self, payload: bytes, transport: str = "http",
-                message_id: str = "", mic: str = "") -> List[Receipt]:
+                message_id: str = "", mic: str = "",
+                charset: str = "") -> List[Receipt]:
         """Read every interchange in the payload and queue the answers.
 
         One receipt per interchange, in the order they arrived. A payload
@@ -118,7 +119,8 @@ class Pipeline:
             self.on_release = released.extend
         try:
             with self.conn.atomic():
-                receipts = self._receive_all(payload, transport, message_id, mic)
+                receipts = self._receive_all(payload, transport, message_id, mic,
+                                             charset)
         finally:
             self.on_release = notify
         if notify is not None and released:
@@ -126,18 +128,39 @@ class Pipeline:
         return receipts
 
     def _receive_all(self, payload: bytes, transport: str, message_id: str,
-                     mic: str) -> List[Receipt]:
-        text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else payload
+                     mic: str, charset: str = "") -> List[Receipt]:
+        """Cut the payload into interchanges, then read each in its own charset.
+
+        `charset` is what the transport said - HTTP's Content-Type - and only
+        X12 needs it: an EDIFACT interchange declares its own in UNB.
+        """
+        if isinstance(payload, str):
+            payload = payload.encode("utf-8")
+            charset = charset or "utf-8"
+        # Viewed as ISO 8859-1 only to be cut: every byte survives the trip.
+        view = payload.decode(charsets.BYTES)
         try:
-            dialect = sniff(text)
-            parts = x12.split(text) if dialect == "X12" else edifact.split(text)
+            dialect = sniff(view)
+            parts = x12.split(view) if dialect == "X12" else edifact.split(view)
         except EdiSyntaxError as error:
             return [Receipt(ok=False, error=str(error))]
-        return [self._receive(part, dialect, transport, message_id, mic)
-                for part in parts]
+        # The cut leaves out whatever follows the last trailer - usually a
+        # newline. It belongs to the last interchange, so that the archived
+        # rows put together are exactly the payload that arrived.
+        tail = view[sum(len(part) for part in parts):]
+        if tail and parts:
+            parts[-1] += tail
+        out = []
+        for part in parts:
+            raw = part.encode(charsets.BYTES)
+            declared = charsets.declared(dialect, raw, charset)
+            out.append(self._receive(charsets.decode(raw, declared), dialect,
+                                     transport, message_id, mic, raw, declared))
+        return out
 
     def _receive(self, text: str, dialect: str, transport: str,
-                 message_id: str, mic: str) -> Receipt:
+                 message_id: str, mic: str, raw: Optional[bytes] = None,
+                 charset: str = "") -> Receipt:
         try:
             interchange = (x12.parse(text) if dialect == "X12"
                            else edifact.parse(text))
@@ -161,7 +184,8 @@ class Pipeline:
         faults = self._duplicate_fault(partner["id"], interchange)
 
         interchange_id = self._store_interchange(
-            "in", interchange, partner["id"], text, transport, message_id, mic)
+            "in", interchange, partner["id"], text, transport, message_id, mic,
+            raw, charset)
 
         report = validate(interchange, strict=partner["behaviour"] == "strict",
                           envelope_faults=faults)
@@ -680,9 +704,10 @@ class Pipeline:
                       " ORDER BY id", (PENDING, when))
         released: List[int] = []
         for row in due:
+            raw, charset = self.wire(row)
             interchange_id = self._store_interchange_row(
                 "out", row["dialect"], row["partner"], row["control"],
-                row["payload"], "queue", row["message_id"])
+                row["payload"], "queue", row["message_id"], "", raw, charset)
             # The transaction set's own control number, not the interchange's:
             # an inbound 997 quotes ST02 in AK202, and matching it against
             # ISA13 - which is what this recorded before - matches nothing.
@@ -746,21 +771,35 @@ class Pipeline:
 
     def _store_interchange(self, direction: str, interchange: Interchange,
                            partner_id: str, payload: str, transport: str,
-                           message_id: str, mic: str) -> int:
+                           message_id: str, mic: str, raw: Optional[bytes] = None,
+                           charset: str = "") -> int:
         return self._store_interchange_row(
             direction, interchange.dialect, partner_id, interchange.control,
-            payload, transport, message_id, mic)
+            payload, transport, message_id, mic, raw, charset)
 
     def _store_interchange_row(self, direction: str, dialect: str, partner_id: str,
                                control: str, payload: str, transport: str,
-                               message_id: str = "", mic: str = "") -> int:
+                               message_id: str = "", mic: str = "",
+                               raw: Optional[bytes] = None, charset: str = "") -> int:
         cursor = self.conn.execute(
             "INSERT INTO interchange (direction, dialect, partner, control,"
-            " transport, message_id, mic, payload, at) VALUES (?,?,?,?,?,?,?,?,?)",
+            " transport, message_id, mic, payload, raw, charset, at)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (direction, dialect, partner_id, control, transport, message_id, mic,
-             payload, db.now()))
+             payload, raw, charset, db.now()))
         self.conn.commit()
         return int(cursor.lastrowid)
+
+    def wire(self, row) -> Tuple[bytes, str]:
+        """An outbound document as it goes on the wire: its bytes and charset.
+
+        The one place a document the mock wrote becomes bytes, so that what
+        is posted, what lands in the pickup directory, what `?raw` returns and
+        what the archive holds are the same bytes.
+        """
+        charset = charsets.for_outbound(self.conn, row["partner"], row["dialect"],
+                                        row["payload"])
+        return charsets.encode(row["payload"], charset), charset
 
 
 def _reference_of(message, dialect: str, kind: str) -> str:

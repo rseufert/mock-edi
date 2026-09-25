@@ -201,7 +201,9 @@ class Archive(MockServerCase):
         _s, _h, rows = self.get("/_mock/interchanges")
         _s, headers, body = self.get("/_mock/interchanges/%d?raw" % rows[-1]["id"],
                                      raw=True)
-        self.assertEqual(headers["Content-Type"], "application/edi-x12")
+        # The charset it arrived in: X12 declares none, so ISO 8859-1.
+        self.assertEqual(headers["Content-Type"],
+                         "application/edi-x12; charset=iso-8859-1")
         self.assertTrue(body.decode().startswith("ISA*00*"))
 
     def test_requests_are_logged(self):
