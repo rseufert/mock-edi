@@ -3,10 +3,14 @@ import os
 import sys
 import unittest
 
-sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path.insert(0, os.path.dirname(HERE))
+sys.path.insert(0, HERE)
 
 from mockedi import ack, edifact, validate, x12
 from mockedi.envelope import seg
+
+from support import EURODIS, MockServerCase, edifact_order, parse
 
 GOOD = [seg("BEG", "00", "SA", "PO4711", "", "20260924"),
         seg("PO1", "1", "10", "EA", "12.50", "", "VP", "WIDGET-001"),
@@ -160,6 +164,69 @@ class SyntaxReport(unittest.TestCase):
         segments, _report = self.build(self.BODY[1:])   # no BGM
         ucm = [s for s in segments if s.tag == "UCM"][0]
         self.assertEqual(ucm.get(3), ack.REJECTED)
+
+
+class ContrlCodesOnTheWire(MockServerCase):
+    """0085 has its own word for most faults; the CONTRL uses it.
+
+    Each case sends an ORDERS broken one way, reads the CONTRL that comes
+    back, and checks it against the mock's own dictionary too.
+    """
+
+    EDIFACT = {"Content-Type": "application/edifact"}
+
+    def contrl(self, payload):
+        self.send(payload, headers=self.EDIFACT)
+        rows = [r for r in self.mailbox(EURODIS, leave=False)
+                if r["code"] == "CONTRL"]
+        self.assertEqual(len(rows), 1)
+        message = parse(rows[0]["payload"]).groups[0].messages[0]
+        report = validate.validate_message(message, "EDIFACT")
+        self.assertTrue(report.clean, report.summary())
+        return message
+
+    def ucm(self, message):
+        return message.find("UCM")
+
+    def test_an_element_too_long_is_39(self):
+        order = edifact_order("P" * 40)            # BGM 1004 is at most 35
+        message = self.contrl(order)
+        self.assertEqual(self.ucm(message).get(4), "39")
+        self.assertEqual(message.find("UCD").get(1), "39")
+
+    def test_an_element_too_short_is_40(self):
+        message = self.contrl(edifact_order("PO-SHORT").replace("CUX+2:EUR:9",
+                                                                "CUX+2:EU:9"))
+        self.assertEqual(self.ucm(message).get(4), "40")
+
+    def test_a_letter_in_a_number_is_37(self):
+        message = self.contrl(edifact_order("PO-TYPE").replace("QTY+21:100:",
+                                                               "QTY+21:ten:", 1))
+        self.assertEqual(self.ucm(message).get(4), "37")
+
+    def test_a_unt_that_miscounts_is_29_on_unt(self):
+        order = edifact_order("PO-COUNT")
+        order = order.replace("UNT+16+1", "UNT+99+1")
+        ucm = self.ucm(self.contrl(order))
+        self.assertEqual((ucm.get(3), ucm.get(4), ucm.get(5)), ("4", "29", "UNT"))
+
+    def test_a_unt_that_names_another_message_is_28_on_unt(self):
+        order = edifact_order("PO-REF").replace("UNT+16+1", "UNT+16+2")
+        ucm = self.ucm(self.contrl(order))
+        self.assertEqual((ucm.get(4), ucm.get(5)), ("28", "UNT"))
+
+    def test_a_message_type_the_mock_does_not_know_is_14_on_unh(self):
+        order = edifact_order("PO-TYPE-X").replace("UNH+1+ORDERS:", "UNH+1+IFTSTA:")
+        ucm = self.ucm(self.contrl(order))
+        self.assertEqual((ucm.comp(2, 1), ucm.get(4), ucm.get(5)),
+                         ("IFTSTA", "14", "UNH"))
+
+    def test_a_sound_interchange_with_a_refused_message_is_uci_7(self):
+        # UCI 4 means the interchange itself was at fault; this one was not.
+        order = edifact_order("PO-UCI7").replace("UNT+16+1", "UNT+99+1")
+        message = self.contrl(order)
+        self.assertEqual(message.find("UCI").get(4), "7")
+        self.assertEqual(self.ucm(message).get(3), "4")
 
 
 class Explaining(unittest.TestCase):

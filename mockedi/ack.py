@@ -16,7 +16,7 @@ from __future__ import annotations
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .envelope import Interchange, Seg, seg
-from .validate import InterchangeReport, MessageReport
+from .validate import SET_ERRORS_AS_0085, InterchangeReport, MessageReport
 
 # The 997 acknowledges one functional group, so an interchange carrying two
 # groups is answered with two of them.
@@ -164,19 +164,25 @@ def syntax_report(interchange: Interchange, report: InterchangeReport,
         return [seg("UCI", interchange.control, sender, receiver, REJECTED,
                     finding.code, finding.tag,
                     [str(finding.position)] if finding.position else "")]
-    out: List[Seg] = [seg(
-        "UCI", interchange.control, sender, receiver,
-        REJECTED if not any(m.accepted for m in messages) else ACKNOWLEDGED,
-    )]
+    # UCI speaks for the interchange as such. A sound UNB carrying messages
+    # that were refused is acknowledged at this level, 7, with the refusals in
+    # their UCMs; 4 means the interchange itself was at fault. An interchange
+    # with nothing in it is that: 32, Lower level empty.
+    if report.envelope_errors:
+        out: List[Seg] = [seg("UCI", interchange.control, sender, receiver,
+                              REJECTED, "32")]
+    else:
+        out = [seg("UCI", interchange.control, sender, receiver, ACKNOWLEDGED)]
     for item in messages:
         # The version the sender declared in its own UNH, not ours.
         version = (item.version or item.group_version or "D:96A:UN").split(":")
         while len(version) < 3:
             version.append("UN")
+        code, service_segment = ("", "") if item.clean else _worst(item)
         out.append(seg(
             "UCM", item.control, [item.code] + version[:3],
             ACKNOWLEDGED if item.accepted else REJECTED,
-            "" if item.clean else _worst(item),
+            code, service_segment,
         ))
         for finding in item.segments:
             out.append(seg("UCS", str(max(1, finding.position)),
@@ -188,12 +194,24 @@ def syntax_report(interchange: Interchange, report: InterchangeReport,
     return out
 
 
-def _worst(item: MessageReport) -> str:
-    """The one syntax error code UCM carries for the message as a whole."""
-    for finding in item.segments:
-        if finding.severity == "fatal":
-            return finding.edifact_code
-    return item.segments[0].edifact_code if item.segments else "12"
+def _worst(item: MessageReport) -> Tuple[str, str]:
+    """The one syntax error code UCM carries for the message as a whole, and
+    the service segment it is about when it is about one.
+
+    A fault in the message's own header or trailer outranks anything inside
+    it; then the first fatal finding; then the first finding at all. A
+    finding with element detail is reported by the element's code - 39 for
+    too long, not 12 - since that is what the UCD beneath it says too.
+    """
+    for code, _note in item.set_errors:
+        if code in SET_ERRORS_AS_0085:
+            return SET_ERRORS_AS_0085[code]
+    fatal = [f for f in item.segments if f.severity == "fatal"]
+    for finding in fatal + list(item.segments):
+        elements = ([e for e in finding.elements if e.severity == "fatal"]
+                    or finding.elements)
+        return (elements[0].edifact_code if elements else finding.edifact_code), ""
+    return "12", ""
 
 
 # ---------------------------------------------------------------------------

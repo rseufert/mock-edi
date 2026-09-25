@@ -1085,8 +1085,11 @@ EDIFACT_SYNTAX_ERRORS = {  # 0085, in CONTRL
     "26": "Duplicate detected",
     "28": "References do not match", "29": "Control count does not match "
     "number of instances received",
+    "32": "Lower level empty",
     "35": "Too many data element or segment repetitions",
     "36": "Too many segment group repetitions",
+    "37": "Invalid type of character(s)",
+    "39": "Data element too long", "40": "Data element too short",
 }
 
 # UN/ECE Recommendation 20 codes for the X12 units the mock knows about.
@@ -1431,6 +1434,13 @@ UCM = Segment("UCM", "Message Response", (
     ), MANDATORY),
     _e("0083", "Action code", "ID", 1, 3, MANDATORY, EDIFACT_ACTION_CODES),
     _e("0085", "Syntax error code", "ID", 1, 3, OPTIONAL, EDIFACT_SYNTAX_ERRORS),
+    # The service segment at fault, when it is the message's own UNH or UNT.
+    _e("0013", "Service segment tag", "ID", 3, 3),
+    _c("S011", "Data Element Identification", (
+        _e("0098", "Erroneous data element position in segment", "N0", 1, 3,
+           MANDATORY),
+        _e("0104", "Erroneous component data element position", "N0", 1, 3),
+    )),
 ), "The verdict on one message inside the interchange.")
 
 UCS = Segment("UCS", "Segment Error Indication", (

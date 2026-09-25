@@ -566,7 +566,13 @@ interval — the same reason `/_mock/advance` exists.
 
 Every inbound document is checked against the dictionary, and the findings
 become a real 997 or CONTRL — `AK3`/`AK4` with X12 error codes, `UCS`/`UCD`
-with EDIFACT ones. Ask for the findings as prose instead:
+with EDIFACT ones. The CONTRL uses 0085's own word where it has one: 39 and
+40 for an element too long or too short, 37 for a letter in a number, and in
+the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
+14 for a message type the mock does not know, with the service segment
+named. `UCI` says 4 only when the interchange itself is at fault; a sound one
+carrying a refused message is 7, with the 4 on that message's `UCM`. Ask for
+the findings as prose instead:
 
 ```bash
 curl -X POST --data-binary @broken.edi http://127.0.0.1:8080/_mock/validate

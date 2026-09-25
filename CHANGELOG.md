@@ -170,6 +170,16 @@ says so where it does.
   go through `hmac.compare_digest` now. The stakes are low in a mock; the
   one-line version of the right answer costs nothing.
 
+- The CONTRL said "invalid value" (0085 12) for faults the code list has
+  words for ([#56]). An element too long or too short is now 39 or 40 and a
+  letter in a number 37, in `UCD` and in the `UCM`; a `UNT` that miscounts or
+  quotes another reference is 29 or 28 on the `UCM`, naming `UNT` in 0013,
+  where before set-level faults never reached the `UCM` at all; and an
+  unknown message type is 14. `UCI` 0083 is 4 only when the interchange is
+  at fault - one with no messages is 4 with 32, *lower level empty* - and a
+  sound interchange carrying a refused message is 7, with the 4 on its
+  `UCM`. **This changes CONTRLs on the wire.**
+
 - **A reset left the courier's and the dropbox's memory behind** ([#32]).
   `/_mock/reset` cleared the tables but not the in-process lists beside them,
   so `GET /_mock/state` went on reporting `courierFailures` from before it and
@@ -762,6 +772,7 @@ documents a real one sends.
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
+[#56]: https://github.com/rseufert/mock-edi/issues/56
 [#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
 [#48]: https://github.com/rseufert/mock-edi/issues/48
