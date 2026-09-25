@@ -82,8 +82,8 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | What it is |
 | --- | --- |
-| `demo.sh` | A guided curl tour: an order in both dialects, the four documents back, a behaviour changed and the difference shown, a broken document validated, and delayed delivery released with `advance`. |
-| `client.py` | The same tour in Python, with no dependencies - the shape of a test that drives the mock. |
+| `demo.sh` | A guided curl tour: an order in both dialects, the four documents back, a 997 sent back and matched, a behaviour changed and the difference shown, an order changed with an 860, trading through a directory, a broken document validated, and the dictionary served as data. It asks the mock what it has and skips what is not configured, naming the flag that enables it, so it runs against a plain `mock-edi` and shows more against one started with `--drop-dir` and a despatch window. |
+| `client.py` | The same tour in Python, with no dependencies - the shape of a test that drives the mock, including building a 997 for a document the mock sent. |
 | `po_bridge.py` | An example of the code the mock exists to test: middleware that reads a purchase order from SAP over OData, sends it as an 850, and posts the 855 back into SAP as an `ORDRSP` IDoc. Uses [mock-sap](https://github.com/rseufert/mock-sap) for the SAP end. |
 | `test_po_bridge.py` | Integration tests for `po_bridge.py` against both mocks: a full confirmation, a short shipment, a rejected line, a partner that never answers, and an SAP outage that must not lose the 855. |
 

@@ -81,6 +81,23 @@ jobs:
           bash examples/demo.sh
           curl -sf -X POST http://127.0.0.1:8080/_mock/reset >/dev/null
           python examples/client.py
+          kill $MOCK_PID 2>/dev/null || true
+          # Again, configured, so the sections the tour skips against a plain
+          # mock - trading through a directory, changing an order inside a
+          # despatch window - are exercised too. A tour whose second half is
+          # never run is a tour whose second half rots.
+          mkdir -p /tmp/edi/in /tmp/edi/out
+          python -m mockedi --port 8090 -q \
+            --drop-dir /tmp/edi/in --pickup-dir /tmp/edi/out --drop-settle-ms 0 \
+            --despatch-delay 3600000 --invoice-delay 3600000 &
+          MOCK_PID=$!
+          for _ in $(seq 1 40); do
+            curl -sf http://127.0.0.1:8090/_mock/health >/dev/null && break
+            sleep 0.25
+          done
+          BASE=http://127.0.0.1:8090 bash examples/demo.sh
+          test -f /tmp/edi/in/processed/order.edi
+          ls /tmp/edi/out/*.edi >/dev/null
       - name: Run the example integration against mock-edi and mock-sap
         run: |
           set -eu

@@ -39,6 +39,23 @@ IEA*1*000000301~
 """
 
 
+# A 997 accepting one transaction set, with the two control numbers left to
+# be filled in from the document being acknowledged.
+FUNCTIONAL_ACKNOWLEDGMENT = """\
+ISA*00*          *00*          *ZZ*ACME           *ZZ*MOCKEDI        \
+*260924*1040*U*00401*000000302*0*T*>~
+GS*FA*ACME*MOCKEDI*20260924*1040*302*X*004010~
+ST*997*0001~
+AK1*PR*%s*004010~
+AK2*855*%s~
+AK5*A~
+AK9*A*1*1*1~
+SE*6*0001~
+GE*1*302~
+IEA*1*000000302~
+"""
+
+
 def call(method, path, body=None, headers=None):
     data = body.encode() if isinstance(body, str) else (
         json.dumps(body).encode() if body is not None else None)
@@ -99,6 +116,22 @@ def main():
     for line in order["lines"]:
         print("  line %s %-12s %s  %s"
               % (line["line"], line["sku"], line["status"], line["reason"]))
+
+    heading("Send a 997 back for the acknowledgment we were sent")
+    # Building a receipt is fiddly in curl and half a dozen lines here: read
+    # the control numbers out of the document the partner actually sent, which
+    # is what a real translator does. Both are needed - ST02 is only unique
+    # within its functional group.
+    sent = call("GET", "/_mock/documents?direction=out&code=855&limit=1")[0]
+    receipt = FUNCTIONAL_ACKNOWLEDGMENT % (sent["group_control"], sent["control"])
+    answer = call("POST", "/edi", receipt, {"Content-Type": "application/edi-x12"})
+    for entry in answer["acknowledged"]:
+        print("  %s %s -> %s (matched %s)"
+              % (entry["code"], entry["control"], entry["status"], entry["matched"]))
+    outstanding = call("GET", "/_mock/unacknowledged")
+    print("  still unacknowledged: %s"
+          % (", ".join("%s for %s" % (row["code"], row["reference"])
+                       for row in outstanding) or "nothing"))
 
     heading("The invoice bills only what shipped")
     invoices = call("GET", "/_mock/mailbox?partner=ACME&kind=invoice&leave")
