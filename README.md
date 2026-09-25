@@ -168,6 +168,23 @@ what you assert about an X12 flow holds for the EDIFACT one. `GET
 /_mock/dictionary/X12/850` serves that dictionary as JSON — the actual rules,
 not a description of them that can go stale.
 
+**Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
+is read against the version its group's `GS08` names — an industry suffix such
+as `004010VICS` or `005010X222A1` is the same version — and served that way at
+`/_mock/dictionary/X12/850?version=005010`. The sets are declared at 004010,
+and 005010 is recorded as the segments that differ: `ST03`, `AK103`, `AK203`,
+and `REF02` widened from 30 characters to 50. A group in any other version is
+refused in its 997 with `AK905 = 2`, *functional group version not
+supported*, rather than read by rules its sender never used, and a partner
+cannot be set to a version the mock would write on the wire without having
+the dictionary for it.
+
+**A 997 at every version, not a 999.** A 005010 partner may prefer a 999,
+but a 999 reports conformance to an *implementation guide* — the TR3 named in
+`ST03` — and the mock checks documents against the base standard, not against
+any guide. A 999 from it would claim a check it never made; the 997 says
+exactly what it did.
+
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
 dozen; the mock implements the dozen, validates them properly, and reports an

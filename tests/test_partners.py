@@ -77,10 +77,18 @@ class TheVersionField(PartnerCase):
         status, _h, data = self.patch_partner(EURODIS, {"version": "004010"})
         self.assertRefused(status, data, "D:96A:UN")
 
-    def test_a_directory_is_accepted(self):
-        status, _h, row = self.patch_partner(EURODIS, {"version": "D:01B:UN"})
+    def test_the_directory_the_dictionary_has_is_accepted(self):
+        status, _h, row = self.patch_partner(EURODIS, {"version": "D:96A:UN"})
         self.assertEqual(status, 200, row)
-        self.assertEqual(row["version"], "D:01B:UN")
+        self.assertEqual(row["version"], "D:96A:UN")
+
+    def test_a_well_formed_version_the_dictionary_lacks_is_refused(self):
+        # The mock would put it in every UNH and GS08 it wrote, and then fill
+        # them with documents shaped for another version.
+        status, _h, data = self.patch_partner(EURODIS, {"version": "D:01B:UN"})
+        self.assertRefused(status, data, "no dictionary", "D:96A:UN")
+        status, _h, data = self.patch_partner(ACME, {"version": "004020"})
+        self.assertRefused(status, data, "no dictionary", "004010 and 005010")
 
 
 class TheTestFlag(PartnerCase):

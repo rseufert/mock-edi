@@ -235,7 +235,10 @@ def validate(interchange: Interchange, strict: bool = False,
 
 def validate_message(message: Message, dialect: str,
                      strict: bool = False) -> MessageReport:
-    definition = schema.lookup(dialect, message.code)
+    # An X12 set is read against the version its group's GS08 names. EDIFACT
+    # has one directory, and a UNH naming another is a finding of its own.
+    definition = schema.lookup(dialect, message.code,
+                               message.version if dialect == "X12" else "")
     report = MessageReport(code=message.code, control=message.control,
                            version=message.version,
                            kind=schema.kind_of(dialect, message.code))
@@ -339,6 +342,13 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
                  "the interchange holds no functional group"))
     for group in explicit:
         errors: List[Tuple[str, str]] = []
+        if not schema.supports("X12", group.version):
+            # The standard's own words for it: 716 code 2. Read against a
+            # version it does not name, a group would be judged by rules its
+            # sender never followed.
+            errors.append(("2", "GS08 names version %s; this mock speaks %s"
+                                % (group.version or "(empty)",
+                                   " and ".join(schema.VERSIONS["X12"]))))
         trailer = group.trailer
         if trailer is None:
             errors.append(("3", "group %s has no GE trailer" % group.control))

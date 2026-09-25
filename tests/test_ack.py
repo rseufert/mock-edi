@@ -23,14 +23,15 @@ UNREADABLE = [seg("BEG", "00", "SA", "PO4711", "", "20260924"),
               seg("CTT", "1")]
 
 
-def x12_997(body, control="0001", group="88"):
+def x12_997(body, control="0001", group="88", carries_version=False):
     interchange = x12.wrap([x12.message("850", control, body)], "ACME",
                            "MOCKEDI", "1", group, "PO")
     report = validate.validate(interchange)
     segments = []
     for functional_id, group_control, version, messages in ack.group_reports(interchange, report):
         segments.extend(ack.functional_acknowledgment(
-            functional_id, group_control, version, messages))
+            functional_id, group_control, version, messages,
+            carries_version=carries_version))
     return segments, report
 
 
@@ -45,7 +46,14 @@ class FunctionalAcknowledgment(unittest.TestCase):
         self.assertEqual(by_tag(segments, "AK5")[0].get(1), "A")
 
     def test_ak1_names_the_group_being_acknowledged(self):
+        # A 997 at 004010: AK1 has two elements, and no AK103 to put a
+        # version in.
         segments, _report = x12_997(GOOD, group="88")
+        ak1 = by_tag(segments, "AK1")[0]
+        self.assertEqual(ak1.elements, ["PO", "88"])
+
+    def test_a_005010_997_also_names_the_groups_version(self):
+        segments, _report = x12_997(GOOD, group="88", carries_version=True)
         ak1 = by_tag(segments, "AK1")[0]
         self.assertEqual((ak1.get(1), ak1.get(2), ak1.get(3)), ("PO", "88", "004010"))
 

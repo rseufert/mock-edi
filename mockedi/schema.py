@@ -26,6 +26,7 @@ unrecognised segment rather than pretending to understand it.
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
@@ -354,8 +355,12 @@ def _product_ids(count: int, req_first: str = OPTIONAL) -> Tuple[Element, ...]:
 ST = Segment("ST", "Transaction Set Header", (
     _e("143", "Transaction Set Identifier Code", "ID", 3, 3, MANDATORY),
     _e("329", "Transaction Set Control Number", "AN", 4, 9, MANDATORY),
-    _e("1705", "Implementation Convention Reference", "AN", 1, 35),
 ), "Starts a transaction set and assigns it a control number.")
+
+# ST03 names the implementation guide a set follows; it arrived in 005010.
+ST_005010 = Segment("ST", ST.name, ST.elements + (
+    _e("1705", "Implementation Convention Reference", "AN", 1, 35),
+), ST.purpose)
 
 SE = Segment("SE", "Transaction Set Trailer", (
     _e("96", "Number of Included Segments", "N0", 1, 10, MANDATORY),
@@ -457,9 +462,16 @@ CUR = Segment("CUR", "Currency", (
 REF = Segment("REF", "Reference Identification", (
     _e("128", "Reference Identification Qualifier", "ID", 2, 3, MANDATORY,
        REFERENCE_QUALIFIER_CODES),
-    _e("127", "Reference Identification", "AN", 1, 50),
+    _e("127", "Reference Identification", "AN", 1, 30),
     _e("352", "Description", "AN", 1, 80),
 ), "A secondary identifier, named by its qualifier.")
+
+# 005010 widened REF02 from 30 to 50.
+REF_005010 = Segment("REF", REF.name, (
+    REF.elements[0],
+    _e("127", "Reference Identification", "AN", 1, 50),
+    REF.elements[2],
+), REF.purpose)
 
 PER = Segment("PER", "Administrative Communications Contact", (
     _e("366", "Contact Function Code", "ID", 2, 2, MANDATORY,
@@ -663,13 +675,21 @@ CAD = Segment("CAD", "Carrier Detail", (
 AK1 = Segment("AK1", "Functional Group Response Header", (
     _e("479", "Functional Identifier Code", "ID", 2, 2, MANDATORY, FUNCTIONAL_GROUP_CODES),
     _e("28", "Group Control Number", "N0", 1, 9, MANDATORY),
-    _e("480", "Version / Release / Industry Identifier Code", "AN", 1, 12),
 ), "Which functional group is being acknowledged.")
 
 AK2 = Segment("AK2", "Transaction Set Response Header", (
     _e("143", "Transaction Set Identifier Code", "ID", 3, 3, MANDATORY),
     _e("329", "Transaction Set Control Number", "AN", 4, 9, MANDATORY),
 ), "Which transaction set within the group.")
+
+# 005010 lets a 997 say which version the acknowledged group was (AK103) and
+# which implementation guide the set followed (AK203).
+AK1_005010 = Segment("AK1", AK1.name, AK1.elements + (
+    _e("480", "Version / Release / Industry Identifier Code", "AN", 1, 12),
+), AK1.purpose)
+AK2_005010 = Segment("AK2", AK2.name, AK2.elements + (
+    _e("1705", "Implementation Convention Reference", "AN", 1, 35),
+), AK2.purpose)
 
 AK3 = Segment("AK3", "Data Segment Note", (
     _e("721", "Segment ID Code", "ID", 2, 3, MANDATORY),
@@ -1622,9 +1642,79 @@ for _dialect, _map in SET_FOR_KIND.items():
         KIND_OF[(_dialect, _code)] = _kind
 
 
-def lookup(dialect: str, code: str) -> Optional[TransactionSet]:
-    """The definition of a transaction set, or None if the mock does not know it."""
-    return SETS.get((dialect, code))
+# ---------------------------------------------------------------------------
+# Versions
+#
+# Every set is declared once, at the first version listed for its dialect.
+# A later version is described by the segments that differ in it and nothing
+# else: the set at that version is the declared one with those segments
+# swapped in. Only differences the mock is sure of are recorded; a segment not
+# listed is taken to be the same in both, which for the segments these sets
+# use is very nearly true.
+# ---------------------------------------------------------------------------
+
+VERSIONS = {"X12": ("004010", "005010"), "EDIFACT": ("D:96A:UN",)}
+
+REVISIONS: Dict[Tuple[str, str], Dict[str, Segment]] = {
+    ("X12", "005010"): {"ST": ST_005010, "REF": REF_005010,
+                        "AK1": AK1_005010, "AK2": AK2_005010},
+}
+
+_REVISED: Dict[Tuple[str, str, str], TransactionSet] = {}
+
+
+def base_version(dialect: str, version: str) -> str:
+    """The version a GS08 or UNH names, as the dictionary keys it.
+
+    GS08 carries an industry suffix after the six-digit version -
+    `004010VICS`, `005010X222A1` - which names an implementation guide, not
+    a different standard, so only the first six characters count.
+    """
+    if dialect == "X12":
+        return (version or "")[:6]
+    parts = (version or "").split(":")
+    return ":".join((parts + ["", "", "UN"])[:3]) if version else ""
+
+
+def supports(dialect: str, version: str) -> bool:
+    return base_version(dialect, version) in VERSIONS.get(dialect, ())
+
+
+def lookup(dialect: str, code: str, version: str = "") -> Optional[TransactionSet]:
+    """The definition of a transaction set at a version, or None if the mock
+    does not know the set.
+
+    With no version, or one the dictionary does not have, the set as declared
+    is returned: whether a version is supported is a separate question, asked
+    of `supports`, so that a document in an unknown version can still be
+    checked and its findings reported.
+    """
+    declared = SETS.get((dialect, code))
+    if declared is None or not version:
+        return declared
+    wanted = base_version(dialect, version)
+    overrides = REVISIONS.get((dialect, wanted))
+    if not overrides or wanted == declared.version:
+        return declared
+    key = (dialect, code, wanted)
+    if key not in _REVISED:
+        _REVISED[key] = dataclasses.replace(
+            declared, version=wanted,
+            children=_revise(declared.children, overrides))
+    return _REVISED[key]
+
+
+def _revise(children, overrides: Dict[str, Segment]):
+    out = []
+    for child in children:
+        if isinstance(child, Loop):
+            out.append(dataclasses.replace(
+                child, children=_revise(child.children, overrides)))
+        elif child.tag in overrides:
+            out.append(dataclasses.replace(child, segment=overrides[child.tag]))
+        else:
+            out.append(child)
+    return tuple(out)
 
 
 def kind_of(dialect: str, code: str) -> str:

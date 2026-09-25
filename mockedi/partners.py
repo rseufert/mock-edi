@@ -18,7 +18,7 @@ import sqlite3
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
-from . import db
+from . import db, schema
 from .transactions import Party
 
 # An outbound document that will never be sent, because the partner it was
@@ -116,6 +116,13 @@ def check(fields: Dict[str, Any], dialect: str,
     if "version" in out and not limits["version"].match(str(out["version"])):
         raise Invalid("%s version %r is not one the mock can write: %s"
                       % (dialect, out["version"], limits["version_hint"]))
+    if "version" in out and not schema.supports(dialect, str(out["version"])):
+        # Well formed, but the mock would write it on the wire and then fill
+        # the envelope with documents shaped for another version.
+        raise Invalid("%s version %r is well formed, but this mock has no "
+                      "dictionary for it: it speaks %s"
+                      % (dialect, out["version"],
+                         " and ".join(schema.VERSIONS[dialect])))
 
     if "mdn_mode" in out and out["mdn_mode"] not in MDN_MODES:
         raise Invalid("mdn_mode must be one of %s, not %r"

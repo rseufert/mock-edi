@@ -387,7 +387,8 @@ class Pipeline:
                     continue
                 body = ack.functional_acknowledgment(
                     functional_id, control, version, messages,
-                    report.group_errors.get((functional_id, control), []))
+                    report.group_errors.get((functional_id, control), []),
+                    carries_version=self._x12_version(partner) >= "005010")
                 self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                            receipt, moment, delay, dialect="X12")
         else:
@@ -538,7 +539,7 @@ class Pipeline:
 
         if dialect == "X12":
             group_control = str(db.next_number(self.conn, "group", partner_id))
-            version = partner["version"] if partner["version"].isdigit() else "004010"
+            version = self._x12_version(partner)
             set_control = control.rjust(4, "0")
             message = x12.message(code, set_control, body, version)
             interchange = x12.wrap(
@@ -567,6 +568,13 @@ class Pipeline:
         return self._enqueue(partner_id, dialect, code, kind, reference, payload,
                              interchange_control, group_control, set_control,
                              receipt, moment, delay_ms, note)
+
+    @staticmethod
+    def _x12_version(partner) -> str:
+        """The X12 version the mock writes to a partner: its own, if the
+        dictionary has it, and otherwise the one every set is declared at."""
+        version = partner["version"] or ""
+        return version if schema.supports("X12", version) else schema.VERSIONS["X12"][0]
 
     def _send_interchange_acknowledgment(self, partner: Dict[str, Any],
                                          interchange: Interchange,
