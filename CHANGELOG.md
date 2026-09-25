@@ -51,6 +51,25 @@ says so where it does.
   decode a second time, which turned a literal `%41` into `A`. The request
   log now records the path as it was sent, still encoded.
 
+- **An inbound 860 was archived with no reference** ([#43]). The reference
+  of an inbound transaction set is read from its beginning segment, and `BCH`
+  was missing from the list, so `GET /_mock/documents?direction=in` showed an
+  860 with an empty reference and `?reference=PO-...` left out the change
+  that order received. It is now filed under the PO number it changes, as
+  `ORDCHG` already was.
+
+- The HTTP layer read `Content-Length` bytes and nothing else, on keep-alive
+  connections with no timeout ([#23]). A chunked body - what an AS2 client
+  streaming a large interchange sends - was answered as empty and its size
+  line then parsed as the next request; `Content-Length: -1` was read until
+  the client hung up; ten gigabytes were read into memory; and a client that
+  sent headers and then nothing held a thread for good. Chunked bodies are now
+  decoded, extensions and trailers included. A length that is not a number is
+  `400`, a body over `--max-body` (16 MiB by default) is `413` before it is
+  read, another transfer coding is `501`, a body that stalls for
+  `--request-timeout` seconds (60) is `408`, and every one of them closes the
+  connection so the next request is not read out of the leftovers.
+
 - A dropped file could be read more than once ([#26]). The poller and
   `POST /_mock/drop/scan` could both read it - two interchanges with the same
   ISA13, eight documents back - and a file that could not be moved into
@@ -60,6 +79,27 @@ says so where it does.
   that cannot be moved keeps its name, is listed under `stuck` in
   `/_mock/drop` and on stderr, and is left alone until it changes. The
   poller's own errors go to stderr too.
+
+- **Legitimate elements were reported as "too many data elements"** ([#54]).
+  The dictionary stops several segment definitions short of the standard on
+  purpose - `SAC` has sixteen elements in 004010 and the five declared here
+  carry almost every real allowance - but the validator treated the end of a
+  definition as the end of the segment, so a correct `SAC15` description came
+  back as X12 error 3 and the 997 said the document was wrong. Code 3 means
+  the element does not exist at that position; there it does. A partner
+  testing a correct document against the mock was told it was broken.
+
+  A segment now declares the width the standard gives it. A position past the
+  definition but inside that width is carried and not checked; past the width,
+  error 3 is the truth and is still reported. The nine segments this affects
+  are `SAC`, `PO4`, `TD5`, `ITD`, `N1`, `CTT`, `PO1`, `IT1` and `LIN`, plus
+  `PIA` on the EDIFACT side, which carries up to five item numbers and
+  declared one. `/_mock/dictionary` reports `width` beside `checkedTo`, so a
+  guide writer can tell an unchecked position from a wrong one.
+
+  `PIA`'s `C212` was also declared with two components while `LIN`'s had four.
+  A composite is one thing in the standard, so `PIA` now uses the longer
+  definition, which is how the short one came to light.
 
 - **The asynchronous MDN was posted without its MIME boundary** ([#22]). The
   synchronous one went out with the headers `build_mdn` produced; the
@@ -546,9 +586,11 @@ documents a real one sends.
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52
+[#54]: https://github.com/rseufert/mock-edi/issues/54
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#23]: https://github.com/rseufert/mock-edi/issues/23
 [#28]: https://github.com/rseufert/mock-edi/issues/28
 [#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
@@ -565,6 +607,8 @@ documents a real one sends.
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
 [#25]: https://github.com/rseufert/mock-edi/issues/25
+
+[#43]: https://github.com/rseufert/mock-edi/issues/43
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
