@@ -107,6 +107,15 @@ says so where it does.
   that order received. It is now filed under the PO number it changes, as
   `ORDCHG` already was.
 
+- `SN1` declared the line item status at SN107; 004010 has it at SN108, after
+  the returnable container code ([#57]). An inbound 856 with a status where
+  the standard puts it would have been misread. The mock's own 856 writes no
+  further than SN106, so nothing on the wire changes. Found by the new test
+  that checks every segment the mock writes against the standards' element
+  numbers, written out in the test rather than read from the dictionary -
+  which also now validates the documents of every seeded partner under every
+  behaviour.
+
 - The HTTP layer read `Content-Length` bytes and nothing else, on keep-alive
   connections with no timeout ([#23]). A chunked body - what an AS2 client
   streaming a large interchange sends - was answered as empty and its size
@@ -655,6 +664,7 @@ documents a real one sends.
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
+[#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
 [#47]: https://github.com/rseufert/mock-edi/issues/47
 

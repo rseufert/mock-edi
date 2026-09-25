@@ -52,6 +52,29 @@ class LearningDelimiters(unittest.TestCase):
         self.assertEqual((found.element, found.segment, found.component),
                          ("*", "~", ">"))
 
+    def test_a_00501_repetition_separator_other_than_caret_is_read(self):
+        from mockedi.envelope import Delimiters
+        text = x12.render(interchange(
+            interchange_version="00501",
+            delimiters=Delimiters(segment="~", element="*", component=">",
+                                  repetition="{")))
+        self.assertIn("*{*00501*", text.split("~")[0])
+        self.assertEqual(x12.read_delimiters(text).repetition, "{")
+        self.assertEqual(x12.parse(text).codes(), ["850"])
+
+    def test_crlf_after_each_terminator_is_read(self):
+        text = x12.render(interchange()).replace("~", "~\r\n")
+        parsed = x12.parse(text)
+        self.assertEqual(parsed.codes(), ["850"])
+        self.assertEqual(parsed.groups[0].messages[0].find("BEG").get(3), "PO4711")
+
+    def test_a_carriage_return_as_the_terminator_is_read(self):
+        # Some translators end segments with CR and put LF after it.
+        text = x12.render(interchange()).replace("~", "\r\n")
+        parsed = x12.parse(text)
+        self.assertEqual(parsed.codes(), ["850"])
+        self.assertEqual(parsed.groups[0].messages[0].find("BEG").get(3), "PO4711")
+
     def test_an_unusual_punctuation_set_parses(self):
         text = x12.render(interchange()).replace("*", "|").replace("~", "\n")
         parsed = x12.parse(text)
