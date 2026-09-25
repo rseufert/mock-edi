@@ -486,8 +486,45 @@ def next_number(conn: sqlite3.Connection, scope: str, partner: str = "*") -> int
     return value
 
 
+# One clock, and one way of writing it down.
+#
+# Every timestamp the control plane returns used to be a naive local-time
+# string, and they did not all carry the same precision: `started` and
+# `due_at` had microseconds, `at` did not, and none of them said what zone it
+# was in. The Docker image runs on UTC and the test driving it usually does
+# not, so a test comparing `due_at` against its own clock was wrong by the
+# host's offset - the kind of failure that passes on a laptop and fails in CI.
+#
+# It matters twice over because `release()` and the `unacknowledged` cutoff
+# compare these as *strings*. That is only correct while every producer
+# formats identically, which is what this enforces rather than assumes.
+#
+# The dates on the wire - ISA09/10, GS04/05, UNB S004 - are a different
+# matter and stay local, as the standards' long convention has them.
+
+def utcnow() -> datetime.datetime:
+    """The current moment, aware and in UTC."""
+    return datetime.datetime.now(datetime.timezone.utc)
+
+
+def stamp(moment: Optional[datetime.datetime] = None) -> str:
+    """One timestamp format for everything the control plane reports.
+
+    Second precision and a trailing `Z`, so that two of them sort the way the
+    moments they name do - which is what the string comparisons rely on.
+    A naive value is read as local time, because that is what the host meant
+    by it.
+    """
+    moment = moment or utcnow()
+    if moment.tzinfo is None:
+        moment = moment.astimezone()
+    return (moment.astimezone(datetime.timezone.utc)
+            .replace(microsecond=0, tzinfo=None).isoformat() + "Z")
+
+
 def now() -> str:
-    return datetime.datetime.now().replace(microsecond=0).isoformat()
+    """The current moment, as the control plane writes it."""
+    return stamp()
 
 
 def money(value) -> str:

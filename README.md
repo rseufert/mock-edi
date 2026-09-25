@@ -198,6 +198,28 @@ between the two is carried and not checked: your `SAC15` description is not
 wrong, it is untested. A position beyond the width is reported as error 3,
 because there the element really does not exist.
 
+## Timestamps
+
+Every timestamp the control plane returns has one shape: UTC, second
+precision, trailing `Z`.
+
+```json
+{"due_at": "2026-09-25T08:34:19Z", "at": "2026-09-25T07:34:19Z"}
+```
+
+That is not cosmetic. The mock compares these as *strings* when it decides
+what is due and what has gone unacknowledged, so they have to be produced by
+one formatter to sort correctly — and a test driving the Docker image, which
+runs on UTC, is usually not on UTC itself. A `due_at` in the host's local time
+with no zone on it is wrong by the host's offset, in whichever direction the
+host happens to be: the kind of failure that passes on a laptop and fails in
+CI.
+
+The dates **on the wire** are the opposite case and stay as they are. ISA09/10,
+GS04/05 and UNB S004 carry no zone and are the sender's local time by the
+standards' long convention, so they are written as the host's clock reads
+them.
+
 ## Partner behaviours
 
 Four partners are seeded. Change any of them at runtime:

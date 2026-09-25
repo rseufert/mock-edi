@@ -98,8 +98,14 @@ class Pipeline:
         return partners.us(self.config)
 
     def now(self) -> datetime.datetime:
-        """The mock's clock: the real time, plus however far it was advanced."""
-        return datetime.datetime.now() + self.offset
+        """The mock's clock: the real time in UTC, plus how far it was advanced.
+
+        Aware, and the only clock anything above this reads. Everything it
+        ends up written as goes through `db.stamp`, so that the string
+        comparisons in `release` and in the `unacknowledged` cutoff are
+        between values of the same shape.
+        """
+        return db.utcnow() + self.offset
 
     # -- inbound
 
@@ -432,7 +438,7 @@ class Pipeline:
             self.conn.execute(
                 "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
                 " VALUES (?,?,?,?,?)",
-                (partner["id"], po_number, kind, due.isoformat(), db.now()))
+                (partner["id"], po_number, kind, db.stamp(due), db.now()))
         self.conn.commit()
 
     def _fulfil(self, row, moment, receipt: Optional[Receipt] = None) -> None:
@@ -614,11 +620,11 @@ class Pipeline:
             " due_at, note, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
              interchange_control, group_control, set_control, PENDING,
-             due.isoformat(), note, db.now()))
+             db.stamp(due), note, db.now()))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
-                        reference=reference, due_at=due.isoformat(), status=PENDING)
+                        reference=reference, due_at=db.stamp(due), status=PENDING)
         if receipt is not None:
             receipt.queued.append(queued)
         return queued
@@ -695,7 +701,7 @@ class Pipeline:
         when = (moment or self.now())
         rows = db.rows(self.conn,
                        "SELECT * FROM scheduled WHERE done_at = '' AND due_at <= ?"
-                       " ORDER BY due_at, id", (when.isoformat(),))
+                       " ORDER BY due_at, id", (db.stamp(when),))
         done: List[int] = []
         for row in rows:
             self.conn.execute("UPDATE scheduled SET done_at = ? WHERE id = ?",
@@ -709,7 +715,7 @@ class Pipeline:
                 receipt: Optional[Receipt] = None) -> List[int]:
         """Do what is due, then mark everything ready to collect."""
         self.run_due(moment, receipt)
-        when = (moment or self.now()).isoformat()
+        when = db.stamp(moment or self.now())
         due = db.rows(self.conn,
                       "SELECT * FROM outbound WHERE status = ? AND due_at <= ?"
                       " ORDER BY id", (PENDING, when))
@@ -786,7 +792,10 @@ class Pipeline:
         one-day invoice delay and does not intend to wait.
         """
         if everything:
-            return self.release(datetime.datetime.max)
+            # Aware, like every other moment here: a naive max cannot be
+            # converted to UTC without overflowing.
+            return self.release(
+                datetime.datetime.max.replace(tzinfo=datetime.timezone.utc))
         if seconds < 0:
             raise ValueError("the clock only moves forward; seconds must not "
                              "be negative, got %s" % seconds)

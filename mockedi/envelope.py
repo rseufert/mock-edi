@@ -405,17 +405,33 @@ def seg(tag: str, *elements: Value) -> Seg:
 
 # -- date and time, in the shapes both dialects use
 
+def local(moment):
+    """The same moment as the host's wall clock reads it.
+
+    The mock keeps one clock, in UTC, because its control plane has to report
+    timestamps a test in another zone can compare. The dates on the wire are
+    the opposite: ISA09/10, GS04/05 and UNB S004 carry no zone and are the
+    sender's local time by the standards' long convention, so they are
+    written as the host reads them, whatever the clock underneath is in.
+
+    A naive moment is already local and is left alone.
+    """
+    if getattr(moment, "tzinfo", None) is None:
+        return moment
+    return moment.astimezone()
+
+
 def ccyymmdd(moment) -> str:
-    return moment.strftime("%Y%m%d")
+    return local(moment).strftime("%Y%m%d")
 
 
 def yymmdd(moment) -> str:
     """The six-digit date ISA09 and UNB S004 still use."""
-    return moment.strftime("%y%m%d")
+    return local(moment).strftime("%y%m%d")
 
 
 def hhmm(moment) -> str:
-    return moment.strftime("%H%M")
+    return local(moment).strftime("%H%M")
 
 
 def parse_date(value: str):

@@ -41,6 +41,7 @@ from decimal import Decimal
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import db
+from .envelope import local
 from .transactions import (ACCEPTED, BACKORDERED, REJECTED, SHORT, Order,
                            number, quantity_text)
 
@@ -59,7 +60,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
     not need the database thrown away first.  `/_mock/orders` shows the one
     that survived.
     """
-    moment = when or datetime.datetime.now()
+    moment = when or db.utcnow()
     seller_order = _existing_seller_order(conn, order.po_number) or str(
         db.next_number(conn, "seller_order"))
     conn.execute("DELETE FROM order_line WHERE po_number = ?", (order.po_number,))
@@ -121,7 +122,7 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
 
     for index, line in enumerate(order.lines):
         item = _catalog(conn, line)
-        scheduled = (when.date() + datetime.timedelta(
+        scheduled = (local(when).date() + datetime.timedelta(
             days=int(item["lead_days"]) if item else 3)).isoformat()
 
         if line.quantity <= 0:
@@ -286,7 +287,7 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
     ships as a second consignment of its own. Each consignment records what
     it carried in `shipment_line`.
     """
-    moment = when or datetime.datetime.now()
+    moment = when or db.utcnow()
     order = order_row(conn, po_number)
     if order is None:
         return None
@@ -319,7 +320,7 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
         " scac, tracking, bol, cartons, weight, at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
-        (shipment_id, po_number, order["partner"], moment.date().isoformat(),
+        (shipment_id, po_number, order["partner"], local(moment).date().isoformat(),
          "United Parcel Service", "UPSN", _tracking(shipment_id),
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
@@ -349,7 +350,7 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
     and a buyer can match every bill to a delivery. An order that shipped in
     two consignments is billed twice.
     """
-    moment = when or datetime.datetime.now()
+    moment = when or db.utcnow()
     order = order_row(conn, po_number)
     if order is None:
         return None
@@ -373,7 +374,7 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
         " invoiced_on, currency, subtotal, tax, total, terms_days, discount_pct,"
         " discount_days, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (invoice_number, po_number, order["partner"], shipment_id,
-         moment.date().isoformat(), order["currency"], db.money(subtotal),
+         local(moment).date().isoformat(), order["currency"], db.money(subtotal),
          db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now()))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
         conn, "SELECT total FROM invoice WHERE po_number = ?", (po_number,))),
@@ -427,7 +428,7 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
                  when: Optional[datetime.datetime] = None) -> ChangeOutcome:
     """Apply a change request to an order the mock already holds."""
     from .transactions import ADD, CHANGE_LINE, DELETE, NO_CHANGE
-    moment = when or datetime.datetime.now()
+    moment = when or db.utcnow()
     order = order_row(conn, change.po_number)
     if order is None:
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)

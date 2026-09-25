@@ -62,6 +62,31 @@ says so where it does.
 
 ### Changed
 
+- **Every control-plane timestamp is UTC, to the second, with a `Z`**
+  ([#21]). They were naive local-time strings of inconsistent precision -
+  `started` and `due_at` carried microseconds, `at` did not, and none of them
+  said what zone it was in. The Docker image runs on UTC and the test driving
+  it usually does not, so a test comparing `due_at` against its own clock was
+  wrong by the host's offset: the kind of failure that passes on a laptop and
+  fails in CI, or the reverse.
+
+  It matters twice over because `release()` and the `unacknowledged` cutoff
+  compare these as *strings*, which is only correct while every producer
+  formats identically. One clock now, `db.utcnow()`, and one formatter,
+  `db.stamp()`; `Pipeline.now()` is aware UTC and delegates to it. MDN and
+  HTTP `Date:` headers are built from an aware value, so they carry a zone
+  as RFC 5322 requires rather than whatever `strftime` was handed.
+
+  **This is wire-visible** to anyone parsing the JSON: `2026-09-25T00:34:19`
+  in the host's zone is now `2026-09-25T07:34:19Z`. A caller that parsed the
+  old string as local time and one that parsed it as UTC were both guessing;
+  now neither has to.
+
+  The dates **on the wire** are unchanged. ISA09/10, GS04/05 and UNB S004
+  carry no zone and are local by the standards' long convention, so they are
+  still written as the host's clock reads them, whatever the clock underneath
+  is kept in.
+
 - **The README no longer quotes a test count** ([#17]). The count was added
   with a check that held it to the number the loader discovers, which did
   stop it drifting - but an exact number sits in one line of prose that every
@@ -688,6 +713,7 @@ documents a real one sends.
 [#17]: https://github.com/rseufert/mock-edi/issues/17
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#22]: https://github.com/rseufert/mock-edi/issues/22
+[#21]: https://github.com/rseufert/mock-edi/issues/21
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52

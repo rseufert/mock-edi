@@ -270,8 +270,7 @@ def _mdn_headers(row, as2_id: str) -> Dict[str, str]:
         "AS2-To": row["partner"],
         "Message-ID": row["message_id"],
         "MIME-Version": "1.0",
-        "Date": email.utils.format_datetime(datetime.datetime.now(
-            datetime.timezone.utc)),
+        "Date": email.utils.format_datetime(db.utcnow()),
     }
 
 
