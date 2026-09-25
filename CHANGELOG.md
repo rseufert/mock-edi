@@ -36,6 +36,15 @@ says so where it does.
 
 ### Fixed
 
+- A `--db` file written by 0.1.0 stopped the current version starting, with
+  `no such column: ack_status` and no hint that the file was the cause
+  ([#35]). A file database is now upgraded in place when it is opened:
+  missing tables are created and missing columns added, from the schema
+  itself, before any index is built; its version is recorded in
+  `PRAGMA user_version`. A file from a newer mock is refused with a message
+  naming it and both versions, and the process exits 2 instead of printing a
+  traceback.
+
 - An 850 restated with `BEG01 = 04` or `05` kept, confirmed and shipped any
   line it left out ([#38]), and the 865 never mentioned it. A line the
   restatement omits is now deleted, and the 865 answers it `DI` - or refuses
@@ -392,6 +401,7 @@ documents a real one sends.
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38
 [#46]: https://github.com/rseufert/mock-edi/issues/46

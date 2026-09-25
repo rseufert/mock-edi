@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import sqlite3
 import sys
 
-from . import __version__
+from . import __version__, db
 from .partners import BEHAVIOURS
 from .server import Config, make_server
 
@@ -104,6 +105,13 @@ def main(argv=None) -> int:
     except OSError as error:
         print("mock-edi: cannot listen on %s:%d - %s"
               % (args.host, args.port, error), file=sys.stderr)
+        return 2
+    except db.DatabaseError as error:
+        print("mock-edi: %s" % error, file=sys.stderr)
+        return 2
+    except sqlite3.DatabaseError as error:
+        print("mock-edi: cannot use --db %s - %s" % (args.db_path, error),
+              file=sys.stderr)
         return 2
     base = "http://%s:%d" % (args.host, args.port)
     print("mock-edi %s listening on %s  (as %s, db %s)"

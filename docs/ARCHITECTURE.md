@@ -127,6 +127,15 @@ restart when the mock runs on a file database — duplicate control numbers are
 a real trading-partner failure, and replaying one means being able to control
 them.
 
+A file database outlives the version of the mock that wrote it, so it is
+upgraded in place when it is opened. `PRAGMA user_version` records the schema
+version; `db.upgrade` creates any table the file lacks and adds any column the
+schema declares that a table does not have - derived from `SCHEMA`, not
+written out as a list of migrations - and only then builds the indexes. A file
+from a newer mock is refused by name rather than misread. Every schema change
+so far has been an addition; the first one that is not will need a step of its
+own in `upgrade`.
+
 ## The property that keeps it honest
 
 `tests/test_dictionary.py::GeneratedDocumentsAreValid` takes every document the

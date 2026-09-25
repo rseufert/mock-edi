@@ -239,7 +239,12 @@ CREATE TABLE IF NOT EXISTS request_log (
     partner      TEXT NOT NULL DEFAULT '',
     at           TEXT NOT NULL
 );
+"""
 
+# Indexes are created after the tables have been brought up to date: an index
+# on a column an older database does not have yet is what used to stop a
+# 0.1.0 file from opening at all.
+INDEXES = """
 -- Every inbound interchange is checked against this pair to refuse a replay,
 -- so it is worth an index rather than a scan of everything ever received.
 CREATE INDEX IF NOT EXISTS ix_interchange_control
@@ -312,15 +317,88 @@ class UnitOfWork:
             return False
 
 
+# The schema's version, kept in the file as `PRAGMA user_version`. 1 is
+# 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
+# SCHEMA changes: a file from a newer mock is refused rather than misread.
+SCHEMA_VERSION = 2
+
+
+class DatabaseError(Exception):
+    """A --db file this version of the mock cannot use, and why."""
+
+
 def connect(path: str = ":memory:") -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
-    if path != ":memory:":
-        conn.execute("PRAGMA journal_mode = WAL")
-    conn.executescript(SCHEMA)
-    conn.commit()
+    try:
+        conn.execute("PRAGMA foreign_keys = ON")
+        if path != ":memory:":
+            conn.execute("PRAGMA journal_mode = WAL")
+        upgrade(conn, path)
+    except BaseException:
+        conn.close()
+        raise
     return conn
+
+
+def upgrade(conn: sqlite3.Connection, path: str = "") -> List[str]:
+    """Bring a database from an earlier version up to this one, in place.
+
+    Derived from SCHEMA rather than written by hand: missing tables are
+    created, and every column the schema declares that a table lacks is
+    added, with the default it declares. That covers every change the
+    schema has had so far, which have all been additions. A change that is
+    not - a column renamed or retyped - needs a step of its own here, keyed
+    on the version it upgrades from.
+
+    Returns the columns it added, as `table.column`.
+    """
+    found = conn.execute("PRAGMA user_version").fetchone()[0]
+    if found > SCHEMA_VERSION:
+        raise DatabaseError(
+            "%s was written by a newer mock-edi (schema version %d; this one "
+            "knows %d). Upgrade mock-edi, or start from a new --db file."
+            % (path or "the database", found, SCHEMA_VERSION))
+    conn.executescript(SCHEMA)
+    added = _add_missing_columns(conn)
+    conn.executescript(INDEXES)
+    conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
+    conn.commit()
+    return added
+
+
+def _add_missing_columns(conn: sqlite3.Connection) -> List[str]:
+    reference = sqlite3.connect(":memory:")
+    try:
+        reference.executescript(SCHEMA)
+        tables = [row[0] for row in reference.execute(
+            "SELECT name FROM sqlite_master WHERE type = 'table'"
+            " AND name NOT LIKE 'sqlite_%'")]
+        added = []
+        for table in tables:
+            have = {row[1] for row in conn.execute("PRAGMA table_info(%s)" % table)}
+            for _cid, name, kind, notnull, default, key in reference.execute(
+                    "PRAGMA table_info(%s)" % table):
+                if name in have:
+                    continue
+                if key:
+                    raise DatabaseError(
+                        "%s.%s is part of a primary key and cannot be added to "
+                        "an existing table" % (table, name))
+                declaration = '"%s" %s' % (name, kind)
+                if notnull:
+                    # SQLite will not add a NOT NULL column without a default;
+                    # the rows already there get an empty one.
+                    if default is None:
+                        default = "0" if "INT" in kind.upper() else "''"
+                    declaration += " NOT NULL DEFAULT %s" % default
+                elif default is not None:
+                    declaration += " DEFAULT %s" % default
+                conn.execute("ALTER TABLE %s ADD COLUMN %s" % (table, declaration))
+                added.append("%s.%s" % (table, name))
+        return added
+    finally:
+        reference.close()
 
 
 def next_number(conn: sqlite3.Connection, scope: str, partner: str = "*") -> int:

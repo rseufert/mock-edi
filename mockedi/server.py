@@ -971,7 +971,12 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
 def make_server(config: Config) -> _Server:
     """Build a server. It is not listening until `serve_forever` is called."""
     httpd = _Server((config.host, config.port), Handler)
-    httpd.mock = Mock(config)
+    try:
+        httpd.mock = Mock(config)
+    except BaseException:
+        # A --db file that cannot be used: let go of the port too.
+        httpd.server_close()
+        raise
     if httpd.mock.dropbox.active:
         httpd.mock.dropbox.prepare()
         httpd.mock.dropbox.start()
