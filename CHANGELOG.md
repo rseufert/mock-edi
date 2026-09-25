@@ -99,6 +99,21 @@ says so where it does.
   a comma in a description is left alone. A point where `UNA` declares a comma
   is still accepted, as ISO 9735 allows either in data.
 
+- **An order could end up with two shipments** ([#36]). The despatch and the
+  invoice are separate pieces of scheduled work and either can come due
+  first. The invoice has to pack the goods when nobody has yet - it needs
+  something to bill - and the despatch then packed them again, giving the
+  order two consignments with two bills of lading, and an 856 and an 810
+  naming different ones. The cross-reference a buyer uses to match a bill to
+  a delivery, quietly broken, and only in the ordering nobody runs by
+  default.
+
+  `create_shipment` now packs the difference between confirmed and shipped
+  rather than everything confirmed, and returns the existing consignment when
+  there is nothing left to pack. Whichever way round the delays are set, an
+  order has one shipment and both documents name it.
+
+
 ## [0.2.1] - 2026-09-25
 
 No change to the package itself: the PyPI Homepage link now points at the
@@ -286,6 +301,7 @@ documents a real one sends.
   check what it reads; it found six real bugs the first time it ran.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
+[#36]: https://github.com/rseufert/mock-edi/issues/36
 [#40]: https://github.com/rseufert/mock-edi/issues/40
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
