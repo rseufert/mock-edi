@@ -112,9 +112,11 @@ class Latency(MockServerCase):
     config_kwargs = {"latency_ms": 300}                 # --latency-ms 300
 
     def test_every_request_is_held_back(self):
-        started = time.monotonic()
+        started = time.perf_counter()
         self.get("/_mock/health")
-        self.assertGreaterEqual(time.monotonic() - started, 0.3)
+        # Not the full 0.3: Windows' clock ticks in steps of about 15 ms, and
+        # a 300 ms sleep has measured as 0.297 there.
+        self.assertGreaterEqual(time.perf_counter() - started, 0.25)
 
 
 class NoRequestLog(MockServerCase):
