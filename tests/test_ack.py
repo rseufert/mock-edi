@@ -1,5 +1,7 @@
 """The acknowledgments: a 997 and a CONTRL built from the same report."""
+import dataclasses
 import os
+import re
 import sys
 import unittest
 
@@ -7,7 +9,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from mockedi import ack, edifact, validate, x12
+from mockedi import ack, edifact, schema, validate, x12
 from mockedi.envelope import seg
 
 from support import EURODIS, MockServerCase, edifact_order, parse
@@ -227,6 +229,53 @@ class ContrlCodesOnTheWire(MockServerCase):
         message = self.contrl(order)
         self.assertEqual(message.find("UCI").get(4), "7")
         self.assertEqual(self.ucm(message).get(3), "4")
+
+
+class ContrlCodeGaps(MockServerCase):
+    """Three the wire tests above leave open.
+
+    A mapping with no test, the precedence between a set-level fault and the
+    segments under it, and a guard that nothing maps to a code the table does
+    not define.
+    """
+
+    EDIFACT = {"Content-Type": "application/edifact"}
+
+    def ucm_code(self, payload):
+        self.send(payload, headers=self.EDIFACT)
+        rows = [r for r in self.mailbox(EURODIS, leave=False)
+                if r["code"] == "CONTRL"]
+        self.assertEqual(len(rows), 1)
+        message = parse(rows[0]["payload"]).groups[0].messages[0]
+        report = validate.validate_message(message, "EDIFACT")
+        self.assertTrue(report.clean, report.summary())
+        return message.find("UCM").get(4)
+
+    def test_a_message_with_no_unt_at_all_is_13(self):
+        # The fourth mapping, and the only one nothing was reading back off
+        # the wire.
+        order = re.sub(r"UNT\+\d+\+\d+'", "", edifact_order("NO-TRAILER"))
+        self.assertEqual(self.ucm_code(order), "13")
+
+    def test_a_set_level_fault_outranks_the_segments_beneath_it(self):
+        # A UNT that miscounts on a message that also has a bad code in it.
+        # The miscount is the fact about the message; 12 would describe the
+        # element and say nothing about the count.
+        order = re.sub(r"UNT\+\d+\+", "UNT+99+",
+                       edifact_order("BOTH").replace("CUX+2:EUR:9", "CUX+2:ZZZ:9"))
+        self.assertEqual(self.ucm_code(order), "29")
+
+    def test_nothing_maps_to_a_code_the_table_does_not_define(self):
+        # A mapping to a code that is not in 0085 would put a value in UCM04
+        # that the mock's own dictionary rejects, and only a document that
+        # happened to trigger that mapping would show it.
+        mapped = {code for code, _segment in validate.SET_ERRORS_AS_0085.values()}
+        element = validate.ElementFinding(position=1, component=0, ref="",
+                                          code="", value="", note="")
+        for x12_code in "123456789":
+            mapped.add(
+                dataclasses.replace(element, code=x12_code).edifact_code)
+        self.assertEqual(mapped - set(schema.EDIFACT_SYNTAX_ERRORS), set())
 
 
 class Explaining(unittest.TestCase):
