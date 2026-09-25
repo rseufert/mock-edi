@@ -204,24 +204,47 @@ def latest_shipment(conn: sqlite3.Connection, po_number: str) -> Dict[str, Any]:
 
 def create_shipment(conn: sqlite3.Connection, po_number: str,
                     when: Optional[datetime.datetime] = None) -> Optional[Dict[str, Any]]:
-    """Ship what was confirmed. Nothing confirmed means no shipment at all."""
+    """Pack what has been confirmed and not yet shipped.
+
+    Returns the shipment a despatch advice should name, which is not always a
+    new one. An invoice that comes due before the despatch has to pack the
+    goods so it has something to bill; when the despatch then arrives there is
+    nothing left to pack, and packing it again would give the order two
+    consignments, two bills of lading, and an 856 and an 810 naming different
+    ones. So the existing shipment is returned instead.
+
+    What is packed is the *difference* between confirmed and shipped, not
+    everything confirmed. Today that difference is only ever the whole order
+    or nothing; it is written this way because a quantity raised after
+    despatch should ship a second consignment rather than silently re-ship the
+    first, and that is the shape it will need.
+    """
     moment = when or datetime.datetime.now()
     order = order_row(conn, po_number)
     if order is None:
         return None
     lines = order_lines(conn, po_number)
-    shipping = [row for row in lines if number(row["confirmed"]) > 0]
-    if not shipping:
+
+    if not any(number(row["confirmed"]) > 0 for row in lines):
         conn.execute("UPDATE purchase_order SET status = 'rejected' WHERE po_number = ?",
                      (po_number,))
         conn.commit()
         return None
 
-    units = sum(number(row["confirmed"]) for row in shipping)
+    shipping = [(row, number(row["confirmed"]) - number(row["shipped"]))
+                for row in lines]
+    shipping = [(row, delta) for row, delta in shipping if delta > 0]
+    if not shipping:
+        # Everything confirmed is already packed. Whoever asked wants the
+        # consignment to name, not another one.
+        return latest_shipment(conn, po_number) or None
+
+    units = sum(delta for _row, delta in shipping)
     shipment_id = "SHP%d" % db.next_number(conn, "shipment")
-    for row in shipping:
+    for row, delta in shipping:
         conn.execute("UPDATE order_line SET shipped = ? WHERE po_number = ? AND line = ?",
-                     (row["confirmed"], po_number, row["line"]))
+                     (quantity_text(number(row["shipped"]) + delta),
+                      po_number, row["line"]))
 
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
