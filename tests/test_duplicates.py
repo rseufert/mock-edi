@@ -119,7 +119,7 @@ class ReplayingAnEdifactInterchange(MockServerCase):
         uci = message.find("UCI")
         self.assertEqual(uci.get(1), "9001")     # the reference replayed
         self.assertEqual(uci.get(4), "4")        # this level and all below rejected
-        self.assertEqual(uci.get(5), "27")       # duplicate detected
+        self.assertEqual(uci.get(5), "26")       # duplicate detected
         self.assertEqual(uci.get(6), "UNB")      # the segment at fault
 
     def test_no_ucm_is_given_for_a_refused_envelope(self):

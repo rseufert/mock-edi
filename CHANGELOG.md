@@ -191,6 +191,10 @@ says so where it does.
   now allocate a fresh one per call, and a test that wants a replay asks for
   it by passing the same number twice.
 
+- The `CONTRL` refusing a replayed interchange named the wrong reason: `0085 =
+  27` is "Security function not supported". "Duplicate detected" is `26`, which
+  is what it now carries - so the entry above should read `0085 = 26`.
+
 
 
 
