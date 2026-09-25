@@ -42,6 +42,18 @@ says so where it does.
 
 ### Fixed
 
+- The HTTP layer read `Content-Length` bytes and nothing else, on keep-alive
+  connections with no timeout ([#23]). A chunked body - what an AS2 client
+  streaming a large interchange sends - was answered as empty and its size
+  line then parsed as the next request; `Content-Length: -1` was read until
+  the client hung up; ten gigabytes were read into memory; and a client that
+  sent headers and then nothing held a thread for good. Chunked bodies are now
+  decoded, extensions and trailers included. A length that is not a number is
+  `400`, a body over `--max-body` (16 MiB by default) is `413` before it is
+  read, another transfer coding is `501`, a body that stalls for
+  `--request-timeout` seconds (60) is `408`, and every one of them closes the
+  connection so the next request is not read out of the leftovers.
+
 - A dropped file could be read more than once ([#26]). The poller and
   `POST /_mock/drop/scan` could both read it - two interchanges with the same
   ISA13, eight documents back - and a file that could not be moved into
@@ -562,6 +574,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#23]: https://github.com/rseufert/mock-edi/issues/23
 [#28]: https://github.com/rseufert/mock-edi/issues/28
 [#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
