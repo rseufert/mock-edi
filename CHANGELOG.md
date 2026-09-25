@@ -41,6 +41,18 @@ says so where it does.
 
 ### Changed
 
+- **The HTTP front end answers `HEAD` and `OPTIONS`, refuses bad query
+  values with a 400, and logs its 500s** ([#31]). `HEAD` is a `GET` without
+  the body, which is what a load balancer's liveness probe sends to
+  `/_mock/health`; `OPTIONS` answers `204` with an `Allow` header, before
+  authentication, as a CORS preflight carries none. Both used to be a `501`
+  in HTML. `?seconds=abc` on `/_mock/advance` was a `500` quoting Python; a
+  value that cannot be read is now a `400` with the parameter named in
+  `parameter`. **This changes behaviour:** an unreadable `?limit=` used to
+  fall back to the default silently, and is now refused the same way. A
+  `500` - which is always a bug - now prints its traceback to stderr, where
+  it used to leave only a status line in the access log.
+
 - **The partner control plane refuses what the mock cannot act on** ([#40]).
   It used to accept more than the wire could carry and say nothing: a
   misspelled field was dropped, `{"version": "5010"}` was written into `GS08`
@@ -634,6 +646,8 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#31]: https://github.com/rseufert/mock-edi/issues/31
+
 [#27]: https://github.com/rseufert/mock-edi/issues/27
 
 [#25]: https://github.com/rseufert/mock-edi/issues/25

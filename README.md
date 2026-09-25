@@ -145,6 +145,11 @@ Both are walked through, test by test, in
 | Reset | `POST /_mock/reset` |
 | Index page | `GET /` |
 
+Every `GET` also answers `HEAD`, for a liveness probe, and `OPTIONS` answers
+with the methods the mock takes. A query value that cannot be read -
+`?seconds=abc`, `?limit=ten` - is a `400` naming the parameter. A `500` is
+always a bug: its traceback goes to stderr, even with `-q`.
+
 ## The documents
 
 | Business document | X12 | EDIFACT |
@@ -632,7 +637,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-579 tests, every one of them talking to a real mock over real HTTP. Nothing is
+589 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

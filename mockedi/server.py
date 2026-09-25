@@ -18,12 +18,14 @@ from __future__ import annotations
 
 import datetime
 import json
+import math
 import random
 import socketserver
 import sqlite3
 import sys
 import threading
 import time
+import traceback
 import urllib.parse
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
@@ -36,6 +38,7 @@ from .envelope import EdiSyntaxError
 JSON = "application/json; charset=utf-8"
 TEXT = "text/plain; charset=utf-8"
 HTML = "text/html; charset=utf-8"
+ALLOWED_METHODS = "GET, HEAD, POST, PATCH, PUT, DELETE, OPTIONS"
 
 
 @dataclass
@@ -243,9 +246,37 @@ class Handler(BaseHTTPRequestHandler):
     def do_DELETE(self):
         self._handle("DELETE")
 
+    def do_HEAD(self):
+        # A GET without the body: what a load balancer's or an orchestrator's
+        # liveness probe sends to /_mock/health.
+        self._handle("HEAD")
+
+    def do_OPTIONS(self):
+        # Answered before authentication, as a CORS preflight never carries
+        # credentials. The mock sends no CORS headers of its own.
+        path, _query = _split(self.path)
+        try:
+            # Read and discarded: on a kept-alive connection, a body left
+            # unread would be taken for the next request.
+            self._read_body()
+        except BodyError:
+            self.close_connection = True
+        self.send_response(204)
+        self.send_header("Allow", ALLOWED_METHODS)
+        self.send_header("Content-Length", "0")
+        if self.close_connection:
+            self.send_header("Connection", "close")
+        self.end_headers()
+        if self.config.log_requests:
+            self._log_request_row("OPTIONS", path, 204, 0, 0)
+
+    _head = False
+
     def _handle(self, method: str) -> None:
         started = time.time()
         path, query = _split(self.path)
+        self._head = method == "HEAD"
+        route_method = "GET" if self._head else method
         status = 500
         written = 0
         try:
@@ -268,10 +299,16 @@ class Handler(BaseHTTPRequestHandler):
                     500, "injected failure (--error-rate %s)" % self.config.error_rate)
             else:
                 with self.mock.lock:
-                    status, written = self._route(method, path, query, body)
+                    status, written = self._route(route_method, path, query, body)
         except BrokenPipeError:          # pragma: no cover - client hung up
             return
+        except BadQuery as error:
+            status, written = self._json(400, {"error": str(error),
+                                               "parameter": error.parameter})
         except Exception as error:       # pragma: no cover - last resort
+            # A bug, then, and the one place it can be seen: the access log
+            # has only the status line, so the traceback goes to stderr.
+            traceback.print_exc()
             # Whatever the handler wrote before it failed is undone here, so
             # the request log's commit below cannot commit half of it.
             try:
@@ -604,7 +641,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, {"retried": retried,
                                         "count": len(retried)})
             everything = _flag(query, "all")
-            seconds = float(_first(query, "seconds") or 0)
+            seconds = _number(query, "seconds")
             released = self.mock.pipeline.advance(seconds, everything)
             return self._json(200, {"released": released, "count": len(released)})
 
@@ -626,7 +663,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "unacknowledged":
             return self._json(200, reconcile.unacknowledged(
-                conn, float(_first(query, "older-than") or 0),
+                conn, _number(query, "older-than"),
                 _first(query, "partner"), _limit(query)))
 
         if head == "mdns":
@@ -826,6 +863,8 @@ class Handler(BaseHTTPRequestHandler):
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
+        if self._head:
+            return status, 0
         self.wfile.write(payload)
         return status, len(payload)
 
@@ -923,11 +962,36 @@ def _flag(query: Dict[str, List[str]], name: str) -> bool:
     return value in ("", "1", "true", "yes") and name in query
 
 
-def _limit(query: Dict[str, List[str]], default: int = 50) -> int:
-    try:
-        return max(1, min(1000, int(_first(query, "limit", str(default)))))
-    except ValueError:
+class BadQuery(ValueError):
+    """A query-string value that cannot be read; answered 400, naming it."""
+
+    def __init__(self, parameter: str, message: str):
+        super().__init__(message)
+        self.parameter = parameter
+
+
+def _number(query: Dict[str, List[str]], name: str, default: float = 0.0) -> float:
+    raw = _first(query, name)
+    if raw == "":
         return default
+    try:
+        value = float(raw)
+    except ValueError:
+        value = float("nan")
+    if not math.isfinite(value):
+        raise BadQuery(name, "%s must be a number, got %r" % (name, raw))
+    return value
+
+
+def _limit(query: Dict[str, List[str]], default: int = 50) -> int:
+    raw = _first(query, "limit")
+    if raw == "":
+        return default
+    try:
+        value = int(raw)
+    except ValueError:
+        raise BadQuery("limit", "limit must be a whole number, got %r" % raw) from None
+    return max(1, min(1000, value))
 
 
 def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:

@@ -262,6 +262,55 @@ class EncodedPathSegments(MockServerCase):
         self.assertIn("'PO/NONE'", data["error"])
 
 
+class BadQueryValues(MockServerCase):
+    """A value that cannot be read is the client's mistake: 400, named (#31)."""
+
+    def assertRefused(self, path, parameter):
+        status, _h, data = self.request("POST" if "advance" in path else "GET", path)
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["parameter"], parameter)
+        self.assertIn(parameter, data["error"])
+
+    def test_advance_seconds(self):
+        self.assertRefused("/_mock/advance?seconds=abc", "seconds")
+
+    def test_a_number_that_is_not_finite(self):
+        self.assertRefused("/_mock/advance?seconds=nan", "seconds")
+
+    def test_unacknowledged_older_than(self):
+        self.assertRefused("/_mock/unacknowledged?older-than=soon", "older-than")
+
+    def test_limit(self):
+        self.assertRefused("/_mock/documents?limit=ten", "limit")
+
+    def test_a_good_value_still_works(self):
+        status, _h, data = self.post("/_mock/advance?seconds=1.5")
+        self.assertEqual(status, 200, data)
+
+
+class HeadAndOptions(MockServerCase):
+    """What a liveness probe and a CORS preflight send (#31)."""
+
+    def test_head_is_a_get_without_the_body(self):
+        status, headers, body = self.request("HEAD", "/_mock/health", raw=True)
+        self.assertEqual(status, 200)
+        self.assertEqual(body, b"")
+        _s, _h, full = self.get("/_mock/health", raw=True)
+        self.assertEqual(int(headers["Content-Length"]), len(full))
+
+    def test_head_of_a_missing_path_is_a_404(self):
+        status, _h, body = self.request("HEAD", "/nothing/here", raw=True)
+        self.assertEqual(status, 404)
+        self.assertEqual(body, b"")
+
+    def test_options_lists_the_methods(self):
+        status, headers, body = self.request("OPTIONS", "/_mock/health", raw=True)
+        self.assertEqual(status, 204)
+        self.assertEqual(body, b"")
+        for method in ("GET", "HEAD", "POST", "OPTIONS"):
+            self.assertIn(method, headers["Allow"])
+
+
 class Authentication(MockServerCase):
     config_kwargs = {"basic_auth": "edi:secret"}
 
@@ -280,6 +329,16 @@ class Authentication(MockServerCase):
                                     headers={"Authorization": "Basic " + token})
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "ok")
+
+    def test_a_preflight_is_answered_without_them(self):
+        # A CORS preflight never carries credentials.
+        status, headers, _body = self.request("OPTIONS", "/_mock/health", raw=True)
+        self.assertEqual(status, 204)
+        self.assertIn("GET", headers["Allow"])
+
+    def test_head_is_challenged_like_get(self):
+        status, _h, _body = self.request("HEAD", "/_mock/health", raw=True)
+        self.assertEqual(status, 401)
 
 
 if __name__ == "__main__":
