@@ -194,12 +194,11 @@ class Pipeline:
 
         for (_group, message), message_report in zip(interchange.messages(),
                                                      report.messages):
-            reference = self._record(interchange_id, partner, message,
-                                     message_report, dialect)
+            self._record(interchange_id, partner, message, message_report,
+                         dialect)
             if (message_report.kind == schema.ORDER and message_report.accepted):
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
-                    reference = order.po_number
                     # A buyer may restate a whole order rather than send an
                     # 860, and BEG01 says so. Against an order the mock already
                     # holds that is a change, not a replacement.
@@ -216,7 +215,6 @@ class Pipeline:
                         receipt.orders.append(order.po_number)
             elif (message_report.kind == schema.CHANGE and message_report.accepted):
                 change = transactions.read_change(message, dialect)
-                reference = change.po_number
                 self._apply_change(partner, change, receipt)
             elif (message_report.kind == schema.ACKNOWLEDGMENT
                   and not message_report.envelope_rejected):
@@ -805,7 +803,8 @@ class Pipeline:
 def _reference_of(message, dialect: str, kind: str) -> str:
     """The document number an inbound transaction set is about."""
     if dialect == "X12":
-        for tag, position in (("BEG", 3), ("BAK", 3), ("BIG", 4), ("BSN", 2)):
+        for tag, position in (("BEG", 3), ("BCH", 3), ("BAK", 3), ("BIG", 4),
+                              ("BSN", 2)):
             found = message.find(tag)
             if found is not None:
                 return found.get(position)

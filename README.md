@@ -271,6 +271,14 @@ the sender will not accept an unsigned MDN, so it is answered with a
 read — RFC 4130 asks for a failure here, not an unsigned success the sender
 has already said it cannot use. `=optional` is answered normally.
 
+A body may arrive with a `Content-Length` or chunked, as an AS2 client
+streaming a large interchange sends it. What cannot be read is refused rather
+than guessed at, and the connection is closed so the next request on it is not
+parsed out of the leftovers: a length that is not a number is `400`, a body
+over `--max-body` (16 MiB) is `413` before it is read, another transfer coding
+is `501`, and a body that stops arriving for `--request-timeout` seconds (60)
+is `408`.
+
 ## Making the mock come to you
 
 A partner with no `as2_url` is a mailbox. Give one a URL and the mock stops
@@ -520,6 +528,55 @@ checked but loop *sequence* is not, and conditional requirements ("if PO104 is
 present then PO103 must be") are not modelled. Both would need a rule language
 to express, and the mock would rather leave them out than pretend.
 
+## Configuration
+
+Everything is a command-line flag; `mock-edi --help` prints the same list.
+With none at all the mock is a throwaway partner on `127.0.0.1:8080`, holding
+everything in memory.
+
+**Where it listens and what it keeps**
+
+| Flag | What it is for |
+| --- | --- |
+| `--host ADDRESS` | The bind address (default `127.0.0.1`). `0.0.0.0` to reach it from another machine or a container. |
+| `--port N` | The port (default `8080`). |
+| `--db PATH` | A SQLite file instead of `:memory:`. Partners, orders, the archive and the control-number ranges then survive a restart, and documents left undelivered are picked up again; an older file is upgraded in place when it is opened. |
+| `-q`, `--quiet` | No access log. |
+| `--version` | Print the version and exit. |
+
+**Who the mock is on the wire**
+
+| Flag | What it is for |
+| --- | --- |
+| `--as2-id ID` | Its interchange and AS2 identifier (default `MOCKEDI`): `ISA08`, `UNB` recipient, `AS2-To`. |
+| `--name NAME` | Its company name in `N1` / `NAD` (default `Mock EDI Supply Co`). |
+| `--qualifier Q` | Its interchange id qualifier, `ISA07` (default `ZZ`). |
+
+**How it behaves**
+
+| Flag | What it is for |
+| --- | --- |
+| `--ack-delay`, `--response-delay`, `--despatch-delay`, `--invoice-delay MS` | Hold each document back; see [Timing](#timing). |
+| `--tax-rate RATE` | Tax on invoices, as a fraction: `0.0825` (default `0`). |
+| `--allow-duplicates` | Accept a control number a partner has used before; see [A replayed interchange is refused](#a-replayed-interchange-is-refused). |
+| `--no-mdn` | Never return an MDN, whatever the sender asks for - for testing a client that waits for one. |
+| `--any-receiver` | Accept an interchange addressed to someone other than `--as2-id`. The usual first-run failure is an interchange addressed to the real partner's id; this is the switch for it. |
+| `--compact` | Write documents without a newline after each segment. |
+
+**Trading over a directory** - `--drop-dir`, `--pickup-dir`,
+`--drop-interval-ms` and `--drop-settle-ms`; see
+[Trading over a directory](#trading-over-a-directory).
+
+**Testing the unhappy paths**
+
+| Flag | What it is for |
+| --- | --- |
+| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. |
+| `--latency-ms MS` | Add a delay to every request. |
+| `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
+| `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
+| `--no-request-log` | Keep requests out of the `request_log` table, and out of `/_mock/requests`. |
+
 ## Layout
 
 ```
@@ -551,7 +608,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-556 tests, every one of them talking to a real mock over real HTTP. Nothing is
+568 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

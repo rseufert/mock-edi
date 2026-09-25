@@ -51,6 +51,34 @@ says so where it does.
   always did when filing a read file away, and lists each collision under
   `renamed` in `GET /_mock/drop`.
 
+- **A PO number with a `/` in it could not be reached by URL** ([#25]).
+  The request path was percent-decoded before it was split on `/`, so
+  `GET /_mock/orders/PO%2F2026%2F1` looked for an order called `PO` and no
+  encoding of `PO/2026/1` reached it - though references like that are how
+  many European buyers number orders. The path is now split first and each
+  segment decoded exactly once; the order and partner handlers no longer
+  decode a second time, which turned a literal `%41` into `A`. The request
+  log now records the path as it was sent, still encoded.
+
+- **An inbound 860 was archived with no reference** ([#43]). The reference
+  of an inbound transaction set is read from its beginning segment, and `BCH`
+  was missing from the list, so `GET /_mock/documents?direction=in` showed an
+  860 with an empty reference and `?reference=PO-...` left out the change
+  that order received. It is now filed under the PO number it changes, as
+  `ORDCHG` already was.
+
+- The HTTP layer read `Content-Length` bytes and nothing else, on keep-alive
+  connections with no timeout ([#23]). A chunked body - what an AS2 client
+  streaming a large interchange sends - was answered as empty and its size
+  line then parsed as the next request; `Content-Length: -1` was read until
+  the client hung up; ten gigabytes were read into memory; and a client that
+  sent headers and then nothing held a thread for good. Chunked bodies are now
+  decoded, extensions and trailers included. A length that is not a number is
+  `400`, a body over `--max-body` (16 MiB by default) is `413` before it is
+  read, another transfer coding is `501`, a body that stalls for
+  `--request-timeout` seconds (60) is `408`, and every one of them closes the
+  connection so the next request is not read out of the leftovers.
+
 - A dropped file could be read more than once ([#26]). The poller and
   `POST /_mock/drop/scan` could both read it - two interchanges with the same
   ISA13, eight documents back - and a file that could not be moved into
@@ -571,6 +599,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#23]: https://github.com/rseufert/mock-edi/issues/23
 [#28]: https://github.com/rseufert/mock-edi/issues/28
 [#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
@@ -587,6 +616,10 @@ documents a real one sends.
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
 [#27]: https://github.com/rseufert/mock-edi/issues/27
+
+[#25]: https://github.com/rseufert/mock-edi/issues/25
+
+[#43]: https://github.com/rseufert/mock-edi/issues/43
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
