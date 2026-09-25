@@ -107,13 +107,15 @@ bash examples/demo.sh
 And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
 sends SAP purchase orders as 850s and posts the 855s back into SAP, and
 [`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
-this mock and [mock-sap](https://github.com/rseufert/mock-sap). There is a
-[walkthrough](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration).
+this mock and [mock-sap](https://github.com/rseufert/mock-sap).
 The other half of the same integration lives in mock-sap:
 [`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
 checks this mock's 810 invoices against the purchase order and the 856 ship
 notice before posting them into SAP, and its tests cover a short shipment, a
 price disagreement and the `duplicate-invoice` behaviour.
+
+Both are walked through, test by test, in
+[Testing an SAP-to-EDI Integration Without SAP or a Trading Partner](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration).
 
 ## What it serves
 
@@ -444,3 +446,8 @@ document, so the two mocks make a reasonable pair of ends for testing a
 middleware layer. [`examples/po_bridge.py`](examples/po_bridge.py) is one, and
 mock-sap's [`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
 is another.
+
+[Testing an SAP-to-EDI Integration Without SAP or a Trading Partner](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration)
+uses the two mocks together: purchase orders out and confirmations in, then
+invoices checked against what was ordered and shipped, with the failure modes
+each test exercises.
