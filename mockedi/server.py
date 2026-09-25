@@ -295,6 +295,18 @@ class Handler(BaseHTTPRequestHandler):
             return self._mdn(inbound, body, as2.ERROR,
                              "AS2-To is %r; this mock answers to %r."
                              % (inbound.receiver, self.config.as2_id))
+        if inbound.wants_signed_receipt:
+            # RFC 4130: a receiver that cannot produce the signed receipt the
+            # sender required answers with a failure, not with an unsigned
+            # success the sender has already said it will not accept. The
+            # interchange is not read, for the same reason a refused envelope
+            # is not: the sender has to send it again knowing the terms.
+            return self._mdn(inbound, body, as2.FAILED,
+                             "This mock does not sign: it has no S/MIME and no "
+                             "certificate, and a signature it cannot produce is "
+                             "not one it will pretend to. Ask for "
+                             "signed-receipt-protocol=optional, or put a real "
+                             "AS2 gateway in front of it.")
 
         mic = as2.mic(body, inbound.micalg) if body else ""
         receipts = self.mock.pipeline.receive(
@@ -324,12 +336,13 @@ class Handler(BaseHTTPRequestHandler):
         if inbound.asynchronous:
             cursor = self.mock.conn.execute(
                 "INSERT INTO mdn (partner, direction, original_id, message_id,"
-                " disposition, mic, mode, url, status, payload, at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+                " disposition, mic, mode, url, status, payload, headers, at)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
                 (partner, "out", inbound.message_id, headers["Message-ID"],
                  disposition, as2.mic(body, inbound.micalg) if body else "",
                  "async", inbound.async_url, "pending",
-                 payload.decode("utf-8", "replace"), db.now()))
+                 payload.decode("utf-8", "replace"),
+                 json.dumps(headers), db.now()))
             self.mock.conn.commit()
             self.mock.courier.enqueue_mdn(int(cursor.lastrowid))
             return self._text(202, "MDN will be posted to %s" % inbound.async_url)

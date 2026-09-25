@@ -17,7 +17,10 @@ so documents go out in the order they were queued.
 """
 from __future__ import annotations
 
+import datetime
+import email.utils
 import http.client
+import json
 import queue
 import sqlite3
 import threading
@@ -165,13 +168,7 @@ class Courier:
             row = db.one(conn, "SELECT * FROM mdn WHERE id = ?", (mdn_id,))
             if row is None or row["status"] != "pending" or not row["url"]:
                 return False
-        headers = {
-            "Content-Type": "multipart/report; report-type=disposition-notification",
-            "AS2-Version": as2.AS2_VERSION,
-            "AS2-From": self.config.as2_id,
-            "AS2-To": row["partner"],
-            "Message-ID": row["message_id"],
-        }
+        headers = _mdn_headers(row, self.config.as2_id)
         try:
             status, _headers, _body = self.opener(
                 row["url"], headers, row["payload"].encode("utf-8"), self.timeout)
@@ -226,6 +223,49 @@ def _finish(conn: sqlite3.Connection, outbound_id: int, status: str,
         "UPDATE outbound SET status = ?, delivered_at = ?, delivery = ?, note = ?"
         " WHERE id = ?", (status, db.now(), url, note, outbound_id))
     conn.commit()
+
+
+def _mdn_headers(row, as2_id: str) -> Dict[str, str]:
+    """The headers to post an asynchronous MDN with.
+
+    The ones it was built with, which carry the MIME boundary. Without that
+    parameter a `multipart/report` cannot be parsed by any MIME library, so
+    the partner logs a malformed MDN and the message it acknowledged stays
+    outstanding on their side.
+
+    A row written before those headers were kept - by an older version, into
+    a file database - has the boundary in its body and nowhere else, so it is
+    read back from there rather than guessed at.
+    """
+    try:
+        stored = json.loads(row["headers"] or "{}")
+    except (ValueError, IndexError, KeyError):
+        stored = {}
+    if stored:
+        return dict(stored)
+
+    content_type = "multipart/report; report-type=disposition-notification"
+    boundary = _boundary_of(row["payload"])
+    if boundary:
+        content_type += '; boundary="%s"' % boundary
+    return {
+        "Content-Type": content_type,
+        "AS2-Version": as2.AS2_VERSION,
+        "AS2-From": as2_id,
+        "AS2-To": row["partner"],
+        "Message-ID": row["message_id"],
+        "MIME-Version": "1.0",
+        "Date": email.utils.format_datetime(datetime.datetime.now(
+            datetime.timezone.utc)),
+    }
+
+
+def _boundary_of(payload: str) -> str:
+    """The MIME boundary a rendered multipart body announces in its first line."""
+    for line in (payload or "").splitlines():
+        if line.startswith("--") and not line.endswith("--"):
+            return line[2:].strip()
+    return ""
 
 
 def _record_mdn(conn: sqlite3.Connection, partner: str, direction: str,

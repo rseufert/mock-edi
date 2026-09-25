@@ -247,7 +247,8 @@ Received-Content-MIC: +H1EWvEMSJH/IHGsjy7c/dviFRwLgRoGBmxnTEbMkGA=, sha256
 ```
 
 Name a `Receipt-Delivery-Option` and the response is `202` with the MDN posted
-back to that URL instead.
+back to that URL instead, carrying the headers it was built with — including
+the MIME boundary, without which no MIME library can read it.
 
 **S/MIME is deliberately not implemented.** Signing and encrypting AS2
 payloads needs certificates and a cryptography library, and this project has no
@@ -255,6 +256,12 @@ dependencies on purpose. A message that arrives encrypted or signed is refused
 with an MDN saying exactly that, rather than being mangled. If your integration
 must be tested against signed AS2, this mock is the wrong tool and will tell
 you so on the first message.
+
+That applies to the receipt as well. `signed-receipt-protocol=required` says
+the sender will not accept an unsigned MDN, so it is answered with a
+`failed/Failure` MDN saying the mock cannot sign, and the interchange is not
+read — RFC 4130 asks for a failure here, not an unsigned success the sender
+has already said it cannot use. `=optional` is answered normally.
 
 ## Making the mock come to you
 
@@ -529,7 +536,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-509 tests, every one of them talking to a real mock over real HTTP. Nothing is
+524 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

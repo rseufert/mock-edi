@@ -79,6 +79,18 @@ class Inbound:
         return bool(self.async_url)
 
     @property
+    def wants_signed_receipt(self) -> bool:
+        """Whether the sender *required* a signed receipt, not merely offered.
+
+        `signed-receipt-protocol=optional` says the sender will take an
+        unsigned MDN; `required` says it will not. The mock does not do
+        S/MIME, so the second is a request it has to refuse rather than
+        answer with an unsigned success the sender has said it cannot use.
+        """
+        return bool(re.search(r"signed-receipt-protocol\s*=\s*required",
+                              self.notify_options or "", re.I))
+
+    @property
     def micalg(self) -> str:
         """The digest the sender asked for, defaulting the way AS2 does."""
         found = re.search(r"signed-receipt-micalg\s*=\s*(?:optional|required)\s*,\s*([\w-]+)",
@@ -173,18 +185,26 @@ def build_mdn(inbound: Inbound, payload: bytes, receiver: str,
     machine.append("Disposition: automatic-action/MDN-sent-automatically; %s"
                    % disposition)
 
+    # The human-readable part is written as UTF-8, so it may only call itself
+    # us-ascii and 7bit when it really is. A partner id with a diaeresis in it
+    # is enough to make that a lie, and a strict client acts on the lie.
+    ascii_text = all(ord(char) < 128 for char in text)
+    charset = "us-ascii" if ascii_text else "utf-8"
+    encoding = "7bit" if ascii_text else "8bit"
+
     body = (
         "This is a multi-part message in MIME format.\r\n"
         "\r\n--%(b)s\r\n"
-        "Content-Type: text/plain; charset=us-ascii\r\n"
-        "Content-Transfer-Encoding: 7bit\r\n"
+        "Content-Type: text/plain; charset=%(charset)s\r\n"
+        "Content-Transfer-Encoding: %(encoding)s\r\n"
         "\r\n%(text)s\r\n"
         "\r\n--%(b)s\r\n"
         "Content-Type: message/disposition-notification\r\n"
         "Content-Transfer-Encoding: 7bit\r\n"
         "\r\n%(machine)s\r\n"
         "\r\n--%(b)s--\r\n"
-    ) % {"b": boundary, "text": text, "machine": "\r\n".join(machine)}
+    ) % {"b": boundary, "text": text, "machine": "\r\n".join(machine),
+         "charset": charset, "encoding": encoding}
 
     headers = {
         "Content-Type": 'multipart/report; report-type=disposition-notification; '
