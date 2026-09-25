@@ -580,13 +580,26 @@ def _resolve(stack: List[_Context], tag: str, report: MessageReport,
 
 
 def _finish(context: _Context, report: MessageReport, message: Message) -> None:
-    """Report the mandatory segments a closing loop never received.
+    """Report the mandatory segments and loops a closing context never received.
 
     AK302 wants a position, and a segment that never arrived has none.  The
     trailer's position is the honest answer: by the end of the transaction
     set, it had not been seen.
+
+    A mandatory *loop* counts too, and used not to: the declaration was
+    carried in the dictionary and read by nobody, so an 850 with no PO1 loop -
+    an order for nothing - passed, and an 856 with no HL hierarchy passed with
+    it.
     """
     for child in context.children:
+        if isinstance(child, schema.Loop) and child.req == schema.MANDATORY:
+            if not context.repeats.get(child.id):
+                report.segments.append(SegmentFinding(
+                    tag=child.trigger, position=len(message.segments),
+                    loop=child.id, code="3",
+                    note="the %s loop is mandatory and is missing" % child.id,
+                    severity=FATAL))
+            continue
         if isinstance(child, schema.Use) and child.req == schema.MANDATORY:
             if not context.seen.get(child.tag):
                 report.segments.append(SegmentFinding(
@@ -673,10 +686,17 @@ def _check_value(value: str, element: schema.Element, position: int,
     if element.codes and value not in element.codes:
         out.append(finding("7", "%s is not a code %s accepts (%s)"
                            % (value, label, _some(element.codes))))
+    # A numeric element holding something that is not a number is fatal, not a
+    # note: there is no reading of it to carry forward. Accepting it means the
+    # reader falls back to zero, and a quantity of zero is indistinguishable
+    # from an order for nothing - which is how `PO1*1*lots*EA` became a
+    # backorder with a stock reason that was not true.
     if element.type in ("N0", "N1", "N2") and not _DIGITS.match(value):
-        out.append(finding("6", "%s must be numeric, got %r" % (label, value)))
+        out.append(finding("6", "%s must be numeric, got %r" % (label, value),
+                           FATAL))
     if element.type == "R" and not _DECIMAL.match(value):
-        out.append(finding("6", "%s must be a number, got %r" % (label, value)))
+        out.append(finding("6", "%s must be a number, got %r" % (label, value),
+                           FATAL))
     if element.type == "DT" and parse_date(value) is None:
         out.append(finding("8", "%s is not a valid date: %r" % (label, value)))
     if element.type == "TM" and not _is_time(value):

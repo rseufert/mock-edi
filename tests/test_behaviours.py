@@ -185,6 +185,86 @@ class UnknownItems(MockServerCase):
         self.assertEqual(line["upc"], "076123400003")
 
 
+class LinesThatAskForNothing(MockServerCase):
+    """A quantity of zero or less is refused before any behaviour runs."""
+
+    def test_zero_is_rejected_rather_than_confirmed(self):
+        self.send(x12_order("PO-ZERO", lines=(("WIDGET-001", 0, "12.50"),)))
+        line = self.order("PO-ZERO")["lines"][0]
+        self.assertEqual(line["status"], "IR")
+        self.assertEqual(line["confirmed"], "0")
+        self.assertIn("quantity of 0", line["reason"])
+
+    def test_a_negative_quantity_is_rejected_too(self):
+        self.send(x12_order("PO-NEG", lines=(("WIDGET-001", -5, "12.50"),)))
+        line = self.order("PO-NEG")["lines"][0]
+        self.assertEqual(line["status"], "IR")
+        self.assertEqual(line["confirmed"], "0")
+
+    def test_short_ship_does_not_invent_a_unit(self):
+        """`max(1, ...)` used to confirm one of something nobody ordered."""
+        self.behaviour(ACME, "short-ship")
+        self.send(x12_order("PO-ZERO-SHORT", lines=(("WIDGET-001", 0, "12.50"),)))
+        line = self.order("PO-ZERO-SHORT")["lines"][0]
+        self.assertEqual(line["confirmed"], "0")
+        self.assertEqual(line["status"], "IR")
+
+    def test_short_ship_never_confirms_more_than_was_ordered(self):
+        self.behaviour(ACME, "short-ship")
+        self.send(x12_order("PO-ONE", lines=(("WIDGET-001", 1, "12.50"),)))
+        line = self.order("PO-ONE")["lines"][0]
+        self.assertLessEqual(int(line["confirmed"]), int(line["quantity"]))
+
+    def test_it_is_not_reported_as_a_stock_problem(self):
+        """Zero used to come back `IB` with 4200 in stock."""
+        self.send(x12_order("PO-ZERO2", lines=(("WIDGET-001", 0, "12.50"),)))
+        line = self.order("PO-ZERO2")["lines"][0]
+        self.assertNotEqual(line["status"], "IB")
+        self.assertNotIn("stock", line["reason"])
+
+    def test_nothing_is_shipped_against_it(self):
+        self.send(x12_order("PO-ZERO3", lines=(("WIDGET-001", 0, "12.50"),)))
+        order = self.order("PO-ZERO3")
+        self.assertEqual(order["shipments"], [])
+        self.assertEqual(order["status"], "rejected")
+
+    def test_a_good_line_beside_it_is_unaffected(self):
+        self.send(x12_order("PO-MIXED", lines=(("WIDGET-001", 0, "12.50"),
+                                               ("BRKT-050", 40, "4.15"))))
+        lines = self.order("PO-MIXED")["lines"]
+        self.assertEqual([l["status"] for l in lines], ["IR", "IA"])
+        self.assertEqual(lines[1]["confirmed"], "40")
+
+
+class WhenTwoRulesApply(MockServerCase):
+    """The stock cap outranks the price rule, and says so."""
+
+    def test_a_line_both_short_and_mispriced_reports_the_shortfall(self):
+        # GEAR-200 has 60 in stock and is priced 14.25.
+        self.send(x12_order("PO-BOTH", lines=(("GEAR-200", 500, "99.99"),)))
+        line = self.order("PO-BOTH")["lines"][0]
+        self.assertEqual(line["status"], "IQ")
+        self.assertEqual(line["confirmed"], "60")
+
+    def test_and_names_the_price_rather_than_changing_it_in_silence(self):
+        self.send(x12_order("PO-BOTH2", lines=(("GEAR-200", 500, "99.99"),)))
+        line = self.order("PO-BOTH2")["lines"][0]
+        self.assertIn("14.25", line["reason"])
+        self.assertIn("99.99", line["reason"])
+        self.assertEqual(line["price"], "14.25")
+
+    def test_the_reason_reaches_the_855(self):
+        self.send(x12_order("PO-BOTH3", lines=(("GEAR-200", 500, "99.99"),)))
+        message = self.document(ACME, "response").groups[0].messages[0]
+        reason = [r for r in message.find_all("REF") if r.get(1) == "ZZ"][0]
+        self.assertIn("14.25", reason.get(3))
+
+    def test_a_price_disagreement_alone_is_still_ip(self):
+        self.send(x12_order("PO-PRICE-ONLY", lines=(("WIDGET-001", 10, "99.99"),)))
+        line = self.order("PO-PRICE-ONLY")["lines"][0]
+        self.assertEqual(line["status"], "IP")
+
+
 class StockLimits(MockServerCase):
     def test_a_line_larger_than_stock_is_confirmed_short_by_any_partner(self):
         # GEAR-200 is seeded with 60 in stock.

@@ -144,6 +144,49 @@ class Trailers(unittest.TestCase):
                             for note in notes(report)))
 
 
+class OrdersThatAskForNothing(unittest.TestCase):
+    """An 850 with no lines is not an order, and the dictionary now says so."""
+
+    def test_an_850_with_no_po1_loop_is_rejected(self):
+        report = check([seg("BEG", "00", "SA", "PO4711", "", "20260924"),
+                        seg("CTT", "0")])
+        self.assertFalse(report.messages[0].accepted)
+        self.assertIn("the PO1 loop is mandatory and is missing", notes(report))
+
+    def test_the_004010_standard_agrees(self):
+        from mockedi import schema
+        self.assertEqual(schema.X12_850.loop_for("PO1").req, schema.MANDATORY)
+
+    def test_a_mandatory_loop_is_checked_wherever_one_is_declared(self):
+        """The declaration used to be carried and read by nobody."""
+        report = check([seg("BSN", "00", "SH1", "20260924", "1030", "0004"),
+                        seg("CTT", "0")], code="856")
+        self.assertFalse(report.messages[0].accepted)
+        self.assertIn("the HL loop is mandatory and is missing", notes(report))
+
+    def test_one_line_is_enough(self):
+        report = check(GOOD)
+        self.assertTrue(report.clean, notes(report))
+
+
+class NumbersThatAreNotNumbers(unittest.TestCase):
+    """A numeric element holding prose cannot be carried forward."""
+
+    def test_a_non_numeric_quantity_is_fatal(self):
+        report = check([GOOD[0],
+                        seg("PO1", "1", "ten", "EA", "1.00", "", "VP", "W")])
+        self.assertFalse(report.messages[0].accepted)
+
+    def test_a_non_numeric_count_is_fatal_too(self):
+        report = check(GOOD[:2] + [seg("CTT", "lots")])
+        self.assertFalse(report.messages[0].accepted)
+
+    def test_a_bad_code_is_still_only_noted(self):
+        """Not everything wrong is fatal; a receiver can work around a code."""
+        report = check([seg("BEG", "ZZ", "SA", "P", "", "20260924")] + GOOD[1:])
+        self.assertTrue(report.messages[0].accepted)
+
+
 class Severity(unittest.TestCase):
     def test_a_soft_finding_is_accepted_with_errors(self):
         report = check([seg("BEG", "ZZ", "SA", "P", "", "20260924")] + GOOD[1:])

@@ -11,9 +11,16 @@ from mockedi.envelope import seg
 GOOD = [seg("BEG", "00", "SA", "PO4711", "", "20260924"),
         seg("PO1", "1", "10", "EA", "12.50", "", "VP", "WIDGET-001"),
         seg("CTT", "1")]
+# Findings that are noted but do not reject: an unknown code in BEG01 and an
+# unknown unit in PO103. A receiver can still read the document.
 BAD = [seg("BEG", "ZZ", "SA", "PO4711", "", "20260924"),
-       seg("PO1", "1", "ten", "EA", "12.50", "", "VP", "WIDGET-001"),
+       seg("PO1", "1", "10", "XX", "12.50", "", "VP", "WIDGET-001"),
        seg("CTT", "1")]
+# A finding that rejects: a quantity that is not a number has no reading to
+# carry forward, so there is nothing to accept.
+UNREADABLE = [seg("BEG", "00", "SA", "PO4711", "", "20260924"),
+              seg("PO1", "1", "ten", "EA", "12.50", "", "VP", "WIDGET-001"),
+              seg("CTT", "1")]
 
 
 def x12_997(body, control="0001", group="88"):
@@ -56,6 +63,13 @@ class FunctionalAcknowledgment(unittest.TestCase):
         self.assertEqual(ak3[0].get(4), "8")        # has data element errors
         self.assertEqual(ak4[0].get(3), "7")        # invalid code value
         self.assertEqual(ak4[0].get(4), "ZZ")       # a copy of the bad data
+
+    def test_a_quantity_that_is_not_a_number_rejects_the_set(self):
+        """There is no reading of `ten` to carry forward, so nothing to accept."""
+        segments, _report = x12_997(UNREADABLE)
+        self.assertEqual(by_tag(segments, "AK5")[0].get(1), "R")
+        ak4 = [s for s in by_tag(segments, "AK4") if s.get(4) == "ten"]
+        self.assertEqual(ak4[0].get(3), "6")        # invalid character
 
     def test_ak3_carries_the_loop_identifier(self):
         segments, _report = x12_997(BAD)
@@ -147,6 +161,12 @@ class Explaining(unittest.TestCase):
         lines = ack.explain(validate.validate(interchange))
         self.assertIn("850/0001: accepted, with findings", lines)
         self.assertTrue(any("BEG at segment 2" in line for line in lines))
+
+    def test_a_rejected_set_says_so(self):
+        interchange = x12.wrap([x12.message("850", "0001", UNREADABLE)], "ACME",
+                               "MOCKEDI", "1", "1", "PO")
+        lines = ack.explain(validate.validate(interchange))
+        self.assertIn("850/0001: rejected", lines)
 
     def test_a_clean_document_says_so_and_no_more(self):
         interchange = x12.wrap([x12.message("850", "0001", GOOD)], "ACME",
