@@ -30,6 +30,15 @@ says so where it does.
   X12 is not checked yet: every 005010 set is read against the 004010
   dictionary until [#46] makes it version-aware.
 
+- A comma decimal mark declared in `UNA` is now honoured ([#53]). It was read
+  and then ignored, so `UNA:+,? '` with `PRI+AAA:12,50'` - what German and
+  Scandinavian partners send, and legal under ISO 9735 - was reported as
+  "must be a number"; and an interchange written with `decimal=","` declared a
+  comma in `UNA` and then wrote every number with a point. The mark is now
+  translated in numeric (`R`) elements only, found through the dictionary, so
+  a comma in a description is left alone. A point where `UNA` declares a comma
+  is still accepted, as ISO 9735 allows either in data.
+
 ## [0.2.1] - 2026-09-25
 
 No change to the package itself: the PyPI Homepage link now points at the
@@ -221,6 +230,7 @@ documents a real one sends.
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#50]: https://github.com/rseufert/mock-edi/issues/50
+[#53]: https://github.com/rseufert/mock-edi/issues/53
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
