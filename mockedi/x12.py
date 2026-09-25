@@ -93,6 +93,7 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
         ack_requested=head.get(14) == "1",
         test=head.get(15) == "T",
         delimiters=delims,
+        header=head,
     )
 
     group: Optional[Group] = None
@@ -103,9 +104,11 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
         if tag == "GS":
             group = Group(functional_id=item.get(1), sender=item.get(2),
                           receiver=item.get(3), date=item.get(4), time=item.get(5),
-                          control=item.get(6), version=item.get(8))
+                          control=item.get(6), version=item.get(8), header=item)
             interchange.groups.append(group)
         elif tag == "GE":
+            if group is not None:
+                group.trailer = item
             group = None
         elif tag == "ST":
             if group is None:
@@ -125,6 +128,7 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
                 message.segments.append(item)
                 message = None
         elif tag == "IEA":
+            interchange.trailer = item
             break
         elif message is not None:
             position += 1
@@ -167,16 +171,21 @@ def wrap(messages: Sequence[Message], sender: str, receiver: str,
         delimiters=delimiters or X12_DEFAULTS, groups=[group])
 
 
-def render(interchange: Interchange, newline: bool = False) -> str:
+def render(interchange: Interchange, newline: bool = False,
+           preamble: Sequence[Seg] = ()) -> str:
     """The interchange as it goes on the wire.
 
     `newline` puts each segment on its own line.  No receiver needs that - the
     terminator already ends the segment - but every human reading a captured
     document does, and a parser that cannot cope with it is broken anyway.
+
+    `preamble` is written between ISA and the first GS, which is where a TA1
+    goes: it answers for an envelope, so it sits in one and not in a group.
     """
     delims = interchange.delimiters
     out: List[str] = []
     out.append(_render_isa(interchange))
+    out.extend(render_segment(item, delims) for item in preamble)
     groups = 0
     for group in interchange.groups:
         groups += 1

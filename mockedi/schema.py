@@ -665,7 +665,9 @@ AK9 = Segment("AK9", "Functional Group Response Trailer", (
     _e("97", "Number of Transaction Sets Included", "N0", 1, 6, MANDATORY),
     _e("123", "Number of Received Transaction Sets", "N0", 1, 6, MANDATORY),
     _e("2", "Number of Accepted Transaction Sets", "N0", 1, 6, MANDATORY),
-    _e("716", "Functional Group Syntax Error Code", "ID", 1, 3, OPTIONAL, GROUP_ERROR_CODES),
+    # AK905-AK909: up to five reasons the group itself was refused.
+    *(_e("716", "Functional Group Syntax Error Code", "ID", 1, 3, OPTIONAL,
+         GROUP_ERROR_CODES) for _ in range(5)),
 ), "The verdict on the group, and the counts that prove it adds up.")
 
 
@@ -677,6 +679,31 @@ AK9 = Segment("AK9", "Functional Group Response Trailer", (
 # it before it knows anything else.  That is why ISA16 declares the component
 # separator and, from 00501, ISA11 declares the repetition separator.
 # ---------------------------------------------------------------------------
+
+INTERCHANGE_NOTE_CODES = {  # I18, in TA105
+    "000": "No error",
+    "001": "The Interchange Control Number in the Header and Trailer Do Not Match",
+    "005": "Invalid Interchange ID Qualifier for Sender",
+    "006": "Invalid Interchange Sender ID",
+    "007": "Invalid Interchange ID Qualifier for Receiver",
+    "008": "Invalid Interchange Receiver ID",
+    "010": "Invalid Authorization Information Qualifier Value",
+    "011": "Invalid Authorization Information Value",
+    "012": "Invalid Security Information Qualifier Value",
+    "013": "Invalid Security Information Value",
+    "014": "Invalid Interchange Date Value",
+    "015": "Invalid Interchange Time Value",
+    "016": "Invalid Interchange Standards Identifier Value",
+    "017": "Invalid Interchange Version ID Value",
+    "018": "Invalid Interchange Control Number Value",
+    "019": "Invalid Acknowledgment Requested Value",
+    "020": "Invalid Test Indicator Value",
+    "021": "Invalid Number of Included Groups Value",
+    "023": "Improper (Premature) End-of-File (Transmission)",
+    "024": "Invalid Interchange Content",
+    "025": "Duplicate Interchange Control Number",
+    "027": "Invalid Component Element Separator",
+}
 
 ISA = Segment("ISA", "Interchange Control Header", (
     _e("I01", "Authorization Information Qualifier", "ID", 2, 2, MANDATORY,
@@ -737,9 +764,7 @@ TA1 = Segment("TA1", "Interchange Acknowledgment", (
         "E": "The Transmitted Interchange Control Structure Header and Trailer Have Been Received and Are Accepted But Errors Are Noted",
         "R": "The Transmitted Interchange Control Structure Header and Trailer are Rejected Because of Errors"}),
     _e("I18", "Interchange Note Code", "ID", 3, 3, MANDATORY,
-       {"000": "No error", "001": "The Interchange Control Number in the Header and Trailer Do Not Match",
-        "024": "Invalid Interchange Content", "025": "Duplicate Interchange Control Number",
-        "021": "Invalid Number of Included Groups Value"}),
+       INTERCHANGE_NOTE_CODES),
 ), "Acknowledges the envelope itself, before anything inside it is read.")
 
 
@@ -1003,6 +1028,8 @@ EDIFACT_SYNTAX_ERRORS = {  # 0085, in CONTRL
     "12": "Invalid value", "13": "Missing",
     "14": "Value not supported in this position",
     "15": "Not supported in this position", "16": "Too many constituents",
+    "28": "References do not match", "29": "Control count does not match "
+    "number of instances received",
     "35": "Too many data element or segment repetitions",
     "36": "Too many segment group repetitions",
 }
@@ -1322,6 +1349,12 @@ UCI = Segment("UCI", "Interchange Response", (
     ), MANDATORY),
     _e("0083", "Action code", "ID", 1, 3, MANDATORY, EDIFACT_ACTION_CODES),
     _e("0085", "Syntax error code", "ID", 1, 3, OPTIONAL, EDIFACT_SYNTAX_ERRORS),
+    _e("0013", "Service segment tag", "ID", 3, 3),
+    _c("S011", "Data Element Identification", (
+        _e("0098", "Erroneous data element position in segment", "N0", 1, 3,
+           MANDATORY),
+        _e("0104", "Erroneous component data element position", "N0", 1, 3),
+    )),
 ), "The verdict on the interchange as a whole.")
 
 UCM = Segment("UCM", "Message Response", (
@@ -1504,6 +1537,10 @@ RESPONSE = "response"
 DESPATCH = "despatch"
 INVOICE = "invoice"
 ACKNOWLEDGMENT = "acknowledgment"
+# Not a transaction set: X12's TA1 sits between ISA and IEA on its own and
+# answers for the envelope. It has no counterpart in EDIFACT, where UCI in the
+# CONTRL does the same job. Which is why it is not one of the KINDS.
+INTERCHANGE_ACKNOWLEDGMENT = "interchange-acknowledgment"
 
 KINDS = (ORDER, CHANGE, CHANGE_RESPONSE, RESPONSE, DESPATCH, INVOICE,
          ACKNOWLEDGMENT)
