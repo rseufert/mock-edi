@@ -8,8 +8,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
+from mockedi import edifact, x12
+
 from support import (ACME, EURODIS, MockServerCase, acknowledge, edifact_order,
-                     x12_order)
+                     parse, x12_order)
 
 
 class AcknowledgingAnX12Document(MockServerCase):
@@ -81,6 +83,66 @@ class AcknowledgingAnX12Document(MockServerCase):
         _status, _headers, rows = self.get("/_mock/documents?direction=in&code=997")
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0]["kind"], "acknowledgment")
+
+
+class NotAcknowledgingAnAcknowledgment(MockServerCase):
+    """A 997 is never answered with a 997, nor a CONTRL with a CONTRL.
+
+    Two systems that both did so would answer each other for ever. What an
+    acknowledgment *is* still read: it marks the document it names.
+    """
+
+    EDIFACT = {"Content-Type": "application/edifact"}
+
+    def test_a_997_is_read_and_not_answered(self):
+        self.send(x12_order("PO-QUIET"))
+        response = [r for r in self.mailbox(ACME, leave=False) if r["code"] == "855"][0]
+        summary = self.send(acknowledge(response["payload"], "A"))
+        self.assertEqual(summary["queued"], [])
+        self.assertTrue(summary["acknowledged"][0]["matched"])
+        self.assertEqual(self.mailbox(ACME), [])
+
+    def test_the_po_group_beside_an_fa_group_still_gets_its_997(self):
+        self.send(x12_order("PO-MIXED-1"))
+        response = [r for r in self.mailbox(ACME, leave=False) if r["code"] == "855"][0]
+        both = parse(x12_order("PO-MIXED-2"))
+        both.groups.extend(parse(acknowledge(response["payload"], "A")).groups)
+        summary = self.send(x12.render(both))
+        self.assertEqual([q["code"] for q in summary["queued"]][:2], ["997", "855"])
+        answers = [parse(r["payload"]) for r in self.mailbox(ACME, "acknowledgment")]
+        self.assertEqual([m.find("AK1").get(1) for a in answers
+                          for _g, m in a.messages()], ["PO"])
+
+    def test_a_ta1_asked_for_is_still_sent(self):
+        # The envelope is answered even when what it carries is not.
+        self.send(x12_order("PO-TA1-ACK"))
+        response = [r for r in self.mailbox(ACME, leave=False) if r["code"] == "855"][0]
+        ack = parse(acknowledge(response["payload"], "A"))
+        ack.ack_requested = True
+        summary = self.send(x12.render(ack))
+        self.assertEqual([q["code"] for q in summary["queued"]], ["TA1"])
+
+    def test_a_contrl_is_read_and_not_answered(self):
+        self.send(edifact_order("PO-QUIET-E"), headers=self.EDIFACT)
+        response = [r for r in self.mailbox(EURODIS, leave=False)
+                    if r["code"] == "ORDRSP"][0]
+        summary = self.send(acknowledge(response["payload"], "A"),
+                            headers=self.EDIFACT)
+        self.assertEqual(summary["queued"], [])
+        self.assertTrue(summary["acknowledged"][0]["matched"])
+
+    def test_a_contrl_travelling_with_an_orders_is_left_out_of_the_answer(self):
+        self.send(edifact_order("PO-MIXED-E1"), headers=self.EDIFACT)
+        response = [r for r in self.mailbox(EURODIS, leave=False)
+                    if r["code"] == "ORDRSP"][0]
+        both = parse(edifact_order("PO-MIXED-E2"))
+        both.groups[0].messages.extend(
+            parse(acknowledge(response["payload"], "A")).groups[0].messages)
+        summary = self.send(edifact.render(both), headers=self.EDIFACT)
+        self.assertEqual([q["code"] for q in summary["queued"]][:2],
+                         ["CONTRL", "ORDRSP"])
+        contrl = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
+        self.assertEqual([u.comp(2, 1) for u in contrl.find_all("UCM")], ["ORDERS"])
 
 
 class AcknowledgingAnEdifactDocument(MockServerCase):

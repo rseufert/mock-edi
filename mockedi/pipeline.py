@@ -335,15 +335,28 @@ class Pipeline:
                 # Nothing inside a refused envelope was read, so there is no
                 # group to acknowledge. The TA1 is the whole answer.
                 return
+            answers_itself = schema.lookup("X12", schema.set_code(
+                "X12", schema.ACKNOWLEDGMENT)).group
             for functional_id, control, version, messages in ack.group_reports(
                     interchange, report):
+                if functional_id == answers_itself:
+                    # A 997 is never acknowledged with a 997: two systems that
+                    # both did so would answer each other for ever.
+                    continue
                 body = ack.functional_acknowledgment(
                     functional_id, control, version, messages,
                     report.group_errors.get((functional_id, control), []))
                 self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                            receipt, moment, delay, dialect="X12")
         else:
-            body = ack.syntax_report(interchange, report, report.messages)
+            # Nor is a CONTRL answered by a CONTRL. One travelling with
+            # business messages is left out of the UCMs; an interchange of
+            # nothing else gets no answer at all.
+            messages = [m for m in report.messages
+                        if m.kind != schema.ACKNOWLEDGMENT]
+            if report.messages and not messages:
+                return
+            body = ack.syntax_report(interchange, report, messages)
             self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                        receipt, moment, delay, dialect="EDIFACT")
 

@@ -42,6 +42,13 @@ says so where it does.
 
 ### Fixed
 
+- An inbound 997 was answered with a 997, and a CONTRL with a CONTRL
+  ([#34]) - which the standards forbid, because two systems that both do it
+  answer each other for ever. A functional group of `FA` is now read and not
+  acknowledged, and a CONTRL is left out of the answer to the interchange it
+  travels in; an interchange carrying nothing else gets no acknowledgment. A
+  `TA1` asked for by `ISA14` is still sent: that answers the envelope.
+
 - A partner id could contain a path ([#24]): `../../trav` was accepted, and
   its documents were written two directories above `--pickup-dir`. An id may
   now use only letters, digits, and `.`, `-` or `_` between them - narrower
@@ -451,6 +458,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#34]: https://github.com/rseufert/mock-edi/issues/34
 [#24]: https://github.com/rseufert/mock-edi/issues/24
 [#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
