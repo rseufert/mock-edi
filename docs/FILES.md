@@ -53,7 +53,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | Covers |
 | --- | --- |
-| `support.py` | The shared harness, not a test module: `MockServerCase` starts a server on an ephemeral port in a background thread, resets it between tests, and provides `send`/`mailbox`/`document`/`order`/`behaviour` helpers, plus builders for X12 and EDIFACT orders. |
+| `support.py` | The shared harness, not a test module: `MockServerCase` starts a server on an ephemeral port in a background thread, resets it between tests, and provides `send`/`mailbox`/`document`/`order`/`behaviour` helpers, plus builders for X12 and EDIFACT orders. Every request it makes times out after `REQUEST_TIMEOUT` seconds, and setting `MOCKEDI_TEST_WATCHDOG` to a number of seconds dumps every thread's stack and exits if the run is still going then - CI sets it, so a hang shows where it is. |
 | `test_envelope.py` | Dialect sniffing, segment and element splitting, EDIFACT's release character round-tripping, trailing-element trimming, the 1-based accessors, and date parsing including the two-digit-year window. |
 | `test_x12.py` | The fixed-width ISA (106 characters, padded identifiers, ISA11 differing between 00401 and 00501), delimiters learned from the document rather than assumed, group and transaction-set structure, and the trailer counts. |
 | `test_edifact.py` | UNA written and read back, unusual punctuation, composites, delimiters escaped inside values, the implicit group, and message versions from UNH. |

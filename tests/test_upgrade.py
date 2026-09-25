@@ -23,7 +23,7 @@ sys.path.insert(0, HERE)
 from mockedi import db
 from mockedi.server import Config, make_server
 
-from support import x12_order
+from support import REQUEST_TIMEOUT, x12_order
 
 OLD_SCHEMA = os.path.join(HERE, "fixtures", "schema-0.1.0.sql")
 
@@ -73,7 +73,7 @@ class From010(FileDatabase):
         request = urllib.request.Request(
             base + "/edi", data=x12_order("PO-AFTER-UPGRADE").encode(),
             method="POST")
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             summary = json.loads(response.read())
         self.assertEqual(summary["orders"], ["PO-AFTER-UPGRADE"])
         self.assertEqual([q["code"] for q in summary["queued"]],
