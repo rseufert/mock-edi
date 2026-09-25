@@ -404,6 +404,29 @@ class AnOrderRestatedAsAChange(MockServerCase):
         self.assertEqual(self.order("PO-BRAND-NEW")["lines"][0]["quantity"], "100")
 
 
+class TheChangeIsFiledUnderItsOrder(MockServerCase):
+    """An inbound change is archived with the PO number it changes (#43)."""
+    config_kwargs = WINDOW
+
+    def references(self, code):
+        _s, _h, rows = self.get("/_mock/documents?direction=in&code=" + code)
+        return [row["reference"] for row in rows]
+
+    def test_an_860_is_found_by_its_purchase_order(self):
+        self.send(x12_order("PO-REF"))
+        self.send(x12_change("PO-REF", [("1", "CA", 60, "12.50")]))
+        self.assertEqual(self.references("860"), ["PO-REF"])
+        _s, _h, rows = self.get("/_mock/documents?direction=in&reference=PO-REF")
+        self.assertEqual(sorted(row["code"] for row in rows), ["850", "860"])
+
+    def test_an_ordchg_is_found_by_its_purchase_order(self):
+        self.send(edifact_order("PO-E-REF"),
+                  headers={"Content-Type": "application/edifact"})
+        self.send(edifact_change("PO-E-REF", [("1", "3", 60, "12.50")]),
+                  headers={"Content-Type": "application/edifact"})
+        self.assertEqual(self.references("ORDCHG"), ["PO-E-REF"])
+
+
 class TheEdifactSide(MockServerCase):
     config_kwargs = WINDOW
 

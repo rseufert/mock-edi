@@ -42,6 +42,13 @@ says so where it does.
 
 ### Fixed
 
+- **An inbound 860 was archived with no reference** ([#43]). The reference
+  of an inbound transaction set is read from its beginning segment, and `BCH`
+  was missing from the list, so `GET /_mock/documents?direction=in` showed an
+  860 with an empty reference and `?reference=PO-...` left out the change
+  that order received. It is now filed under the PO number it changes, as
+  `ORDCHG` already was.
+
 - The HTTP layer read `Content-Length` bytes and nothing else, on keep-alive
   connections with no timeout ([#23]). A chunked body - what an AS2 client
   streaming a large interchange sends - was answered as empty and its size
@@ -590,6 +597,7 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#43]: https://github.com/rseufert/mock-edi/issues/43
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
