@@ -13,14 +13,23 @@ to be true on the hundredth run as well as the first.
 
 Line status is decided in this order, and the first rule that fires wins:
 
-1. **The item is not in the catalogue.**  `IR`, whatever the behaviour says.
-   This is the most common real rejection and it outranks everything.
-2. **The partner's behaviour.**  `reject-all` refuses the order, `reject-line`
+1. **The line does not ask for anything.**  A quantity of zero or less is
+   `IR`, before any behaviour runs.  Nothing downstream can make sense of it,
+   and every alternative is worse: confirming it promises goods nobody
+   ordered, and backordering it reports a stock problem that does not exist.
+2. **The item is not in the catalogue.**  `IR`, whatever the behaviour says.
+   This is the most common real rejection.
+3. **The partner's behaviour.**  `reject-all` refuses the order, `reject-line`
    refuses the last line, `short-ship` confirms less than was ordered.
-3. **The price disagrees.**  The seller bills its own price, and says so with
+4. **There is not enough stock.**  Confirmed is capped at what is on hand,
+   which is `IQ` when it falls short and `IB` when there is none at all.
+   This cap applies whatever the behaviour, and it outranks the price rule -
+   so a line that is both short *and* mispriced is reported `IQ`, with the
+   price named in its reason rather than changed in silence.
+5. **The price disagrees.**  The seller bills its own price, and says so with
    `IP`.  Price discrepancies are the commonest EDI dispute there is, and a
    mock that always agreed with the buyer would never let you test one.
-4. Otherwise `IA`, accepted as ordered.
+6. Otherwise `IA`, accepted as ordered.
 """
 from __future__ import annotations
 
@@ -115,6 +124,16 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
         scheduled = (when.date() + datetime.timedelta(
             days=int(item["lead_days"]) if item else 3)).isoformat()
 
+        if line.quantity <= 0:
+            # Before anything else, including the catalogue: a line asking for
+            # nothing cannot be confirmed, short-shipped or backordered, and
+            # pretending otherwise puts a quantity nobody ordered on a
+            # despatch advice.
+            out.append((REJECTED, Decimal("0"), line.price,
+                        "A quantity of %s was ordered; nothing can be supplied "
+                        "against it" % quantity_text(line.quantity), ""))
+            continue
+
         if item is None:
             out.append((REJECTED, Decimal("0"), line.price,
                         "%s is not in the catalogue" % (line.sku or line.upc or "the item"),
@@ -139,7 +158,10 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             confirmed = min(line.quantity, stock)
             if confirmed >= line.quantity:
                 confirmed = (line.quantity * SHORT_SHIP_FRACTION).to_integral_value()
-            confirmed = max(Decimal("1"), confirmed)
+            # At least one, but never more than was asked for: rounding a
+            # fraction of a single unit down to zero would report a stock
+            # problem, and rounding it up would ship more than the order.
+            confirmed = max(Decimal("1"), min(confirmed, line.quantity))
         elif stock < line.quantity:
             confirmed = stock
 
@@ -151,6 +173,12 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             status = SHORT
             reason = "Confirmed %s of %s; the balance is not available" % (
                 quantity_text(confirmed), quantity_text(line.quantity))
+            if line.price and line.price != price:
+                # Both apply, and a line carries one status code. Say the
+                # other one out loud rather than changing the price in
+                # silence - a buyer reconciling the invoice needs to know.
+                reason += "; priced at %s, the order said %s" % (
+                    db.money(price), db.money(line.price))
         elif line.price and line.price != price:
             status = PRICE_CHANGED
             reason = "Priced at %s, the order said %s" % (

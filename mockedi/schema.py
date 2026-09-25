@@ -801,7 +801,7 @@ X12_850 = TransactionSet("850", "Purchase Order", "X12", (
         Use(DTM, max_use=10),
         Use(SAC, max_use=25),
         _address_loop(),
-    ), OPTIONAL, 100000),
+    ), MANDATORY, 100000),
     Use(CTT),
     Use(SE, MANDATORY),
 ), group="PO", version="004010", line_number=("PO1", 1),

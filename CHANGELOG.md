@@ -122,6 +122,31 @@ says so where it does.
   there is nothing left to pack. Whichever way round the delays are set, an
   order has one shipment and both documents name it.
 
+- **`decide()` confirmed quantities nobody ordered** ([#39]). A line for zero
+  or a negative quantity was confirmed `IA 1` under `short-ship`, because the
+  floor of one unit was applied without looking at what was asked for; under
+  `accept` it came back `IB "out of stock"` with four thousand in stock. A
+  quantity of zero or less is now `IR` before any behaviour runs, and
+  `short-ship` never confirms more than was ordered.
+
+- **A quantity that is not a number is now fatal** ([#39]). `PO1*1*lots*EA`
+  was a note rather than a rejection, the reader fell back to zero, and the
+  order came back as a backorder with a stock reason that was not true. There
+  is no reading of `lots` to carry forward, so there is nothing to accept.
+
+- **An 850 with no lines was accepted and then contradicted itself** ([#39]).
+  The 855 said `AD`, accepted with no change, while the stored order said
+  `rejected`. The PO1 loop is mandatory in 004010 and is now declared so -
+  and mandatory *loops* are now enforced at all, which they never were: the
+  requirement was carried in the dictionary and read by nobody, so an 856
+  with no HL hierarchy passed too.
+
+- **The stock cap was an undocumented precedence rule** ([#39]). It outranks
+  the price rule, so a line both short and mispriced reported only `IQ` and
+  changed the price in silence. The cap is now in the precedence list in both
+  the code and the README, and such a line names the price in its reason.
+
+
 
 ## [0.2.1] - 2026-09-25
 
@@ -311,6 +336,7 @@ documents a real one sends.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#36]: https://github.com/rseufert/mock-edi/issues/36
+[#39]: https://github.com/rseufert/mock-edi/issues/39
 [#40]: https://github.com/rseufert/mock-edi/issues/40
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2

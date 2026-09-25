@@ -195,12 +195,20 @@ to something the partner could never be found by.
 | `duplicate-invoice` | Sends the invoice twice with the same invoice number, as a partner with a retry bug does. |
 | `strict` | Rejects a transaction set for any finding, not only a fatal one. |
 
-Two rules apply whatever the behaviour says, because they are what real
-sellers actually do:
+Some rules apply whatever the behaviour says, because they are what real
+sellers actually do. The first that fires wins:
 
-- an item that is not in the catalogue is rejected (`IR`), and
-- a price the seller disagrees with is billed at the seller's price and
-  flagged `IP`. Price discrepancies are the commonest EDI dispute there is.
+1. **A quantity of zero or less is rejected** (`IR`). Nothing downstream can
+   make sense of a line that asks for nothing.
+2. **An item that is not in the catalogue is rejected** (`IR`). The most
+   common real rejection there is.
+3. The partner's behaviour, above.
+4. **Confirmed is capped at what is in stock** — `IQ` when it falls short,
+   `IB` when there is none. This cap outranks the price rule, so a line that
+   is both short *and* mispriced comes back `IQ` with the price named in its
+   reason rather than changed in silence.
+5. **A price the seller disagrees with is billed at the seller's price** and
+   flagged `IP`. Price discrepancies are the commonest EDI dispute there is.
 
 ## Timing
 
