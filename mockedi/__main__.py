@@ -2,8 +2,10 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import sqlite3
 import sys
+from typing import List
 
 from . import __version__, db
 from .partners import BEHAVIOURS
@@ -72,6 +74,9 @@ def build_parser() -> argparse.ArgumentParser:
     testing = p.add_argument_group("testing")
     testing.add_argument("--auth", dest="basic_auth", metavar="USER:PASSWORD",
                          help="require HTTP basic authentication")
+    testing.add_argument("--deliver-to", metavar="HOST[,HOST]", default="",
+                         help="the only hosts the courier may POST documents and "
+                              "asynchronous MDNs to (default: any)")
     testing.add_argument("--seed", dest="seed_value", type=int, default=42,
                          help="seed for the generated demo data (default: 42)")
     testing.add_argument("--latency-ms", type=int, default=0,
@@ -114,6 +119,37 @@ def config_from_args(args: argparse.Namespace) -> Config:
     return Config(**values)
 
 
+def exposure_warnings(config: Config) -> List[str]:
+    """What to say before listening where others can reach the mock.
+
+    Listening on a non-loopback address is right for a container, but then
+    anyone who can reach the port can reset the mock, rewrite its partners
+    and read every document it holds - so it is said out loud.
+    """
+    if _is_loopback(config.host):
+        return []
+    warnings = []
+    if not config.basic_auth:
+        warnings.append(
+            "listening on %s without --auth: anyone who can reach port %d can "
+            "reset the mock, rewrite its partners and read every document. "
+            "Pass --auth USER:PASSWORD." % (config.host, config.port))
+    if not config.deliver_to:
+        warnings.append(
+            "the courier will POST to any URL a partner or an AS2 sender names; "
+            "--deliver-to HOST[,HOST] limits where.")
+    return warnings
+
+
+def _is_loopback(host: str) -> bool:
+    if host.lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False            # a host name: assume it can be reached
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     # Line-buffer the output: piped or run in a container, a block-buffered
@@ -137,6 +173,8 @@ def main(argv=None) -> int:
         print("mock-edi: cannot use --db %s - %s" % (args.db_path, error),
               file=sys.stderr)
         return 2
+    for warning in exposure_warnings(config):
+        print("mock-edi: warning: %s" % warning, file=sys.stderr)
     base = "http://%s:%d" % (args.host, args.port)
     print("mock-edi %s listening on %s  (as %s, db %s)"
           % (__version__, base, args.as2_id, args.db_path))

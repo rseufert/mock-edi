@@ -10,6 +10,19 @@ says so where it does.
 
 ### Added
 
+- **`--deliver-to`, and a warning when the mock is reachable without
+  `--auth`** ([#29]). The courier posted wherever a partner's `as2_url` or an
+  AS2 sender's `Receipt-Delivery-Option` pointed, so a mock on a shared
+  network could be made to POST stored payloads at an internal address.
+  `--deliver-to HOST[,HOST]` names the only hosts it may post to: a partner
+  URL outside the list is refused by the control plane, a document already
+  bound for one fails without being posted, and an asynchronous MDN asked
+  for outside it is answered at once with a failure MDN and the interchange
+  is not read. Listening beyond loopback without `--auth` - which the
+  container image does - now prints a warning naming the flag, and the
+  README's Docker example passes it. Credentials are compared in constant
+  time.
+
 - **`--keep-requests` and `--retention-days`, for a mock left running**
   ([#48]). The request log gained a row per request and every interchange
   was kept in full, for ever, so a shared staging partner on `--db` grew
@@ -738,6 +751,7 @@ documents a real one sends.
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#29]: https://github.com/rseufert/mock-edi/issues/29
 [#48]: https://github.com/rseufert/mock-edi/issues/48
 
 [#32]: https://github.com/rseufert/mock-edi/issues/32

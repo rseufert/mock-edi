@@ -99,8 +99,12 @@ Run it from a checkout with no install at all, or in a container:
 
 ```bash
 python3 -m mockedi --port 8080
-docker build -t mock-edi . && docker run -p 8080:8080 mock-edi
+docker build -t mock-edi . && docker run -p 8080:8080 mock-edi --auth edi:secret
 ```
+
+In a container the mock listens on every interface, so anyone who can reach
+the port can reset it and read what it holds: pass `--auth`, as above,
+anywhere that is not your own machine. It says so at startup if you do not.
 
 A guided tour of every endpoint, in curl:
 
@@ -646,7 +650,8 @@ everything in memory.
 
 | Flag | What it is for |
 | --- | --- |
-| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. |
+| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. The mock warns at startup when it listens beyond loopback without it. |
+| `--deliver-to HOST[,HOST]` | The only hosts the courier may POST to. Without it, a partner's `as2_url` or an AS2 sender's `Receipt-Delivery-Option` can point the mock at any address it can reach, internal ones included. A partner URL outside the list is refused by the control plane, a document already bound for one fails without being posted, and an asynchronous MDN asked for outside it is answered at once with a failure MDN. |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
