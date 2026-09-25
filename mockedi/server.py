@@ -188,6 +188,7 @@ class Mock:
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
             db.seed(self.conn, self.config.seed_value, self.config.as2_id)
+            self.pipeline.offset = datetime.timedelta(0)
 
 
 # ---------------------------------------------------------------------------
@@ -398,7 +399,7 @@ class Handler(BaseHTTPRequestHandler):
 
         headers, payload = as2.build_mdn(
             inbound, body, self.config.as2_id, disposition, explanation,
-            user_agent="mock-edi")
+            user_agent="mock-edi", moment=self.mock.pipeline.now())
         partner = inbound.sender or "unknown"
 
         if inbound.asynchronous:
@@ -642,8 +643,15 @@ class Handler(BaseHTTPRequestHandler):
                                         "count": len(retried)})
             everything = _flag(query, "all")
             seconds = _number(query, "seconds")
-            released = self.mock.pipeline.advance(seconds, everything)
-            return self._json(200, {"released": released, "count": len(released)})
+            try:
+                released = self.mock.pipeline.advance(seconds, everything)
+            except ValueError as error:
+                return self._json(400, {"error": str(error), "parameter": "seconds"})
+            clock = self.mock.pipeline
+            return self._json(200, {
+                "released": released, "count": len(released),
+                "clock": clock.now().isoformat(timespec="seconds"),
+                "advancedSeconds": clock.offset.total_seconds()})
 
         if head == "send":
             if method != "POST":

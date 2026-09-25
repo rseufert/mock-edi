@@ -82,6 +82,10 @@ class Pipeline:
     def __init__(self, conn: sqlite3.Connection, config):
         self.conn = conn if isinstance(conn, db.UnitOfWork) else db.UnitOfWork(conn)
         self.config = config
+        # How far `advance?seconds=` has moved the mock's clock past the real
+        # one. Every due time, document date and MDN date reads `now()`, so
+        # all of them see the moved clock; a reset puts it back.
+        self.offset = datetime.timedelta(0)
         # Set by the server to the courier that posts documents to partners
         # who have an AS2 URL. Left unset, documents wait in the mailbox,
         # which is what a test without a listener of its own wants.
@@ -94,7 +98,8 @@ class Pipeline:
         return partners.us(self.config)
 
     def now(self) -> datetime.datetime:
-        return datetime.datetime.now()
+        """The mock's clock: the real time, plus however far it was advanced."""
+        return datetime.datetime.now() + self.offset
 
     # -- inbound
 
@@ -764,17 +769,21 @@ class Pipeline:
         return ids
 
     def advance(self, seconds: float = 0.0, everything: bool = False) -> List[int]:
-        """Move the clock forward for the queue, without moving it for anyone else.
+        """Move the mock's clock forward, and release what that makes due.
 
-        `everything` releases documents that are not due yet, which is what a
-        test wants when it has configured a one-day invoice delay and does not
-        intend to wait.
+        The clock stays moved: two advances of 60 seconds release what is due
+        in 90, and the documents written afterwards are dated by the moved
+        clock. `everything` releases documents that are not due yet without
+        moving the clock, which is what a test wants when it has configured a
+        one-day invoice delay and does not intend to wait.
         """
         if everything:
-            moment = datetime.datetime.max
-        else:
-            moment = self.now() + datetime.timedelta(seconds=seconds)
-        return self.release(moment)
+            return self.release(datetime.datetime.max)
+        if seconds < 0:
+            raise ValueError("the clock only moves forward; seconds must not "
+                             "be negative, got %s" % seconds)
+        self.offset += datetime.timedelta(seconds=seconds)
+        return self.release(self.now())
 
     def collect(self, partner_id: str = "", kind: str = "",
                 leave: bool = False) -> List[Dict[str, Any]]:

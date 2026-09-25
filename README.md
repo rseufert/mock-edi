@@ -240,6 +240,13 @@ Nothing is released on a timer of its own. `POST /_mock/advance?all` releases
 whatever is queued, whenever it was due — a test that has to sleep is slow and
 flaky, and one that advances the clock is neither.
 
+`POST /_mock/advance?seconds=N` moves the mock's clock forward by `N` seconds
+and releases whatever that makes due. The clock stays moved: two advances of
+60 release a document due in 90, and everything written afterwards - document
+dates, due times, MDN dates - is dated by the moved clock. The response says
+where the clock is (`clock`) and how far it has been moved in all
+(`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
+
 ## AS2
 
 ```bash
@@ -637,7 +644,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-589 tests, every one of them talking to a real mock over real HTTP. Nothing is
+594 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

@@ -41,6 +41,16 @@ says so where it does.
 
 ### Changed
 
+- **`advance?seconds=N` moves the mock's clock, and it stays moved** ([#47]).
+  The README said it advanced the clock; it released what was due within `N`
+  seconds of the real time, once, and remembered nothing - so two advances
+  of 60 never released a document due in 90. Now each advance adds to an
+  offset on the mock's clock, which every due time, document date and MDN
+  date reads. The response gains `clock` and `advancedSeconds`; a negative
+  `seconds` is refused with a `400`, and `/_mock/reset` puts the clock back.
+  **This changes behaviour:** documents written after an advance are dated
+  by the moved clock, not the real one.
+
 - **The HTTP front end answers `HEAD` and `OPTIONS`, refuses bad query
   values with a 400, and logs its 500s** ([#31]). `HEAD` is a `GET` without
   the body, which is what a load balancer's liveness probe sends to
@@ -646,6 +656,8 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#47]: https://github.com/rseufert/mock-edi/issues/47
+
 [#31]: https://github.com/rseufert/mock-edi/issues/31
 
 [#27]: https://github.com/rseufert/mock-edi/issues/27
