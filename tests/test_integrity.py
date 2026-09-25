@@ -4,6 +4,8 @@ Two ways it used not to be: a line number used twice in one order was a 500
 that deleted the lines of the order it restated, and any failure halfway
 through receiving left whatever had been written by then committed.
 """
+import contextlib
+import io
 import os
 import sys
 import unittest
@@ -93,11 +95,17 @@ class AFailureHalfwayThrough(MockServerCase):
         self.send(x12_order("HALF", lines=TWO_LINES[:1]))
         before = self.snapshot()
 
-        status, _headers, data = self.post(
-            "/edi", x12_order("HALF", lines=TWO_LINES, control="000000078"),
-            headers={"Content-Type": "application/edi-x12"})
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            status, _headers, data = self.post(
+                "/edi", x12_order("HALF", lines=TWO_LINES, control="000000078"),
+                headers={"Content-Type": "application/edi-x12"})
         self.assertEqual(status, 500, data)
         self.assertIn("boom", data["error"])
+        self.assertEqual(data["type"], "IntegrityError")
+        # A 500 is a bug, and its traceback is the only way to find it (#31).
+        self.assertIn("Traceback (most recent call last)", said.getvalue())
+        self.assertIn("sqlite3.IntegrityError: boom", said.getvalue())
 
         self.assertEqual(self.snapshot(), before)
         self.assertEqual([line["line"] for line in self.order("HALF")["lines"]],
