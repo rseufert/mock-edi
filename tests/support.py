@@ -15,6 +15,8 @@ import json
 import os
 import sys
 import itertools
+import shutil
+import tempfile
 import threading
 import time
 import unittest
@@ -144,6 +146,54 @@ class MockServerCase(unittest.TestCase):
         status, _headers, data = self.get("/_mock/orders/" + po_number)
         self.assertEqual(status, 200, data)
         return data
+
+
+class FileDatabaseCase(MockServerCase):
+    """A mock on a database file of its own, which a test can restart.
+
+    Everything else in the suite runs on `:memory:`, which cannot say whether
+    state survives a restart - or an upgrade. Each test gets a fresh file and,
+    unless `start_on_setup` is off, a mock already running on it; `restart()`
+    stops that mock and starts another on the same file.
+    """
+
+    start_on_setup = True
+
+    @classmethod
+    def setUpClass(cls):
+        pass
+
+    @classmethod
+    def tearDownClass(cls):
+        pass
+
+    def setUp(self):
+        self.directory = tempfile.mkdtemp(prefix="mock-edi-db-")
+        self.db_path = os.path.join(self.directory, "mock.db")
+        self.httpd = None
+        self.addCleanup(shutil.rmtree, self.directory, True)
+        self.addCleanup(self.stop)
+        if self.start_on_setup:
+            self.start()
+
+    def start(self):
+        kwargs = dict(host="127.0.0.1", port=0, db_path=self.db_path, quiet=True)
+        kwargs.update(self.config_kwargs)
+        self.httpd = make_server(Config(**kwargs))
+        self.port = self.httpd.server_address[1]
+        self.base = "http://127.0.0.1:%d" % self.port
+        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        return self.httpd
+
+    def stop(self):
+        if self.httpd is not None:
+            self.httpd.shutdown()
+            self.httpd.server_close()
+            self.httpd = None
+
+    def restart(self):
+        self.stop()
+        return self.start()
 
 
 def _maybe_json(payload: bytes):

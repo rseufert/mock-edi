@@ -68,6 +68,13 @@ says so where it does.
   many tests there are and fails when the README disagrees, so the number
   cannot drift again without CI saying so.
 
+- On a file database, documents left `ready` for an AS2 partner when the
+  mock stopped were never posted after it restarted ([#41]), and nor were
+  asynchronous MDNs left `pending`: the courier learns of work only when it is
+  released. Both are now put back on its queue at startup, in the order they
+  were first queued. The suite has its first tests that restart a mock on the
+  same file.
+
 - A `--db` file written by 0.1.0 stopped the current version starting, with
   `no such column: ack_status` and no hint that the file was the cause
   ([#35]). A file database is now upgraded in place when it is opened:
@@ -439,6 +446,7 @@ documents a real one sends.
 [#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38
+[#41]: https://github.com/rseufert/mock-edi/issues/41
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#49]: https://github.com/rseufert/mock-edi/issues/49
 [#50]: https://github.com/rseufert/mock-edi/issues/50

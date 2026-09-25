@@ -119,6 +119,33 @@ class Mock:
         self.dropbox.write(outbound_ids)
         self.courier.enqueue_many(outbound_ids)
 
+    def resume(self) -> Dict[str, int]:
+        """Pick up the deliveries a previous run left unfinished.
+
+        The courier learns of work only when it is released, so on a file
+        database a restart left documents `ready` for an AS2 partner - and
+        asynchronous MDNs `pending` - with nobody to post them. They go back
+        on the queue in the order they were first queued. Documents for a
+        partner with no AS2 URL are waiting to be collected, not delivered,
+        and stay where they are.
+        """
+        with self.lock:
+            documents = [row["id"] for row in db.rows(
+                self.conn,
+                "SELECT outbound.id FROM outbound JOIN partner"
+                " ON partner.id = outbound.partner"
+                " WHERE outbound.status = 'ready' AND partner.as2_url != ''"
+                " ORDER BY outbound.id")]
+            receipts = [row["id"] for row in db.rows(
+                self.conn,
+                "SELECT id FROM mdn WHERE direction = 'out' AND mode = 'async'"
+                " AND status = 'pending' AND url != '' ORDER BY id")]
+        if documents:
+            self.courier.enqueue_many(documents)
+        for mdn_id in receipts:
+            self.courier.enqueue_mdn(mdn_id)
+        return {"documents": len(documents), "mdns": len(receipts)}
+
     def close(self, wait: float = 2.0) -> List[str]:
         """Stop the background threads and close the database.
 
@@ -980,4 +1007,5 @@ def make_server(config: Config) -> _Server:
     if httpd.mock.dropbox.active:
         httpd.mock.dropbox.prepare()
         httpd.mock.dropbox.start()
+    httpd.mock.resume()
     return httpd

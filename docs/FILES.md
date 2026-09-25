@@ -53,7 +53,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | Covers |
 | --- | --- |
-| `support.py` | The shared harness, not a test module: `MockServerCase` starts a server on an ephemeral port in a background thread, resets it between tests, and provides `send`/`mailbox`/`document`/`order`/`behaviour` helpers, plus builders for X12 and EDIFACT orders. |
+| `support.py` | The shared harness, not a test module: `MockServerCase` starts a server on an ephemeral port in a background thread, resets it between tests, and provides `send`/`mailbox`/`document`/`order`/`behaviour` helpers, plus builders for X12 and EDIFACT orders. `FileDatabaseCase` does the same on a database file of its own, with `restart()` for what has to survive one. |
 | `test_envelope.py` | Dialect sniffing, segment and element splitting, EDIFACT's release character round-tripping, trailing-element trimming, the 1-based accessors, and date parsing including the two-digit-year window. |
 | `test_x12.py` | The fixed-width ISA (106 characters, padded identifiers, ISA11 differing between 00401 and 00501), delimiters learned from the document rather than assumed, group and transaction-set structure, and the trailer counts. |
 | `test_edifact.py` | UNA written and read back, unusual punctuation, composites, delimiters escaped inside values, the implicit group, and message versions from UNH. |
@@ -78,7 +78,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | `test_reconcile.py` | Acknowledgments coming back: a 997 marking a document accepted, rejected or accepted-with-errors, matching that needs both control numbers, an acknowledgment for something we never sent, the CONTRL equivalents, `/_mock/unacknowledged`, and that the control numbers recorded are the ones actually on the wire. |
 | `test_drop.py` | Reading a drop directory and writing a pickup directory: the same pipeline as a POST, files moved to `processed/` and `failed/`, half-written files left alone, temporary and hidden names ignored, and one test for the poller thread. |
 | `test_concurrency.py` | Several clients at once: concurrent writes and control-plane reads, asserting nothing answers 5xx. The one timing test in the suite, and it exists because the request log was committing other threads' transactions out from under them. |
-| `test_delivery.py` | Posting to a real listener: order, AS2 headers and their exact spelling, receipts recorded, failures recorded rather than raised, and mailbox partners left alone. |
+| `test_delivery.py` | Posting to a real listener: order, AS2 headers and their exact spelling, receipts recorded, failures recorded rather than raised, mailbox partners left alone, and - on a file database - documents and asynchronous MDNs a previous run left undelivered posted after a restart. |
 
 ## `tools/` - the checks CI runs beside the tests
 
