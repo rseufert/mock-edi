@@ -945,6 +945,12 @@ def _dictionary(rest: List[str]) -> Any:
             {"tag": use.tag, "name": use.segment.name, "requirement": use.req,
              "maxUse": use.max_use, "loop": loop.id if loop else "",
              "purpose": use.segment.purpose,
+             # `width` is how wide the standard makes the segment; the
+             # elements below are the ones this mock checks. Where they differ,
+             # the positions in between are carried and not validated - so a
+             # guide that uses one of them is not wrong, it is untested.
+             "width": use.segment.width,
+             "checkedTo": len(use.segment.elements),
              "elements": [
                  {"position": position, "ref": element.ref, "name": element.name,
                   "type": element.type, "requirement": element.req,

@@ -83,6 +83,24 @@ class Segment:
     name: str
     elements: Tuple[Element, ...]
     purpose: str = ""
+    # How wide the standard makes this segment, when the definition above
+    # stops short of it.
+    #
+    # The mock's coverage is the commonly traded core, which is a fair scope:
+    # SAC has sixteen elements in 004010 and the five declared here carry
+    # almost every real allowance. Reporting the other eleven as "too many
+    # data elements" is not a fair scope, though - code 3 says the element
+    # does not exist at that position, and there it does. A position past the
+    # definition but within this width is simply not checked: no finding
+    # either way, and the dictionary says which is which.
+    #
+    # Beyond it, code 3 is the truth and is still reported.
+    full_width: int = 0
+
+    @property
+    def width(self) -> int:
+        """How many elements the standard allows, declared here or not."""
+        return max(self.full_width, len(self.elements))
 
     def element(self, position: int) -> Optional[Element]:
         if 1 <= position <= len(self.elements):
@@ -474,7 +492,7 @@ N1 = Segment("N1", "Party Identification", (
     _e("93", "Name", "AN", 1, 60),
     _e("66", "Identification Code Qualifier", "ID", 1, 2, OPTIONAL, ID_QUALIFIER_CODES),
     _e("67", "Identification Code", "AN", 2, 80),
-), "A party to the transaction, by role.")
+), "A party to the transaction, by role.", full_width=6)
 
 N2 = Segment("N2", "Additional Name Information", (
     _e("93", "Name", "AN", 1, 60, MANDATORY),
@@ -499,7 +517,7 @@ PO1 = Segment("PO1", "Baseline Item Data", (
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, MANDATORY, UOM_CODES),
     _e("212", "Unit Price", "R", 1, 17, MANDATORY),
     _e("639", "Basis of Unit Price Code", "ID", 2, 2),
-) + _product_ids(5, MANDATORY), "One ordered line: how many, at what price, of what.")
+) + _product_ids(5, MANDATORY), "One ordered line: how many, at what price, of what.", full_width=25)
 
 PID = Segment("PID", "Product/Item Description", (
     _e("349", "Item Description Type", "ID", 1, 1, MANDATORY,
@@ -514,7 +532,7 @@ PO4 = Segment("PO4", "Item Physical Details", (
     _e("356", "Pack", "N0", 1, 6),
     _e("357", "Size", "R", 1, 8),
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
-))
+), full_width=18)
 
 ACK = Segment("ACK", "Line Item Acknowledgment", (
     _e("668", "Line Item Status Code", "ID", 2, 2, MANDATORY, LINE_STATUS_CODES),
@@ -528,7 +546,7 @@ ACK = Segment("ACK", "Line Item Acknowledgment", (
 CTT = Segment("CTT", "Transaction Totals", (
     _e("354", "Number of Line Items", "N0", 1, 6, MANDATORY),
     _e("347", "Hash Total", "R", 1, 10),
-), "A checksum: how many lines, and their quantities summed.")
+), "A checksum: how many lines, and their quantities summed.", full_width=7)
 
 HL = Segment("HL", "Hierarchical Level", (
     _e("628", "Hierarchical ID Number", "AN", 1, 12, MANDATORY),
@@ -556,7 +574,7 @@ TD5 = Segment("TD5", "Carrier Details - Routing", (
        {"A": "Air", "M": "Motor (Common Carrier)", "U": "Private Parcel Service",
         "R": "Rail", "S": "Ocean", "LT": "Less Than Trailer Load"}),
     _e("387", "Routing", "AN", 1, 35),
-))
+), full_width=15)
 
 TD3 = Segment("TD3", "Carrier Details - Equipment", (
     _e("40", "Equipment Description Code", "ID", 2, 2),
@@ -573,7 +591,7 @@ PRF = Segment("PRF", "Purchase Order Reference", (
 
 LIN = Segment("LIN", "Item Identification", (
     _e("350", "Assigned Identification", "AN", 1, 20),
-) + _product_ids(5, MANDATORY), "What the item is, by one or more identifiers.")
+) + _product_ids(5, MANDATORY), "What the item is, by one or more identifiers.", full_width=31)
 
 SN1 = Segment("SN1", "Item Detail - Shipment", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -591,7 +609,7 @@ IT1 = Segment("IT1", "Baseline Item Data - Invoice", (
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, MANDATORY, UOM_CODES),
     _e("212", "Unit Price", "R", 1, 17, MANDATORY),
     _e("639", "Basis of Unit Price Code", "ID", 2, 2),
-) + _product_ids(5, MANDATORY), "One invoiced line.")
+) + _product_ids(5, MANDATORY), "One invoiced line.", full_width=25)
 
 ITD = Segment("ITD", "Terms of Sale", (
     _e("336", "Terms Type Code", "ID", 2, 2, OPTIONAL,
@@ -605,7 +623,7 @@ ITD = Segment("ITD", "Terms of Sale", (
     _e("446", "Terms Net Due Date", "DT", 8, 8),
     _e("386", "Terms Net Days", "N0", 1, 3),
     _e("362", "Terms Discount Amount", "R", 1, 10),
-), "Payment terms: 2% 10 net 30 and its relatives.")
+), "Payment terms: 2% 10 net 30 and its relatives.", full_width=15)
 
 TXI = Segment("TXI", "Tax Information", (
     _e("963", "Tax Type Code", "ID", 2, 2, MANDATORY,
@@ -622,7 +640,7 @@ SAC = Segment("SAC", "Service, Promotion, Allowance, or Charge Information", (
     _e("559", "Agency Qualifier Code", "ID", 2, 2),
     _e("1301", "Agency Service, Promotion, Allowance, or Charge Code", "AN", 1, 10),
     _e("610", "Amount", "N2", 1, 15),
-))
+), full_width=16)
 
 TDS = Segment("TDS", "Total Monetary Value Summary", (
     _e("361", "Total Invoice Amount", "N2", 1, 15, MANDATORY),
@@ -1236,11 +1254,20 @@ LIN_E = Segment("LIN", "Line Item", (
 PIA = Segment("PIA", "Additional Product ID", (
     _e("4347", "Product identifier code qualifier", "ID", 1, 3, MANDATORY,
        {"1": "Additional identification", "5": "Product identification"}),
+    # C212 as LIN declares it, rather than the shorter version this segment
+    # used to carry: a composite is one thing in the standard, and the two
+    # definitions disagreeing meant PIA02's last two components went
+    # unchecked while LIN03's were checked.
     _c("C212", "Item Number Identification", (
         _e("7140", "Item identifier", "AN", 1, 35, MANDATORY),
         _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
+        _e("1131", "Code list identification code", "AN", 1, 17),
+        _e("3055", "Code list responsible agency code", "AN", 1, 3),
     ), MANDATORY),
-), "Any further item numbers - a UPC beside the supplier's article number.")
+# PIA carries up to five C212s; the one above is the one worth checking, and
+# an article number in PIA03 is not an error for being the second.
+), "Any further item numbers - a UPC beside the supplier's article number.",
+   full_width=6)
 
 IMD = Segment("IMD", "Item Description", (
     _e("7077", "Description format code", "ID", 1, 3, OPTIONAL,

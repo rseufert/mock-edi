@@ -168,6 +168,14 @@ real 850 admits some fifty segment types and almost nobody sends more than a
 dozen; the mock implements the dozen, validates them properly, and reports an
 unrecognised segment rather than pretending to understand it.
 
+The same goes inside a segment, and the dictionary says where the line is.
+`SAC` has sixteen elements in 004010 and the five the mock declares carry
+almost every real allowance — so every segment also reports the `width` the
+standard gives it beside the `checkedTo` the mock validates. A position
+between the two is carried and not checked: your `SAC15` description is not
+wrong, it is untested. A position beyond the width is reported as error 3,
+because there the element really does not exist.
+
 ## Partner behaviours
 
 Four partners are seeded. Change any of them at runtime:
@@ -540,7 +548,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-535 tests, every one of them talking to a real mock over real HTTP. Nothing is
+553 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the
