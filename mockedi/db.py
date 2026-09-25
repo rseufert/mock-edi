@@ -272,6 +272,9 @@ CREATE INDEX IF NOT EXISTS ix_ts_ack ON transaction_set (direction, ack_status);
 CREATE INDEX IF NOT EXISTS ix_outbound_status ON outbound (status, due_at);
 CREATE INDEX IF NOT EXISTS ix_scheduled_due ON scheduled (done_at, due_at);
 CREATE INDEX IF NOT EXISTS ix_line_po ON order_line (po_number);
+CREATE INDEX IF NOT EXISTS ix_shipment_po ON shipment (po_number);
+CREATE INDEX IF NOT EXISTS ix_invoice_po ON invoice (po_number);
+CREATE INDEX IF NOT EXISTS ix_interchange_at ON interchange (at);
 """
 
 # Where each generated number starts.  Recognisable on sight, the way real
@@ -337,7 +340,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 5
+SCHEMA_VERSION = 6
 
 
 class DatabaseError(Exception):
@@ -416,6 +419,48 @@ def _add_missing_columns(conn: sqlite3.Connection) -> List[str]:
         return added
     finally:
         reference.close()
+
+
+def prune(conn: sqlite3.Connection, keep_requests: int = 0,
+          retention_days: float = 0) -> Dict[str, int]:
+    """Bound what a long-running mock keeps, and say how much went.
+
+    `keep_requests` keeps the newest that many rows of the request log (0
+    keeps them all). `retention_days` removes what is older than that many
+    days (0 keeps everything): request-log rows, interchanges with the
+    transaction sets recorded from them, and outbound documents and MDNs that
+    are finished with. Anything still waiting - pending, ready - is kept
+    however old it is, and so are partners, orders and control numbers:
+    they are what the mock *is*, not a record of what it did.
+    """
+    removed: Dict[str, int] = {}
+
+    def gone(table: str, cursor: sqlite3.Cursor) -> None:
+        if cursor.rowcount > 0:
+            removed[table] = removed.get(table, 0) + cursor.rowcount
+
+    if keep_requests > 0:
+        gone("request_log", conn.execute(
+            "DELETE FROM request_log WHERE id <= (SELECT id FROM request_log"
+            " ORDER BY id DESC LIMIT 1 OFFSET ?)", (keep_requests,)))
+    if retention_days > 0:
+        cutoff = (datetime.datetime.now()
+                  - datetime.timedelta(days=retention_days)
+                  ).replace(microsecond=0).isoformat()
+        gone("request_log", conn.execute(
+            "DELETE FROM request_log WHERE at < ?", (cutoff,)))
+        gone("transaction_set", conn.execute(
+            "DELETE FROM transaction_set WHERE interchange_id IN"
+            " (SELECT id FROM interchange WHERE at < ?)", (cutoff,)))
+        gone("interchange", conn.execute(
+            "DELETE FROM interchange WHERE at < ?", (cutoff,)))
+        gone("outbound", conn.execute(
+            "DELETE FROM outbound WHERE at < ? AND status NOT IN"
+            " ('pending', 'ready')", (cutoff,)))
+        gone("mdn", conn.execute(
+            "DELETE FROM mdn WHERE at < ? AND status != 'pending'", (cutoff,)))
+    conn.commit()
+    return removed
 
 
 def next_number(conn: sqlite3.Connection, scope: str, partner: str = "*") -> int:

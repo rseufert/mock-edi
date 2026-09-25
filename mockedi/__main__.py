@@ -90,6 +90,16 @@ def build_parser() -> argparse.ArgumentParser:
                         metavar="SECONDS",
                         help="how long a request may take to arrive before the "
                              "connection is closed (default: 60)")
+    retention = p.add_argument_group(
+        "retention - for a mock left running on a --db file")
+    retention.add_argument("--keep-requests", type=int, default=5000, metavar="N",
+                           help="keep the newest N rows of the request log "
+                                "(default: 5000; 0 keeps them all)")
+    retention.add_argument("--retention-days", type=float, default=0.0,
+                           metavar="DAYS",
+                           help="remove the request log, interchanges, and "
+                                "finished documents and MDNs older than this "
+                                "(default: 0, keep everything)")
     p.add_argument("-q", "--quiet", action="store_true", help="suppress the access log")
     p.add_argument("--version", action="version", version="mock-edi " + __version__)
     return p
