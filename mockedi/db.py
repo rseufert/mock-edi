@@ -219,6 +219,11 @@ CREATE TABLE IF NOT EXISTS mdn (
     url          TEXT NOT NULL DEFAULT '',
     status       TEXT NOT NULL DEFAULT 'pending',
     payload      TEXT NOT NULL DEFAULT '',
+    -- The headers the MDN was built with, as JSON. An asynchronous MDN is
+    -- posted later, from another process run if need be, and rebuilding them
+    -- by hand loses the MIME boundary - which makes the whole entity
+    -- unparsable. They are kept rather than reconstructed.
+    headers      TEXT NOT NULL DEFAULT '',
     at           TEXT NOT NULL
 );
 
@@ -320,7 +325,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 3
 
 
 class DatabaseError(Exception):

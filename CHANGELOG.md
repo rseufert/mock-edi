@@ -42,6 +42,35 @@ says so where it does.
 
 ### Fixed
 
+- **The asynchronous MDN was posted without its MIME boundary** ([#22]). The
+  synchronous one went out with the headers `build_mdn` produced; the
+  asynchronous one had its headers rebuilt by hand at delivery time, and the
+  `boundary` parameter was not among them. A `multipart/*` with no boundary
+  cannot be parsed by any MIME library, so OpenAS2 and mendelson log a
+  malformed MDN and the message stays unacknowledged on their side - the
+  opposite of what the sender asked for with `Receipt-Delivery-Option`. The
+  reason it went unnoticed is that the test asserted on substrings of the
+  body and never on the headers.
+
+  The headers an MDN was built with are now kept with it and posted as they
+  were, so `Date` and `MIME-Version` arrive too. A pending MDN written by an
+  older version has its boundary read back out of its own body rather than
+  guessed at. The test parses what was posted with the standard library's
+  `email` package, so it fails if a MIME library cannot read it.
+
+- The MDN's human-readable part declared `charset=us-ascii` and `7bit` while
+  being written as UTF-8 ([#22]), so a partner id with a diaeresis in it put
+  8-bit bytes in a part that promised none. The part now declares the charset
+  and encoding it actually has.
+
+- `signed-receipt-protocol=required` was answered with an unsigned
+  `processed` MDN ([#22]) - a receipt the sender had already said it would
+  not accept. RFC 4130 asks for a failure, so it now gets a `failed/Failure`
+  MDN saying the mock cannot sign, and the interchange is not read.
+  Refusing what it cannot do is this project's policy for S/MIME, and a
+  required signed receipt is the same request by another name.
+  `signed-receipt-protocol=optional` is unaffected.
+
 - **A payload holding several interchanges was truncated to the first**
   ([#52]). `x12.parse` stopped at the first `IEA` and `edifact.parse` at the
   first `UNZ`, and everything after it was dropped without a word: one
@@ -480,6 +509,7 @@ documents a real one sends.
 [#40]: https://github.com/rseufert/mock-edi/issues/40
 [#17]: https://github.com/rseufert/mock-edi/issues/17
 [#20]: https://github.com/rseufert/mock-edi/issues/20
+[#22]: https://github.com/rseufert/mock-edi/issues/22
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52
 [#55]: https://github.com/rseufert/mock-edi/issues/55
