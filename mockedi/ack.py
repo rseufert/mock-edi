@@ -43,12 +43,18 @@ def group_reports(report: InterchangeReport) -> GroupReports:
 
 def functional_acknowledgment(functional_id: str, group_control: str,
                               version: str,
-                              messages: Sequence[MessageReport]) -> List[Seg]:
+                              messages: Sequence[MessageReport],
+                              group_errors: Sequence[Tuple[str, str]] = ()
+                              ) -> List[Seg]:
     """The body of a 997, acknowledging one functional group.
 
     AK9's three counts are the part receivers actually check: transaction sets
     included in this acknowledgment, received in the group, and accepted.  When
     they disagree with the 850s that were sent, someone's envelope is wrong.
+
+    `group_errors` are the group's own faults - a missing GE, a count or
+    control number that does not match - and go in AK905 onward. Any of them
+    rejects the whole group, however clean the sets inside it were.
     """
     out: List[Seg] = [seg("AK1", functional_id or "??", _digits(group_control),
                           version or "")]
@@ -67,8 +73,9 @@ def functional_acknowledgment(functional_id: str, group_control: str,
         if item.accepted:
             accepted += 1
 
-    out.append(seg("AK9", _group_code(messages), str(len(messages)),
-                   str(len(messages)), str(accepted)))
+    verdict = "R" if group_errors else _group_code(messages)
+    out.append(seg("AK9", verdict, str(len(messages)), str(len(messages)),
+                   str(accepted), *[code for code, _note in group_errors[:5]]))
     return out
 
 
@@ -134,11 +141,19 @@ def syntax_report(interchange: Interchange, report: InterchangeReport,
     *its* sender and recipient, not this message's - which is why a CONTRL
     looks, at first glance, as though the addresses are the wrong way round.
     """
+    sender = [interchange.sender, interchange.sender_qualifier]
+    receiver = [interchange.receiver, interchange.receiver_qualifier]
+    if report.interchange_rejected:
+        # The envelope is at fault, so nothing inside it was read: the verdict
+        # is UCI's alone, naming the service segment and element, and there
+        # is no UCM to give.
+        finding = [f for f in report.interchange_findings
+                   if f.severity == "fatal"][0]
+        return [seg("UCI", interchange.control, sender, receiver, REJECTED,
+                    finding.code, finding.tag,
+                    [str(finding.position)] if finding.position else "")]
     out: List[Seg] = [seg(
-        "UCI",
-        interchange.control,
-        [interchange.sender, interchange.sender_qualifier],
-        [interchange.receiver, interchange.receiver_qualifier],
+        "UCI", interchange.control, sender, receiver,
         REJECTED if not any(m.accepted for m in messages) else ACKNOWLEDGED,
     )]
     for item in messages:
@@ -170,6 +185,39 @@ def _worst(item: MessageReport) -> str:
 
 
 # ---------------------------------------------------------------------------
+# X12 TA1
+# ---------------------------------------------------------------------------
+
+def interchange_acknowledgment(interchange: Interchange,
+                               report: InterchangeReport) -> Seg:
+    """A TA1: the verdict on the ISA/IEA envelope, before any group is read.
+
+    TA104 is A, E (accepted, with the fault noted) or R, and TA105 names one
+    fault - the standard allows no more - so a rejection names the fault
+    that caused it rather than the first one found.
+    """
+    header = interchange.header
+    findings = report.interchange_findings
+    fatal = [f for f in findings if f.severity == "fatal"]
+    if fatal:
+        verdict, note = "R", fatal[0].code
+    elif findings:
+        verdict, note = "E", findings[0].code
+    else:
+        verdict, note = "A", "000"
+    control = _digits(header.get(13) if header is not None else interchange.control)
+    return seg("TA1", control[-9:].rjust(9, "0"),
+               _fixed_digits(interchange.date, 6),
+               _fixed_digits(interchange.time, 4), verdict, note)
+
+
+def _fixed_digits(value: str, width: int) -> str:
+    """TA102/TA103 are fixed width; a sender's malformed ISA09 is not ours to copy."""
+    value = (value or "").strip()
+    return value if len(value) == width and value.isdigit() else "0" * width
+
+
+# ---------------------------------------------------------------------------
 # A human-readable rendering, for the control plane and for test failures
 # ---------------------------------------------------------------------------
 
@@ -182,8 +230,18 @@ def explain(report: InterchangeReport) -> List[str]:
     lines: List[str] = []
     for code, note in report.envelope_errors:
         lines.append("interchange: %s (%s)" % (note, code))
+    for finding in report.interchange_findings:
+        lines.append("interchange: %s (%s%s)" % (
+            finding.note, finding.code,
+            "" if finding.severity == "fatal" else ", noted"))
+    for (functional_id, control), errors in report.group_errors.items():
+        for code, note in errors:
+            lines.append("group %s/%s: %s (%s)" % (functional_id or "?", control,
+                                                  note, code))
     for item in report.messages:
-        if item.clean:
+        if item.envelope_rejected:
+            verdict = "rejected with the envelope around it"
+        elif item.clean:
             verdict = "accepted"
         elif item.accepted:
             verdict = "accepted, with findings"

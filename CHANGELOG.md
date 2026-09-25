@@ -8,6 +8,13 @@ says so where it does.
 
 ## [Unreleased]
 
+### Added
+
+- **A TA1 interchange acknowledgment** ([#51]), when `ISA14 = 1` asks for one
+  and whenever the envelope itself is at fault. It travels in an interchange
+  of its own with no functional group, and is collected from the mailbox as
+  `kind=interchange-acknowledgment`.
+
 ### Changed
 
 - **The partner control plane refuses what the mock cannot act on** ([#40]).
@@ -41,6 +48,18 @@ says so where it does.
   and the delete reports how many of each. What was already done keeps its own
   history, and the document archive outlives the partner - it is the evidence
   a test came for.
+
+- Envelope trailers are checked ([#51]). A `GE` or `IEA` that miscounted or
+  named the wrong control number, a file cut off before its `IEA`, and an
+  `ISA` off its fixed widths all came back clean with `AK9*A`. Now a group
+  fault rejects the group, with `AK905` saying why (3, 4 or 5); an interchange
+  fault rejects everything, and is answered by a `TA1` with `TA104 = R` and no
+  997; and an `ISA` width is noted with `TA104 = E` but still read. **This
+  changes behaviour:** an interchange with a bad trailer was acted on before,
+  and is not now. A `UNZ` that miscounts, disagrees with `UNB` or is missing is
+  the EDIFACT equivalent, rejected in the CONTRL's `UCI` with `0085` 29, 28 or
+  13 - not 15/16 as the issue suggested, which mean "not supported in this
+  position" and "too many constituents".
 
 - An acknowledgment note read `errors;   element 4` - three spaces after the
   separator. The element detail carried a two-space indent that only makes
@@ -263,6 +282,7 @@ documents a real one sends.
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#50]: https://github.com/rseufert/mock-edi/issues/50
+[#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD

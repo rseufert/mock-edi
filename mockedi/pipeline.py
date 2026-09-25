@@ -153,7 +153,8 @@ class Pipeline:
                 change = transactions.read_change(message, dialect)
                 reference = change.po_number
                 self._apply_change(partner, change, receipt)
-            elif message_report.kind == schema.ACKNOWLEDGMENT:
+            elif (message_report.kind == schema.ACKNOWLEDGMENT
+                  and not message_report.envelope_rejected):
                 # A receipt for something the mock sent, rather than something
                 # for the mock to act on.
                 for result in reconcile.apply(self.conn, partner["id"], dialect,
@@ -244,9 +245,19 @@ class Pipeline:
         dialect = interchange.dialect
         delay = self.config.ack_delay_ms
         if dialect == "X12":
+            # A TA1 when ISA14 asks for one, and whenever the envelope itself
+            # is at fault, asked or not: that is the only place to say so.
+            if interchange.ack_requested or report.interchange_findings:
+                self._send_interchange_acknowledgment(
+                    partner, interchange, report, receipt, moment, delay)
+            if report.interchange_rejected:
+                # Nothing inside a refused envelope was read, so there is no
+                # group to acknowledge. The TA1 is the whole answer.
+                return
             for functional_id, control, version, messages in ack.group_reports(report):
-                body = ack.functional_acknowledgment(functional_id, control,
-                                                     version, messages)
+                body = ack.functional_acknowledgment(
+                    functional_id, control, version, messages,
+                    report.group_errors.get((functional_id, control), []))
                 self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                            receipt, moment, delay, dialect="X12")
         else:
@@ -411,6 +422,39 @@ class Pipeline:
                 test=bool(partner["test"]))
             payload = edifact.render(interchange, newline=self.config.pretty)
 
+        return self._enqueue(partner_id, dialect, code, kind, reference, payload,
+                             interchange_control, group_control, set_control,
+                             receipt, moment, delay_ms, note)
+
+    def _send_interchange_acknowledgment(self, partner: Dict[str, Any],
+                                         interchange: Interchange,
+                                         report: InterchangeReport,
+                                         receipt: Optional[Receipt],
+                                         moment: datetime.datetime,
+                                         delay_ms: int = 0) -> Queued:
+        """A TA1, in an interchange of its own with no functional group."""
+        partner_id = partner["id"]
+        control = str(db.next_number(self.conn, "interchange", partner_id))
+        version = interchange.version if interchange.version in ("00401", "00501") \
+            else "00401"
+        envelope = x12.wrap(
+            [], self.config.as2_id, partner_id, control, "", "",
+            sender_qualifier=self.config.qualifier,
+            receiver_qualifier=partner["qualifier"], interchange_version=version,
+            moment=moment, test=bool(partner["test"]))
+        envelope.groups = []
+        payload = x12.render(envelope, newline=self.config.pretty,
+                             preamble=[ack.interchange_acknowledgment(interchange,
+                                                                      report)])
+        return self._enqueue(partner_id, "X12", "TA1",
+                             schema.INTERCHANGE_ACKNOWLEDGMENT, interchange.control,
+                             payload, control, "", "", receipt, moment, delay_ms)
+
+    def _enqueue(self, partner_id: str, dialect: str, code: str, kind: str,
+                 reference: str, payload: str, interchange_control: str,
+                 group_control: str, set_control: str,
+                 receipt: Optional[Receipt], moment: datetime.datetime,
+                 delay_ms: int = 0, note: str = "") -> Queued:
         message_id = "<%s.%s@%s>" % (
             db.next_number(self.conn, "message"), code, self.config.as2_id)
         due = moment + datetime.timedelta(milliseconds=delay_ms)

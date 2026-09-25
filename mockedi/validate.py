@@ -83,6 +83,21 @@ class SegmentFinding:
 
 
 @dataclass
+class EnvelopeFinding:
+    """Something wrong with the interchange envelope rather than a message.
+
+    `code` is the dialect's own: a TA1 note code (I18) for X12, a syntax
+    error code (0085) for EDIFACT. The envelope segments differ too much
+    between the two for one code to translate into the other.
+    """
+    code: str
+    note: str
+    tag: str = ""             # the envelope segment at fault: IEA, UNZ, ISA...
+    position: int = 0         # its element, when one element is at fault
+    severity: str = FATAL
+
+
+@dataclass
 class MessageReport:
     """The verdict on one transaction set."""
     code: str
@@ -96,6 +111,9 @@ class MessageReport:
     segments: List[SegmentFinding] = field(default_factory=list)
     set_errors: List[Tuple[str, str]] = field(default_factory=list)  # (718 code, note)
     accepted: bool = True
+    # Refused because the group or interchange around it was, not because of
+    # anything in the set itself; its own findings may be clean.
+    envelope_rejected: bool = False
 
     @property
     def findings(self) -> List[SegmentFinding]:
@@ -136,6 +154,10 @@ class InterchangeReport:
     receiver: str = ""
     messages: List[MessageReport] = field(default_factory=list)
     envelope_errors: List[Tuple[str, str]] = field(default_factory=list)
+    # (functional id, group control) -> [(716 code, note)], for AK905-AK909.
+    group_errors: Dict[Tuple[str, str], List[Tuple[str, str]]] = field(
+        default_factory=dict)
+    interchange_findings: List[EnvelopeFinding] = field(default_factory=list)
 
     @property
     def accepted(self) -> int:
@@ -146,13 +168,19 @@ class InterchangeReport:
         return len(self.messages)
 
     @property
+    def interchange_rejected(self) -> bool:
+        return any(f.severity == FATAL for f in self.interchange_findings)
+
+    @property
     def clean(self) -> bool:
-        return not self.envelope_errors and all(m.clean for m in self.messages)
+        return (not self.envelope_errors and not self.group_errors
+                and not self.interchange_findings
+                and all(m.clean for m in self.messages))
 
     @property
     def group_code(self) -> str:
         """The 997's AK901: accepted, partially accepted, rejected."""
-        if self.envelope_errors:
+        if self.envelope_errors or self.group_errors or self.interchange_rejected:
             return "R"
         if not self.messages:
             return "R"
@@ -171,15 +199,24 @@ def validate(interchange: Interchange, strict: bool = False) -> InterchangeRepor
                                control=interchange.control,
                                sender=interchange.sender,
                                receiver=interchange.receiver)
+    groups = []
     for group, message in interchange.messages():
         item = validate_message(message, interchange.dialect, strict)
         item.group_control = group.control
         item.group_id = group.functional_id
         item.group_version = group.version
         report.messages.append(item)
+        groups.append(group)
     if not report.messages:
         report.envelope_errors.append(
             ("5", "the interchange holds no transaction sets"))
+
+    _check_envelope(interchange, report)
+    for group, item in zip(groups, report.messages):
+        if (report.interchange_rejected
+                or (group.functional_id, group.control) in report.group_errors):
+            item.accepted = False
+            item.envelope_rejected = True
     return report
 
 
@@ -206,6 +243,135 @@ def validate_message(message: Message, dialect: str,
     if report.segments and not any(code == "5" for code, _ in report.set_errors):
         report.set_errors.append(("5", "one or more segments in error"))
     return report
+
+
+# ---------------------------------------------------------------------------
+# The envelope - what a truncated file or a renumbering batch tool gets wrong
+# ---------------------------------------------------------------------------
+
+# TA105 for an ISA element of the wrong width, by position. ISA16 is left out:
+# it *is* the component separator, and one character by construction.
+_ISA_NOTE = {1: "010", 2: "011", 3: "012", 4: "013", 5: "005", 6: "006",
+             7: "007", 8: "008", 9: "014", 10: "015", 11: "016", 12: "017",
+             13: "018", 14: "019", 15: "020"}
+
+
+def _check_envelope(interchange: Interchange, report: InterchangeReport) -> None:
+    """Trailers against headers, and counts against what actually arrived.
+
+    Only a parsed interchange carries its header; one built in memory to be
+    written has nothing to check, because the writer derives its trailers.
+    """
+    if interchange.header is None:
+        return
+    if interchange.dialect == "X12":
+        _check_x12_envelope(interchange, report)
+    else:
+        _check_edifact_envelope(interchange, report)
+
+
+def _same_number(left: str, right: str) -> bool:
+    """Control numbers compared as numbers when both are: 000000077 is 77."""
+    left, right = (left or "").strip(), (right or "").strip()
+    if left.isdigit() and right.isdigit():
+        return int(left) == int(right)
+    return left == right
+
+
+def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> None:
+    header = interchange.header
+    findings = report.interchange_findings
+
+    # Fixed widths. The parser splits on the element separator so that a
+    # sloppy ISA can still be read; this is where it is held to the standard.
+    # The receiver may well cope, so the mock notes it rather than refusing.
+    for position, code in _ISA_NOTE.items():
+        element = schema.ISA.element(position)
+        value = header.get(position)
+        if element is not None and len(value) != element.max_len:
+            findings.append(EnvelopeFinding(
+                code=code, tag="ISA", position=position, severity=ERROR,
+                note="ISA%02d is %d characters, it is fixed at %d"
+                     % (position, len(value), element.max_len)))
+
+    explicit = [g for g in interchange.groups if not g.implicit]
+    for group in explicit:
+        errors: List[Tuple[str, str]] = []
+        trailer = group.trailer
+        if trailer is None:
+            errors.append(("3", "group %s has no GE trailer" % group.control))
+        else:
+            if not _same_number(trailer.get(1), str(len(group.messages))):
+                errors.append(("5", "GE01 counts %s transaction sets, the group "
+                                    "holds %d" % (trailer.get(1) or "(empty)",
+                                                  len(group.messages))))
+            if not _same_number(trailer.get(2), group.control):
+                errors.append(("4", "GE02 says group control number %s, GS06 "
+                                    "says %s" % (trailer.get(2) or "(empty)",
+                                                 group.control)))
+        if errors:
+            report.group_errors[(group.functional_id, group.control)] = errors
+
+    trailer = interchange.trailer
+    if trailer is None:
+        findings.append(EnvelopeFinding(
+            code="023", tag="IEA",
+            note="the interchange ends without an IEA: the file was cut short"))
+        return
+    if not _same_number(trailer.get(1), str(len(explicit))):
+        findings.append(EnvelopeFinding(
+            code="021", tag="IEA", position=1,
+            note="IEA01 counts %s functional groups, the interchange holds %d"
+                 % (trailer.get(1) or "(empty)", len(explicit))))
+    if not _same_number(trailer.get(2), header.get(13)):
+        findings.append(EnvelopeFinding(
+            code="001", tag="IEA", position=2,
+            note="IEA02 says interchange control number %s, ISA13 says %s"
+                 % (trailer.get(2) or "(empty)", header.get(13))))
+
+
+def _check_edifact_envelope(interchange: Interchange,
+                            report: InterchangeReport) -> None:
+    findings = report.interchange_findings
+    explicit = [g for g in interchange.groups if not g.implicit]
+    for group in explicit:
+        trailer = group.trailer
+        if trailer is None:
+            findings.append(EnvelopeFinding(
+                code="13", tag="UNE",
+                note="group %s has no UNE trailer" % group.control))
+            continue
+        if not _same_number(trailer.get(1), str(len(group.messages))):
+            findings.append(EnvelopeFinding(
+                code="29", tag="UNE", position=1,
+                note="UNE counts %s messages, the group holds %d"
+                     % (trailer.get(1) or "(empty)", len(group.messages))))
+        if not _same_number(trailer.get(2), group.control):
+            findings.append(EnvelopeFinding(
+                code="28", tag="UNE", position=2,
+                note="UNE says group reference %s, UNG says %s"
+                     % (trailer.get(2) or "(empty)", group.control)))
+
+    trailer = interchange.trailer
+    if trailer is None:
+        findings.append(EnvelopeFinding(
+            code="13", tag="UNZ",
+            note="the interchange ends without a UNZ: the file was cut short"))
+        return
+    # UNZ 0036 counts groups when there are any, and messages when there
+    # are not.
+    counted, what = ((len(explicit), "groups") if explicit
+                     else (interchange.message_count, "messages"))
+    if not _same_number(trailer.get(1), str(counted)):
+        findings.append(EnvelopeFinding(
+            code="29", tag="UNZ", position=1,
+            note="UNZ counts %s %s, the interchange holds %d"
+                 % (trailer.get(1) or "(empty)", what, counted)))
+    if (trailer.get(2) or "").strip() != (interchange.control or "").strip():
+        findings.append(EnvelopeFinding(
+            code="28", tag="UNZ", position=2,
+            note="UNZ says interchange reference %s, UNB says %s"
+                 % (trailer.get(2) or "(empty)", interchange.control)))
 
 
 # ---------------------------------------------------------------------------

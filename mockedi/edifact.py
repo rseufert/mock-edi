@@ -84,6 +84,7 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
         ack_requested=head.get(9) == "1",
         test=head.get(11) == "1",
         delimiters=delims,
+        header=head,
     )
     group = Group(sender=interchange.sender, receiver=interchange.receiver)
     interchange.groups.append(group)
@@ -94,10 +95,11 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
         tag = item.tag
         if tag == "UNG":
             group = Group(functional_id=item.get(1), sender=item.comp(2, 1),
-                          receiver=item.comp(3, 1), control=item.get(5))
+                          receiver=item.comp(3, 1), control=item.get(5),
+                          header=item)
             interchange.groups.append(group)
         elif tag == "UNE":
-            continue
+            group.trailer = item
         elif tag == "UNH":
             position = 1
             item.position = position
@@ -113,6 +115,7 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
                 message.segments.append(item)
                 message = None
         elif tag == "UNZ":
+            interchange.trailer = item
             break
         elif message is not None:
             position += 1

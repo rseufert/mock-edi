@@ -146,6 +146,10 @@ class Group:
     date: str = ""
     time: str = ""
     messages: List[Message] = field(default_factory=list)
+    # GS/GE or UNG/UNE as they arrived, for the envelope checks. A trailer of
+    # None on a parsed group means it never came: the file ended first.
+    header: Optional[Seg] = None
+    trailer: Optional[Seg] = None
 
     @property
     def implicit(self) -> bool:
@@ -168,6 +172,10 @@ class Interchange:
     ack_requested: bool = False
     delimiters: Delimiters = X12_DEFAULTS
     groups: List[Group] = field(default_factory=list)
+    # ISA/IEA or UNB/UNZ as they arrived. Only a parsed interchange has them;
+    # one built to be written leaves them empty and the writer derives both.
+    header: Optional[Seg] = None
+    trailer: Optional[Seg] = None
 
     def messages(self) -> Iterator[Tuple[Group, Message]]:
         for group in self.groups:

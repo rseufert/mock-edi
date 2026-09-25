@@ -399,6 +399,19 @@ trailer, a segment count that does not add up. Everything else is accepted
 with errors noted: an invalid code, a length violation, a malformed date, a
 segment the set does not define. A partner set to `strict` rejects on either.
 
+The envelope is checked too, and a fault there outranks anything inside it.
+A `GE` whose count or control number disagrees with what arrived, or a group
+with no `GE` at all, rejects the group: `AK9*R` with the standard's reason in
+`AK905`. An `IEA` that disagrees with the `ISA`, or a file that stops before
+its `IEA`, rejects the whole interchange, and the answer is a `TA1` with
+`TA104 = R` and no 997, because no group inside it was read. A `TA1` also comes
+back whenever `ISA14 = 1` asks for one - `kind=interchange-acknowledgment` in
+the mailbox. An `ISA` element off its fixed width is noted (`TA104 = E`) but
+the interchange is still read; that is the mock's choice, since receivers
+differ. On the EDIFACT side a `UNZ` that miscounts, names another interchange
+or never arrives rejects the interchange in the CONTRL's `UCI`, with `0085`
+codes 29, 28 and 13.
+
 Two limits, stated plainly: loop *membership* and repetition counts are
 checked but loop *sequence* is not, and conditional requirements ("if PO104 is
 present then PO103 must be") are not modelled. Both would need a rule language
