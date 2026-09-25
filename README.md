@@ -271,6 +271,14 @@ the sender will not accept an unsigned MDN, so it is answered with a
 read — RFC 4130 asks for a failure here, not an unsigned success the sender
 has already said it cannot use. `=optional` is answered normally.
 
+A body may arrive with a `Content-Length` or chunked, as an AS2 client
+streaming a large interchange sends it. What cannot be read is refused rather
+than guessed at, and the connection is closed so the next request on it is not
+parsed out of the leftovers: a length that is not a number is `400`, a body
+over `--max-body` (16 MiB) is `413` before it is read, another transfer coding
+is `501`, and a body that stops arriving for `--request-timeout` seconds (60)
+is `408`.
+
 ## Making the mock come to you
 
 A partner with no `as2_url` is a mailbox. Give one a URL and the mock stops
@@ -548,7 +556,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-553 tests, every one of them talking to a real mock over real HTTP. Nothing is
+560 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the
