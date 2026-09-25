@@ -544,7 +544,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": str(error)})
             return self._json(200, row)
         if method == "DELETE":
-            return self._json(200, {"deleted": partners.delete(conn, identifier)})
+            outcome = partners.delete(conn, identifier)
+            return self._json(200 if outcome["deleted"] else 404, outcome)
         return self._text(405, "GET, PATCH or DELETE a partner")
 
     def _validate_only(self, body: bytes) -> Tuple[int, int]:

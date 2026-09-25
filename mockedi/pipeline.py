@@ -445,6 +445,13 @@ class Pipeline:
         order = documents.order_row(self.conn, po_number) if po_number else None
         if order is None:
             raise ValueError("no purchase order %r" % po_number)
+        if order["partner"] != partner_id:
+            # Sending one partner's order to another is not a scenario, it is
+            # a mistake - and a mock that performed it would let a test prove
+            # something that could never happen on a real connection.
+            raise ValueError(
+                "purchase order %s belongs to %s, not to %s"
+                % (po_number, order["partner"], partner_id))
         lines = documents.order_lines(self.conn, po_number)
 
         if kind == schema.RESPONSE:

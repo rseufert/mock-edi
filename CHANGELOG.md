@@ -8,7 +8,39 @@ says so where it does.
 
 ## [Unreleased]
 
+### Changed
+
+- **The partner control plane refuses what the mock cannot act on** ([#40]).
+  It used to accept more than the wire could carry and say nothing: a
+  misspelled field was dropped, `{"version": "5010"}` was written into `GS08`
+  beside an `ISA12` of `00401`, `{"test": "maybe"}` was stored as prose, and a
+  21-character id was accepted and then unreachable, because ISA06 truncates
+  to fifteen and the partner could never be found by the id it sent.
+
+  Now an unknown field is refused and *named*, beside the fields a partner
+  actually has; `version` has to match the dialect; `test` is a flag;
+  `mdn_mode` and `as2_url`'s scheme are checked; and ids and qualifiers have
+  to fit the envelope, per dialect. Changing a long EDIFACT partner's dialect
+  to X12 is refused rather than quietly breaking it.
+
+  This is the "refuse rather than half-implement" rule applied to the control
+  plane. A `PATCH` that answers 200 and changes nothing does not spare anyone
+  trouble - it sends them looking for the bug somewhere else.
+
 ### Fixed
+
+- `/_mock/send` would send one partner's purchase order to another ([#40]).
+  It never checked ownership, so ACME's order could be delivered to EURODIS as
+  an 855 - letting a test prove something that could not happen on a real
+  connection.
+
+- Deleting a partner left its work behind ([#40]). Documents already waiting
+  stayed in the mailbox addressed to somebody the mock no longer traded with,
+  and promised shipments were still packed for them. Outstanding documents are
+  now cancelled and outstanding promises marked, both noted `partner deleted`,
+  and the delete reports how many of each. What was already done keeps its own
+  history, and the document archive outlives the partner - it is the evidence
+  a test came for.
 
 - An acknowledgment note read `errors;   element 4` - three spaces after the
   separator. The element detail carried a two-space indent that only makes
@@ -226,6 +258,7 @@ documents a real one sends.
   check what it reads; it found six real bugs the first time it ran.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
+[#40]: https://github.com/rseufert/mock-edi/issues/40
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#46]: https://github.com/rseufert/mock-edi/issues/46
