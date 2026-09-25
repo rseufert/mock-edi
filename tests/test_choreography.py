@@ -10,6 +10,7 @@ sys.path.insert(0, HERE)
 from decimal import Decimal
 
 from mockedi import validate
+from mockedi.envelope import Delimiters
 
 from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
 
@@ -136,6 +137,22 @@ class EdifactOrderToCash(MockServerCase):
         self.assertEqual(message.find("UNH").raw(2), ["CONTRL", "D", "3", "UN"])
         report = validate.validate_message(message, "EDIFACT")
         self.assertTrue(report.clean, report.summary())
+
+
+class CommaDecimalMark(MockServerCase):
+    """UNA:+,? ' - a comma decimal mark, as German and Nordic partners send."""
+
+    def test_the_order_is_read_clean_and_billed_at_the_same_prices(self):
+        comma = Delimiters(segment="'", element="+", component=":", release="?",
+                           decimal=",")
+        payload = edifact_order("PO-COMMA", delimiters=comma)
+        self.assertIn("PRI+AAA:12,50'", payload)
+        self.send(payload, headers={"Content-Type": "application/edifact"})
+        contrl = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
+        self.assertEqual(contrl.find("UCM").get(3), "7")
+        self.assertEqual([s.tag for s in contrl.segments if s.tag == "UCS"], [])
+        # 100 x 12.50 + 40 x 4.15, the same as the point-decimal order.
+        self.assertEqual(Decimal(self.order("PO-COMMA")["total"]), Decimal("1416.00"))
 
 
 class BothDialectsAgree(MockServerCase):

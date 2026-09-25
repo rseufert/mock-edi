@@ -6,7 +6,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mockedi import edifact
+from mockedi import edifact, validate
 from mockedi.envelope import Delimiters, EdiSyntaxError, seg
 
 BODY = [seg("BGM", ["220"], ["PO4711"], "9"),
@@ -43,6 +43,53 @@ class ServiceStringAdvice(unittest.TestCase):
     def test_a_truncated_una_is_refused(self):
         with self.assertRaises(EdiSyntaxError):
             edifact.read_delimiters("UNA:+")
+
+
+class DecimalMark(unittest.TestCase):
+    """UNA3 declares the decimal mark, and it applies to numeric elements only."""
+    COMMA = Delimiters(segment="'", element="+", component=":", release="?",
+                       decimal=",")
+    LINES = [seg("BGM", ["220"], ["PO4711"], "9"),
+             seg("LIN", "1", "", ["WIDGET-001", "VP"]),
+             seg("IMD", "F", "", ["", "", "", "Widget, blue, 40mm"]),
+             seg("QTY", ["21", "2.5", "PCE"]),
+             seg("PRI", ["AAA", "12.50"]),
+             seg("UNS", "S")]
+
+    def written(self):
+        return edifact.render(edifact.wrap(
+            [edifact.message("ORDERS", "1", self.LINES)], "EURODIS", "MOCKEDI",
+            "9001", delimiters=self.COMMA))
+
+    def test_a_comma_mark_is_written_into_numbers_and_nowhere_else(self):
+        text = self.written()
+        self.assertTrue(text.startswith("UNA:+,? '"))
+        self.assertIn("PRI+AAA:12,50'", text)
+        self.assertIn("QTY+21:2,5:PCE'", text)
+        self.assertIn("Widget, blue, 40mm", text)       # text is not a number
+
+    def test_a_comma_mark_is_read_back_as_a_point(self):
+        message = edifact.parse(self.written()).groups[0].messages[0]
+        self.assertEqual(message.find("PRI").comp(1, 2), "12.50")
+        self.assertEqual(message.find("QTY").comp(1, 2), "2.5")
+        self.assertEqual(message.find("IMD").comp(3, 4), "Widget, blue, 40mm")
+
+    def test_the_mocks_own_comma_output_validates(self):
+        report = validate.validate(edifact.parse(self.written()))
+        self.assertTrue(report.clean, [m.summary() for m in report.messages])
+
+    def test_a_partners_comma_interchange_validates_clean(self):
+        # Written by hand, so it does not depend on the mock's own writer.
+        text = ("UNA:+,? 'UNB+UNOC:3+EURODIS:14+MOCKEDI:ZZ+260924:1030+9001'"
+                "UNH+1+ORDERS:D:96A:UN'BGM+220+PO4711+9'LIN+1++WIDGET-001:VP'"
+                "QTY+21:2,5:PCE'PRI+AAA:12,50'UNS+S'UNT+7+1'UNZ+1+9001'")
+        report = validate.validate(edifact.parse(text))
+        self.assertTrue(report.clean, [m.summary() for m in report.messages])
+
+    def test_a_point_is_still_accepted_where_una_declares_a_comma(self):
+        text = self.written().replace("12,50", "12.50")
+        message = edifact.parse(text).groups[0].messages[0]
+        self.assertEqual(message.find("PRI").comp(1, 2), "12.50")
 
 
 class Structure(unittest.TestCase):

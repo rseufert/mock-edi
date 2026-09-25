@@ -185,7 +185,7 @@ def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
 
 
 def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS,
-                  receiver="MOCKEDI", control="9001", extra=()):
+                  receiver="MOCKEDI", control="9001", extra=(), delimiters=None):
     """An ORDERS, as a rendered interchange."""
     body = [seg("BGM", ["220"], [po_number], "9"),
             seg("DTM", ["137", "20260924", "102"]),
@@ -203,7 +203,8 @@ def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS
     body.append(seg("UNS", "S"))
     body.append(seg("CNT", ["2", str(len(lines))]))
     return edifact.render(edifact.wrap([edifact.message("ORDERS", "1", body)],
-                                       sender, receiver, control), newline=True)
+                                       sender, receiver, control,
+                                       delimiters=delimiters), newline=True)
 
 
 def x12_change(po_number="4500000001", lines=(("1", "CA", 60, "12.50"),),

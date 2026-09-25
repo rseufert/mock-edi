@@ -11,6 +11,11 @@ naming because they are where converters break:
   difference between "ACME+SONS" and a segment that has grown an element.
 * **Elements are composite.**  `BGM+220+PO4711+9` has three elements; the
   first two are composites that happen to carry one component each.
+* **The decimal mark is declared too.**  UNA3 may say `,`, and German and
+  Scandinavian partners use it.  It applies to numeric (`R`) elements only -
+  a comma in a description is a comma - so it is translated against the
+  dictionary: to `.` on the way in, back to the declared mark on the way out,
+  and everything between the envelope and the business sees `12.50`.
 * **Functional groups are optional and rare.**  UNG/UNE exists; almost nobody
   sends it.  An interchange parses into one implicit group so that everything
   above this layer can treat both dialects alike.
@@ -20,6 +25,7 @@ from __future__ import annotations
 import datetime
 from typing import List, Optional, Sequence
 
+from . import schema
 from .envelope import (Delimiters, EDIFACT_DEFAULTS, EdiSyntaxError, Group,
                        Interchange, Message, Seg, ccyymmdd, hhmm,
                        render_segment, seg, split_elements, split_segments,
@@ -116,7 +122,52 @@ def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:
     # Drop the implicit group if the sender used real ones and it stayed empty.
     interchange.groups = [g for g in interchange.groups
                           if g.messages or not interchange.message_count]
+    if delims.decimal not in (".", ""):
+        for group in interchange.groups:
+            for item in group.messages:
+                item.segments = _decimals(item, delims.decimal, ".")
     return interchange
+
+
+def _decimals(message: Message, old: str, new: str) -> List[Seg]:
+    """The message's segments with the decimal mark in `R` elements swapped.
+
+    Only elements the dictionary declares numeric are touched, and only in
+    sets it defines; an unknown segment is left exactly as it arrived for the
+    validator to report. A `.` where UNA declared `,` is left alone: ISO 9735
+    admits either mark in data, and so does the mock.
+    """
+    definition = schema.lookup("EDIFACT", message.code)
+    if definition is None:
+        return list(message.segments)
+    out = []
+    for item in message.segments:
+        segment = definition.segment_for(item.tag)
+        if segment is None:
+            out.append(item)
+            continue
+        elements = []
+        for position, value in enumerate(item.elements, start=1):
+            element = segment.element(position)
+            if element is None:
+                elements.append(value)
+            elif element.composite:
+                # A composite with one component arrives as a plain string.
+                subs = element.components
+                parts = [_mark(part, subs[i] if i < len(subs) else None, old, new)
+                         for i, part in enumerate(
+                             value if isinstance(value, list) else [value])]
+                elements.append(parts if isinstance(value, list) else parts[0])
+            else:
+                elements.append(_mark(value, element, old, new))
+        out.append(Seg(tag=item.tag, elements=elements, position=item.position))
+    return out
+
+
+def _mark(value, element: Optional[schema.Element], old: str, new: str):
+    if isinstance(value, str) and element is not None and element.type == "R":
+        return value.replace(old, new)
+    return value
 
 
 def message(code: str, control: str, body: Sequence[Seg],
@@ -182,7 +233,9 @@ def render(interchange: Interchange, newline: bool = False,
     ), delims))
     for group in interchange.groups:
         for item in group.messages:
-            for element in item.segments:
+            segments = (item.segments if delims.decimal in (".", "")
+                        else _decimals(item, ".", delims.decimal))
+            for element in segments:
                 out.append(render_segment(element, delims))
     out.append(render_segment(
         seg("UNZ", str(interchange.message_count), interchange.control), delims))
