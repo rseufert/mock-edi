@@ -97,11 +97,17 @@ class DropBox:
                                         name="mock-edi-dropbox")
         self._thread.start()
 
-    def stop(self, wait: float = 2.0) -> None:
+    def stop(self, wait: float = 2.0) -> bool:
+        """Ask the poller to stop, and say whether it did within `wait`."""
         self._stop.set()
-        if self._thread is not None:
-            self._thread.join(timeout=wait)
-            self._thread = None
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout=wait)
+        if thread.is_alive():
+            return False
+        self._thread = None
+        return True
 
     def _poll(self) -> None:
         while not self._stop.wait(self.interval_ms / 1000.0):

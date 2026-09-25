@@ -36,6 +36,15 @@ says so where it does.
 
 ### Fixed
 
+- Shutting the mock down could crash the interpreter with a segmentation
+  fault ([#62]). `close()` stopped the courier and the drop poller with a
+  join that gave up after two seconds and carried on regardless, then closed
+  SQLite under whichever thread was still using it. The connection is now
+  closed under the lock every thread takes around its database work, so a
+  thread that has not stopped meets a closed database as an ordinary
+  exception; `stop()` says whether the thread stopped; and `close()` names
+  any that did not, on stderr and in what it returns.
+
 - Two lines with the same number in one order were a 500 that left the
   database half-written ([#42]): the interchange was recorded, and if the PO
   number already existed its lines were deleted and not put back. A repeated
@@ -294,6 +303,7 @@ documents a real one sends.
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
+[#62]: https://github.com/rseufert/mock-edi/issues/62
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1

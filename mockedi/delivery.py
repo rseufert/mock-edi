@@ -59,12 +59,24 @@ class Courier:
                                         name="mock-edi-courier")
         self._thread.start()
 
-    def stop(self, wait: float = 2.0) -> None:
+    def stop(self, wait: float = 2.0) -> bool:
+        """Ask the courier to stop, and say whether it did within `wait`.
+
+        A delivery already under way is a network call that cannot be
+        interrupted, so the answer can be no. The caller has to know: closing
+        the database under a thread that is still running is how the mock
+        once crashed the interpreter rather than raising.
+        """
         self._stop.set()
         self._queue.put(("stop", 0))
-        if self._thread is not None:
-            self._thread.join(timeout=wait)
-            self._thread = None
+        thread = self._thread
+        if thread is None:
+            return True
+        thread.join(timeout=wait)
+        if thread.is_alive():
+            return False
+        self._thread = None
+        return True
 
     def drain(self, timeout: float = 5.0) -> None:
         """Wait for the queue to empty. Tests use it instead of sleeping."""
