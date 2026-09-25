@@ -97,9 +97,12 @@ class Mock:
         # One lock over everything that touches the database. SQLite itself
         # copes with several threads on one connection, but the mock's
         # read-modify-write sequences do not - two interchanges arriving at
-        # once must not be handed the same ISA13. The courier holds the same
-        # lock, and releases it before it makes a network call.
+        # once must not be handed the same ISA13. The courier and the drop
+        # poller hold the same lock, and release it before a network call or
+        # a file write.
         self.lock = threading.RLock()
+        self.courier.lock = self.lock
+        self.dropbox.lock = self.lock
         self.started = datetime.datetime.now()
         self.random = random.Random(config.seed_value)
 
@@ -113,10 +116,29 @@ class Mock:
         self.dropbox.write(outbound_ids)
         self.courier.enqueue_many(outbound_ids)
 
-    def close(self) -> None:
-        self.dropbox.stop()
-        self.courier.stop()
-        self.conn.close()
+    def close(self, wait: float = 2.0) -> List[str]:
+        """Stop the background threads and close the database.
+
+        The connection is closed under the lock every thread takes around
+        its database work, so no thread can be inside a query when it goes:
+        closing SQLite under a running statement is a use-after-free in C,
+        and it crashes the interpreter instead of raising. A thread that
+        outlives `wait` is named, here and on stderr, rather than ignored;
+        when it next takes the lock it finds the connection closed, which is
+        an ordinary exception.
+
+        Returns the threads that would not stop.
+        """
+        stuck = [name for name, worker in (("drop poller", self.dropbox),
+                                           ("courier", self.courier))
+                 if not worker.stop(wait)]
+        if stuck:
+            sys.stderr.write("mock-edi: the %s did not stop within %.1fs; "
+                             "closing the database once it lets go\n"
+                             % (" and the ".join(stuck), wait))
+        with self.lock:
+            self.conn.close()
+        return stuck
 
     def reset(self) -> None:
         """Back to a freshly seeded system, without restarting the process."""
@@ -191,8 +213,11 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as error:       # pragma: no cover - last resort
             # Whatever the handler wrote before it failed is undone here, so
             # the request log's commit below cannot commit half of it.
-            with self.mock.lock:
-                self.mock.conn.rollback()
+            try:
+                with self.mock.lock:
+                    self.mock.conn.rollback()
+            except sqlite3.Error:        # the database is already closed
+                pass
             status, written = self._json(500, {"error": str(error),
                                                "type": type(error).__name__})
         finally:
@@ -943,8 +968,6 @@ def make_server(config: Config) -> _Server:
     """Build a server. It is not listening until `serve_forever` is called."""
     httpd = _Server((config.host, config.port), Handler)
     httpd.mock = Mock(config)
-    httpd.mock.courier.lock = httpd.mock.lock
-    httpd.mock.dropbox.lock = httpd.mock.lock
     if httpd.mock.dropbox.active:
         httpd.mock.dropbox.prepare()
         httpd.mock.dropbox.start()
