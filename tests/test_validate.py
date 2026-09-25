@@ -190,5 +190,28 @@ class EdifactComposites(unittest.TestCase):
         self.assertTrue(report.clean, notes(report))
 
 
+class EdifactVersions(unittest.TestCase):
+    BODY = EdifactComposites.BODY
+
+    def report(self, code, version, body=None):
+        message = edifact.message(code, "1", body or self.BODY, version=version)
+        return validate.validate_message(message, "EDIFACT")
+
+    def test_a_message_in_another_directory_is_an_error_on_unh(self):
+        report = self.report("ORDERS", "D:01B:UN")
+        finding = report.segments[0]
+        self.assertEqual((finding.tag, finding.position), ("UNH", 1))
+        self.assertEqual([(e.position, e.component, e.ref, e.value)
+                          for e in finding.elements], [(2, 3, "0054", "01B")])
+        self.assertTrue(report.accepted)       # an error, not fatal
+
+    def test_a_contrl_that_names_a_business_directory_is_caught(self):
+        body = [seg("UCI", "1", ["EURODIS", "ZZ"], ["MOCKEDI", "ZZ"], "7")]
+        report = self.report("CONTRL", "D:96A:UN", body)
+        self.assertIn("UNH02 names CONTRL:D:96A:UN, the dictionary defines "
+                      "CONTRL:D:3:UN", report.summary())
+        self.assertTrue(self.report("CONTRL", "D:3:UN", body).clean)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

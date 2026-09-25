@@ -197,6 +197,7 @@ def validate_message(message: Message, dialect: str,
         return report
 
     _check_trailer(message, dialect, report)
+    _check_version(message, dialect, definition, report)
     _walk(message, definition, report)
 
     fatal = report.count(FATAL) or any(code in ("1", "3", "4")
@@ -228,6 +229,40 @@ def _check_trailer(message: Message, dialect: str, report: MessageReport) -> Non
         report.set_errors.append((
             "4", "%s01 counts %s segments, the message holds %d"
             % (trailer_tag, declared, actual)))
+
+
+def _check_version(message: Message, dialect: str,
+                   definition: schema.TransactionSet, report: MessageReport) -> None:
+    """Compare UNH S009 0052/0054 with the directory the set is declared in.
+
+    The dictionary is one directory - D.96A for business messages, syntax 3
+    for CONTRL - so a message that names another is being read against
+    definitions it does not claim. That is an error, not fatal: most
+    directories agree on most segments, and a real translator configured for
+    one release will often read another. X12 is left out until the dictionary
+    is version-aware, since every 005010 set is read against 004010 today.
+    """
+    if dialect != "EDIFACT" or not definition.version or not message.version:
+        return
+    declared = definition.version.split(":")
+    actual = message.version.split(":")
+    header = message.segments[0] if message.segments else None
+    findings = []
+    for index in (1, 2):
+        want = declared[index - 1] if index - 1 < len(declared) else ""
+        got = actual[index - 1] if index - 1 < len(actual) else ""
+        if got and want and got != want:
+            findings.append(ElementFinding(
+                position=2, component=index + 1,
+                ref="0052" if index == 1 else "0054", code="7", value=got,
+                note="UNH02 names %s:%s, the dictionary defines %s:%s"
+                     % (message.code, message.version, message.code,
+                        definition.version)))
+    if findings and header is not None:
+        report.segments.append(SegmentFinding(
+            tag=header.tag, position=header.position, code="8",
+            note="%s names a directory this mock does not define" % header.tag,
+            elements=findings))
 
 
 # ---------------------------------------------------------------------------

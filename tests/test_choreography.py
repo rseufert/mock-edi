@@ -9,6 +9,8 @@ sys.path.insert(0, HERE)
 
 from decimal import Decimal
 
+from mockedi import validate
+
 from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
 
 
@@ -126,6 +128,14 @@ class EdifactOrderToCash(MockServerCase):
         self.assertEqual(message.code, "CONTRL")
         self.assertEqual(message.find("UCI").get(1), "9001")
         self.assertEqual(message.find("UCM").get(3), "7")   # acknowledged
+
+    def test_the_contrl_names_the_syntax_version_not_the_partners_directory(self):
+        # EURODIS trades D:96A, which has no CONTRL; CONTRL is a service
+        # message and its UNH names syntax version 3.
+        message = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
+        self.assertEqual(message.find("UNH").raw(2), ["CONTRL", "D", "3", "UN"])
+        report = validate.validate_message(message, "EDIFACT")
+        self.assertTrue(report.clean, report.summary())
 
 
 class BothDialectsAgree(MockServerCase):
