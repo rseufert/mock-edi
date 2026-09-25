@@ -253,6 +253,52 @@ RANGE_START = {
 }
 
 
+class UnitOfWork:
+    """A connection whose commits can be held back until a unit of work ends.
+
+    Almost every helper commits as it goes, which is right on its own and
+    wrong inside an inbound interchange: a failure halfway through left the
+    interchange recorded, an order's lines deleted and nothing put back.
+    Inside `atomic()`, `commit()` waits; the block commits once at the end,
+    or rolls everything back if anything raised. Everything else is the
+    connection itself.
+
+    It is one long-lived object rather than a wrapper swapped in for the
+    duration, because the courier picks the connection up before it takes
+    the lock, and must never be holding one whose commits do nothing.
+    """
+
+    def __init__(self, conn: sqlite3.Connection):
+        self._conn = conn
+        self._depth = 0
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._conn, name)
+
+    def commit(self) -> None:
+        if not self._depth:
+            self._conn.commit()
+
+    def atomic(self) -> "UnitOfWork._Atomic":
+        return UnitOfWork._Atomic(self)
+
+    class _Atomic:
+        def __init__(self, owner: "UnitOfWork"):
+            self.owner = owner
+
+        def __enter__(self) -> None:
+            self.owner._depth += 1
+
+        def __exit__(self, kind, _value, _traceback) -> bool:
+            self.owner._depth -= 1
+            if not self.owner._depth:
+                if kind is None:
+                    self.owner._conn.commit()
+                else:
+                    self.owner._conn.rollback()
+            return False
+
+
 def connect(path: str = ":memory:") -> sqlite3.Connection:
     conn = sqlite3.connect(path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
