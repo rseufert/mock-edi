@@ -65,6 +65,9 @@ class Config:
     invoice_delay_ms: int = 0
     mdn: bool = True
     deliver_timeout: float = 10.0
+    # Accept an interchange control number a partner has already used. Off by
+    # default: a real receiver refuses the replay rather than shipping twice.
+    allow_duplicates: bool = False
 
     # Trading over a directory instead of over HTTP.
     drop_dir: str = ""

@@ -1039,6 +1039,9 @@ EDIFACT_SYNTAX_ERRORS = {  # 0085, in CONTRL
     "12": "Invalid value", "13": "Missing",
     "14": "Value not supported in this position",
     "15": "Not supported in this position", "16": "Too many constituents",
+    # 27 sits beside 28 and 29 in the standard's list, which is the
+    # corroboration for it: those two are already here and correctly placed.
+    "27": "Duplicate detected",
     "28": "References do not match", "29": "Control count does not match "
     "number of instances received",
     "35": "Too many data element or segment repetitions",

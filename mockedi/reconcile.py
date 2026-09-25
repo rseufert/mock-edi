@@ -28,10 +28,13 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from . import db
+from . import db, schema
 from .envelope import Message
 
 # What we record against the document that was acknowledged.
+# Kinds that answer a document rather than await an answer.
+ACKNOWLEDGMENT_KINDS = (schema.ACKNOWLEDGMENT, schema.INTERCHANGE_ACKNOWLEDGMENT)
+
 ACCEPTED = "accepted"
 ACCEPTED_WITH_ERRORS = "accepted-with-errors"
 REJECTED = "rejected"
@@ -226,7 +229,10 @@ def unacknowledged(conn: sqlite3.Connection, older_than: float = 0.0,
     """
     import datetime
     clauses = ["direction = 'out'", "ack_status = ''",
-               "kind != 'acknowledgment'"]
+               # No acknowledgment is itself acknowledged - neither a 997 nor
+               # a TA1 - so neither is ever outstanding.
+               "kind NOT IN (%s)"
+               % ", ".join("'%s'" % k for k in ACKNOWLEDGMENT_KINDS)]
     params: List[Any] = []
     if partner:
         clauses.append("partner = ?")

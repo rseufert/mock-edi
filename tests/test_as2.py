@@ -44,10 +44,13 @@ class SynchronousMdn(MockServerCase):
     def test_the_default_digest_is_sha1_when_none_is_named(self):
         headers = as2_headers(message_id="<m2@acme.example>")
         del headers["Disposition-Notification-Options"]
-        _status, _h, body = self.request("POST", "/as2", x12_order("PO-AS2B"),
+        # Built once: every order carries a fresh interchange control number,
+        # so a second call would be different bytes and a different digest.
+        payload = x12_order("PO-AS2B")
+        _status, _h, body = self.request("POST", "/as2", payload,
                                          headers=headers, raw=True)
         expected = base64.b64encode(
-            hashlib.sha1(x12_order("PO-AS2B").encode()).digest()).decode()
+            hashlib.sha1(payload.encode()).digest()).decode()
         self.assertIn("Received-Content-MIC: %s, sha1" % expected, body.decode())
 
     def test_the_human_readable_part_says_what_happened(self):

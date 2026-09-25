@@ -40,6 +40,10 @@ def build_parser() -> argparse.ArgumentParser:
                            default=0, metavar="MS", help="delay before the 810/INVOIC")
     behaviour.add_argument("--tax-rate", default="0",
                            help="tax applied to invoices, e.g. 0.0825 (default: 0)")
+    behaviour.add_argument("--allow-duplicates", action="store_true",
+                           help="accept an interchange control number a partner "
+                                "has already used; by default a replay is "
+                                "refused in the envelope's own words")
     behaviour.add_argument("--no-mdn", dest="mdn", action="store_false",
                            help="never return an MDN, whatever the sender asks for")
     behaviour.add_argument("--any-receiver", dest="strict_receiver",

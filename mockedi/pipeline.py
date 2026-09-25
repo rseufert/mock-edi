@@ -30,7 +30,7 @@ from . import (ack, db, documents, edifact, partners, reconcile, schema,
                transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
-from .validate import InterchangeReport, validate
+from .validate import EnvelopeFinding, InterchangeReport, validate
 
 PENDING = "pending"
 READY = "ready"
@@ -142,10 +142,14 @@ class Pipeline:
                            error="the interchange is addressed to %r, this mock is %r"
                                  % (interchange.receiver, self.config.as2_id))
 
+        # Before it is stored, or it would find itself.
+        faults = self._duplicate_fault(partner["id"], interchange)
+
         interchange_id = self._store_interchange(
             "in", interchange, partner["id"], text, transport, message_id, mic)
 
-        report = validate(interchange, strict=partner["behaviour"] == "strict")
+        report = validate(interchange, strict=partner["behaviour"] == "strict",
+                          envelope_faults=faults)
         receipt = Receipt(interchange_id=interchange_id, partner=partner["id"],
                           dialect=dialect, control=interchange.control, report=report)
 
@@ -192,6 +196,39 @@ class Pipeline:
 
         self._plan(partner, interchange, report, receipt)
         return receipt
+
+    def _duplicate_fault(self, partner_id: str, interchange: Interchange):
+        """Refuse an interchange control number this partner has used before.
+
+        A retry bug on the sender's side is common and processing a duplicate
+        order is expensive, so a real receiver refuses the second copy in the
+        envelope's own words rather than shipping the goods twice. The mock
+        can already *produce* that bug with the `duplicate-invoice` behaviour;
+        this is the other side of it, which is what a buyer's retry logic
+        needs to be tested against.
+
+        Turned off with `--allow-duplicates`, for a test that wants the older
+        behaviour of replacing the order.
+        """
+        if self.config.allow_duplicates or not interchange.control:
+            return []
+        seen = db.one(self.conn,
+                      "SELECT id, at FROM interchange WHERE direction = 'in'"
+                      " AND partner = ? AND control = ? ORDER BY id LIMIT 1",
+                      (partner_id, interchange.control))
+        if seen is None:
+            return []
+        if interchange.dialect == "X12":
+            return [EnvelopeFinding(
+                code="025",            # I18: duplicate interchange control number
+                tag="ISA", position=13,
+                note="interchange control number %s was already received from "
+                     "%s at %s" % (interchange.control, partner_id, seen["at"]))]
+        return [EnvelopeFinding(
+            code="27",                 # 0085: duplicate detected
+            tag="UNB", position=5,
+            note="interchange control reference %s was already received from "
+                 "%s at %s" % (interchange.control, partner_id, seen["at"]))]
 
     def _record(self, interchange_id: int, partner: Dict[str, Any], message,
                 message_report, dialect: str) -> str:

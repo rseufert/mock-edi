@@ -193,8 +193,17 @@ class InterchangeReport:
         return "E"
 
 
-def validate(interchange: Interchange, strict: bool = False) -> InterchangeReport:
-    """Check every message in an interchange against the dictionary."""
+def validate(interchange: Interchange, strict: bool = False,
+             envelope_faults: Sequence[EnvelopeFinding] = ()) -> InterchangeReport:
+    """Check every message in an interchange against the dictionary.
+
+    `envelope_faults` are findings the *caller* knows and the document cannot
+    show. A duplicate control number is the case this exists for: an
+    interchange is only a duplicate relative to what has arrived before, which
+    is a question for the database rather than for the bytes in hand. They are
+    merged before the verdict is passed down to the messages, so a refusal
+    reaches them however it was arrived at.
+    """
     report = InterchangeReport(dialect=interchange.dialect,
                                control=interchange.control,
                                sender=interchange.sender,
@@ -212,6 +221,7 @@ def validate(interchange: Interchange, strict: bool = False) -> InterchangeRepor
             ("5", "the interchange holds no transaction sets"))
 
     _check_envelope(interchange, report)
+    report.interchange_findings.extend(envelope_faults)
     for group, item in zip(groups, report.messages):
         if (report.interchange_rejected
                 or (group.functional_id, group.control) in report.group_errors):

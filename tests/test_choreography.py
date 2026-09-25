@@ -12,7 +12,8 @@ from decimal import Decimal
 from mockedi import validate
 from mockedi.envelope import Delimiters
 
-from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
+from support import (ACME, EURODIS, MockServerCase, edifact_order,
+                     parse, x12_order)
 
 
 class X12OrderToCash(MockServerCase):
@@ -97,7 +98,8 @@ class X12OrderToCash(MockServerCase):
 class EdifactOrderToCash(MockServerCase):
     def setUp(self):
         super().setUp()
-        self.summary = self.send(edifact_order("PO-2026-00042"),
+        self.payload = edifact_order("PO-2026-00042")
+        self.summary = self.send(self.payload,
                                  headers={"Content-Type": "application/edifact"})
 
     def test_the_same_choreography_in_the_other_dialect(self):
@@ -137,7 +139,10 @@ class EdifactOrderToCash(MockServerCase):
     def test_the_contrl_acknowledges_the_interchange(self):
         message = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
         self.assertEqual(message.code, "CONTRL")
-        self.assertEqual(message.find("UCI").get(1), "9001")
+        # UCI names the interchange it acknowledges, which is the one this
+        # test sent - read back rather than assumed.
+        sent = parse(self.payload).control
+        self.assertEqual(message.find("UCI").get(1), sent)
         self.assertEqual(message.find("UCM").get(3), "7")   # acknowledged
 
     def test_the_contrl_names_the_syntax_version_not_the_partners_directory(self):
