@@ -197,6 +197,10 @@ class AfterARestart(FileDatabaseCase):
     def leave_ready(self):
         """An order answered while ACME had nowhere to post to, then an URL."""
         self.send(x12_order("PO-RESTART"))
+        # Released documents go on the courier's queue whatever the partner,
+        # and it looks the URL up when it reaches each one: let it pass over
+        # them before there is a URL to find.
+        self.httpd.mock.courier.drain(5.0)
         self.patch("/_mock/partners/" + ACME, {"as2_url": self.url})
         _status, _headers, rows = self.get("/_mock/outbox")
         self.assertEqual({r["status"] for r in rows}, {"ready"})
