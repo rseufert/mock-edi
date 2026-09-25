@@ -438,8 +438,9 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
              when: datetime.datetime) -> List[Seg]:
     out: List[Seg] = [seg(
         "BAK", "00", acknowledgment_type(lines, "X12"), order["po_number"],
-        _iso(order.get("ordered_on")), "", "", when.strftime("%Y%m%d"),
-        order.get("seller_order") or "")]
+        _iso(order.get("ordered_on")), "", "", "",
+        order.get("seller_order") or "",      # BAK08: the seller's order
+        when.strftime("%Y%m%d"))]              # BAK09: acknowledged on
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
     out.append(seg("DTM", "137", when.strftime("%Y%m%d")))
     if order.get("currency"):
@@ -812,8 +813,8 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
              change: Change, when: datetime.datetime) -> List[Seg]:
     out: List[Seg] = [seg(
         "BCA", "00", acknowledgment_type(lines, "X12"), order["po_number"],
-        "", change.sequence, when.strftime("%Y%m%d"), "", "",
-        _iso(order.get("ordered_on")))]
+        "", change.sequence, when.strftime("%Y%m%d"), "", "", "",
+        _iso(order.get("ordered_on")))]        # BCA10: the purchase order date
     out.append(seg("CUR", "SE", order.get("currency") or "USD"))
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
     out.append(seg("DTM", "137", when.strftime("%Y%m%d")))

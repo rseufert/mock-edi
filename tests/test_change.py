@@ -43,6 +43,14 @@ class ChangingAQuantity(MockServerCase):
         self.assertEqual(message.find("BCA").get(3), "PO-CHANGE")
         self.assertEqual(message.find("BCA").get(5), "1")   # change sequence
 
+    def test_the_865_puts_the_po_date_in_bca10(self):
+        # By position, from 004010: 326, 367 and 127 at 07-09, the purchase
+        # order date at 10.
+        self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")]))
+        bca = self.document(ACME, "change-response").groups[0].messages[0].find("BCA")
+        self.assertEqual([bca.get(7), bca.get(8), bca.get(9)], ["", "", ""])
+        self.assertEqual(bca.get(10), "20260924")
+
     def test_the_865_answers_line_by_line_in_the_855s_vocabulary(self):
         self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")]))
         message = self.document(ACME, "change-response").groups[0].messages[0]

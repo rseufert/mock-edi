@@ -36,6 +36,16 @@ says so where it does.
 
 ### Fixed
 
+- **The 855 and 865 change on the wire** ([#49]). `BAK`, `BCH` and `BCA`
+  were declared out of step with ASC X12 004010 from position 6 on, and the
+  writers followed the declaration, so the 855 put its acknowledgment date in
+  BAK07 (Contract Number) and the seller's order in BAK08 as though it were a
+  request reference, and the 865 put the PO date in BCA09. They now go in
+  BAK09, BAK08 (Reference Identification) and BCA10. The same fix stops a
+  legitimate inbound 860 with a contract number in BCH08, or an 855 with one
+  in BAK07, being reported as malformed. A mapping written against the old
+  output will need its positions moving.
+
 - A quantity raised or a line added after despatch was confirmed on the 865
   and then never shipped or billed ([#37]); nor was an order revived by a
   change after it had been cancelled. What a change confirms is now packed
@@ -351,6 +361,7 @@ documents a real one sends.
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#46]: https://github.com/rseufert/mock-edi/issues/46
+[#49]: https://github.com/rseufert/mock-edi/issues/49
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
