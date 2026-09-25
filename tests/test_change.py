@@ -301,6 +301,22 @@ class WhatAChangeConfirmsIsDelivered(MockServerCase):
         self.assertEqual(despatches, [])
 
 
+class RestatingAfterDespatch(MockServerCase):
+    config_kwargs = {"invoice_delay_ms": 3600000}
+
+    def test_a_shipped_line_left_out_is_refused_not_deleted(self):
+        self.send(x12_order("PO-RESTATE-LATE"))           # despatched at once
+        self.mailbox(ACME, leave=False)
+        self.send(x12_order("PO-RESTATE-LATE", purpose="05",
+                            lines=(("WIDGET-001", 100, "12.50"),)))
+        self.assertEqual(self.order("PO-RESTATE-LATE")["lines"][1]["confirmed"], "40")
+        message = self.document(ACME, "change-response").groups[0].messages[0]
+        acks = [a.get(1) for a in message.find_all("ACK")]
+        self.assertEqual(acks[-1], "IR")
+        reason = [r for r in message.find_all("REF") if r.get(1) == "ZZ"][-1]
+        self.assertIn("shipped", reason.get(3))
+
+
 class Reviving(MockServerCase):
     """A change to a cancelled order that confirms something again."""
 
@@ -350,6 +366,37 @@ class AnOrderRestatedAsAChange(MockServerCase):
             lines=(("WIDGET-001", 70, "12.50"), ("BRKT-050", 40, "4.15"))))
         self.assertEqual([q["code"] for q in summary["queued"]], ["997", "865"])
         self.assertEqual(self.order("PO-RESTATE")["lines"][0]["quantity"], "70")
+
+    def restate_without_line_2(self, purpose):
+        self.send(x12_order("PO-RESTATE", purpose=purpose,
+                            lines=(("WIDGET-001", 70, "12.50"),)))
+
+    def test_a_line_left_out_of_a_replacement_is_deleted(self):
+        self.restate_without_line_2("05")
+        order = self.order("PO-RESTATE")
+        self.assertEqual([(l["line"], l["confirmed"]) for l in order["lines"]],
+                         [("1", "70"), ("2", "0")])
+
+    def test_and_the_865_says_so(self):
+        self.restate_without_line_2("05")
+        message = self.document(ACME, "change-response").groups[0].messages[0]
+        pocs = {p.get(1): p.get(2) for p in message.find_all("POC")}
+        self.assertEqual(pocs, {"1": "CA", "2": "DI"})
+        acks = [a.get(1) for a in message.find_all("ACK")]
+        self.assertEqual(acks, ["IA", "IR"])
+
+    def test_and_it_does_not_ship(self):
+        self.restate_without_line_2("05")
+        self.mailbox(ACME, leave=False)
+        self.post("/_mock/advance?all")
+        despatch = self.document(ACME, "despatch").groups[0].messages[0]
+        self.assertEqual([s.get(1) for s in despatch.find_all("SN1")], ["1"])
+
+    def test_a_change_purpose_reads_an_omission_the_same_way(self):
+        # 04 is arguable; the mock reads a restated 850 as the whole order,
+        # because an 850 has no other way to say "drop this line".
+        self.restate_without_line_2("04")
+        self.assertEqual(self.order("PO-RESTATE")["lines"][1]["confirmed"], "0")
 
     def test_a_first_order_with_a_change_purpose_is_still_an_order(self):
         summary = self.send(x12_order("PO-BRAND-NEW", purpose="04"))
