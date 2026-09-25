@@ -10,6 +10,12 @@ says so where it does.
 
 ### Added
 
+- **Python 3.14 is tested and declared** ([#20]). It had been out for a year
+  with the matrix stopping at 3.13, so the interpreter where a removal would
+  show up first was the one nobody watched. That entry runs with
+  `PYTHONWARNINGS=error::DeprecationWarning`: with no dependencies, nothing
+  but this project's own code can raise one.
+
 - **A TA1 interchange acknowledgment** ([#51]), when `ISA14 = 1` asks for one
   and whenever the envelope itself is at fault. It travels in an interchange
   of its own with no functional group, and is collected from the mailbox as
@@ -404,6 +410,7 @@ documents a real one sends.
 [#44]: https://github.com/rseufert/mock-edi/issues/44
 [#40]: https://github.com/rseufert/mock-edi/issues/40
 [#17]: https://github.com/rseufert/mock-edi/issues/17
+[#20]: https://github.com/rseufert/mock-edi/issues/20
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
