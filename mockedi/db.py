@@ -142,6 +142,15 @@ CREATE TABLE IF NOT EXISTS shipment (
     at           TEXT NOT NULL
 );
 
+-- What each consignment carried, line by line. order_line.shipped is the
+-- running total; a second consignment's 856 and 810 need their own share.
+CREATE TABLE IF NOT EXISTS shipment_line (
+    shipment_id  TEXT NOT NULL,
+    line         TEXT NOT NULL,
+    quantity     TEXT NOT NULL DEFAULT '0',
+    PRIMARY KEY (shipment_id, line)
+);
+
 CREATE TABLE IF NOT EXISTS invoice (
     invoice_number TEXT PRIMARY KEY,
     po_number      TEXT NOT NULL,

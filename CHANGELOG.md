@@ -36,6 +36,14 @@ says so where it does.
 
 ### Fixed
 
+- A quantity raised or a line added after despatch was confirmed on the 865
+  and then never shipped or billed ([#37]); nor was an order revived by a
+  change after it had been cancelled. What a change confirms is now packed
+  and billed: the difference ships as a second consignment with an 856 of
+  its own, and **every consignment is invoiced separately**, each 810 naming
+  its shipment. This changes behaviour for anyone who assumed one invoice
+  per order - which a real seller does not promise either.
+
 - Shutting the mock down could crash the interpreter with a segmentation
   fault ([#62]). `close()` stopped the courier and the drop poller with a
   join that gave up after two seconds and carried on regardless, then closed
@@ -341,6 +349,7 @@ documents a real one sends.
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#37]: https://github.com/rseufert/mock-edi/issues/37
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51

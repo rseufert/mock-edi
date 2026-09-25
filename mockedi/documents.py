@@ -226,6 +226,46 @@ def latest_shipment(conn: sqlite3.Connection, po_number: str) -> Dict[str, Any]:
                         " ORDER BY rowid DESC LIMIT 1", (po_number,)) or {}
 
 
+def uninvoiced_shipments(conn: sqlite3.Connection,
+                         po_number: str) -> List[Dict[str, Any]]:
+    """Consignments no invoice names yet, oldest first."""
+    return db.rows(conn,
+                   "SELECT * FROM shipment WHERE po_number = ? AND shipment_id"
+                   " NOT IN (SELECT shipment_id FROM invoice WHERE po_number = ?)"
+                   " ORDER BY rowid", (po_number, po_number))
+
+
+def consignment_lines(conn: sqlite3.Connection,
+                      shipment_id: str) -> List[Dict[str, Any]]:
+    """The order lines one consignment carried, with *its* quantities.
+
+    `order_line.shipped` and `.invoiced` are running totals over every
+    consignment. An 856 or an 810 for one consignment reports that
+    consignment's share, so the rows come back with both fields set to it -
+    which is what the writers read.
+
+    A shipment packed before consignments were recorded line by line has no
+    rows here; it was the order's only one, so its share is everything that
+    shipped.
+    """
+    shipment = shipment_row(conn, shipment_id)
+    if shipment is None:
+        return []
+    carried = {row["line"]: row["quantity"] for row in db.rows(
+        conn, "SELECT line, quantity FROM shipment_line WHERE shipment_id = ?",
+        (shipment_id,))}
+    out = []
+    for row in order_lines(conn, shipment["po_number"]):
+        quantity = carried.get(row["line"]) if carried else (
+            row["shipped"] if number(row["shipped"]) > 0 else None)
+        if quantity is None:
+            continue
+        row = dict(row)
+        row["shipped"] = row["invoiced"] = quantity
+        out.append(row)
+    return out
+
+
 # ---------------------------------------------------------------------------
 # The documents that follow an accepted order
 # ---------------------------------------------------------------------------
@@ -242,10 +282,9 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
     ones. So the existing shipment is returned instead.
 
     What is packed is the *difference* between confirmed and shipped, not
-    everything confirmed. Today that difference is only ever the whole order
-    or nothing; it is written this way because a quantity raised after
-    despatch should ship a second consignment rather than silently re-ship the
-    first, and that is the shape it will need.
+    everything confirmed, so a quantity raised or a line added after despatch
+    ships as a second consignment of its own. Each consignment records what
+    it carried in `shipment_line`.
     """
     moment = when or datetime.datetime.now()
     order = order_row(conn, po_number)
@@ -273,6 +312,9 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
         conn.execute("UPDATE order_line SET shipped = ? WHERE po_number = ? AND line = ?",
                      (quantity_text(number(row["shipped"]) + delta),
                       po_number, row["line"]))
+        conn.execute("INSERT INTO shipment_line (shipment_id, line, quantity)"
+                     " VALUES (?,?,?)", (shipment_id, row["line"],
+                                         quantity_text(delta)))
 
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
@@ -301,22 +343,28 @@ def _tracking(shipment_id: str) -> str:
 def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = "",
                    when: Optional[datetime.datetime] = None,
                    tax_rate: str = "0") -> Optional[Dict[str, Any]]:
-    """Invoice what shipped, at the price the acknowledgment confirmed."""
+    """Invoice one consignment, at the price the acknowledgment confirmed.
+
+    One invoice per consignment, so each 810 names the one shipment it bills
+    and a buyer can match every bill to a delivery. An order that shipped in
+    two consignments is billed twice.
+    """
     moment = when or datetime.datetime.now()
     order = order_row(conn, po_number)
     if order is None:
         return None
-    lines = order_lines(conn, po_number)
-    billable = [row for row in lines if number(row["shipped"]) > 0]
+    billable = consignment_lines(conn, shipment_id)
     if not billable:
         return None
 
     subtotal = Decimal("0.00")
+    current = {row["line"]: row for row in order_lines(conn, po_number)}
     for row in billable:
+        billed = number(row["invoiced"])
         conn.execute("UPDATE order_line SET invoiced = ? WHERE po_number = ? AND line = ?",
-                     (row["shipped"], po_number, row["line"]))
-        subtotal += (number(row["shipped"]) * number(row["price"], "0.00")
-                     ).quantize(Decimal("0.01"))
+                     (quantity_text(number(current[row["line"]]["invoiced"]) + billed),
+                      po_number, row["line"]))
+        subtotal += (billed * number(row["price"], "0.00")).quantize(Decimal("0.01"))
 
     tax = (subtotal * Decimal(tax_rate)).quantize(Decimal("0.01"))
     invoice_number = "INV%d" % db.next_number(conn, "invoice")
@@ -327,8 +375,11 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
         (invoice_number, po_number, order["partner"], shipment_id,
          moment.date().isoformat(), order["currency"], db.money(subtotal),
          db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now()))
+    billed_total = sum((number(row["total"], "0.00") for row in db.rows(
+        conn, "SELECT total FROM invoice WHERE po_number = ?", (po_number,))),
+        Decimal("0.00"))
     conn.execute("UPDATE purchase_order SET status = 'invoiced', total = ?"
-                 " WHERE po_number = ?", (db.money(subtotal + tax), po_number))
+                 " WHERE po_number = ?", (db.money(billed_total), po_number))
     conn.commit()
     return db.one(conn, "SELECT * FROM invoice WHERE invoice_number = ?",
                   (invoice_number,))

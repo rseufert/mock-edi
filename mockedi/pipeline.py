@@ -228,6 +228,28 @@ class Pipeline:
                 " WHERE po_number = ? AND done_at = ''",
                 (db.now(), change.po_number))
             self.conn.commit()
+            return
+        self._schedule_the_difference(partner, change.po_number, self.now())
+
+    def _schedule_the_difference(self, partner, po_number, moment) -> None:
+        """Keep what a change confirmed: pack and bill it if nothing will.
+
+        A change that raises a shipped line, adds a line after despatch, or
+        revives a cancelled or rejected order confirms goods no scheduled
+        work is left to pack. The 865 has promised them, so a despatch and an
+        invoice are scheduled for the difference - a second consignment, with
+        an 856 and an 810 of its own. Work already scheduled is not doubled:
+        a despatch still to come packs whatever is confirmed by then.
+        """
+        lines = documents.order_lines(self.conn, po_number)
+        if not any(transactions.number(row["confirmed"])
+                   > transactions.number(row["shipped"]) for row in lines):
+            return
+        waiting = {row["kind"] for row in db.rows(
+            self.conn, "SELECT kind FROM scheduled WHERE po_number = ?"
+                       " AND done_at = ''", (po_number,))}
+        self._schedule_fulfilment(partner, po_number, moment,
+                                  skip=waiting)
 
     # -- planning the answers
 
@@ -292,7 +314,8 @@ class Pipeline:
         self._send(partner, schema.RESPONSE, body, order["po_number"], receipt,
                    moment, self.config.response_delay_ms)
 
-    def _schedule_fulfilment(self, partner, po_number, moment) -> None:
+    def _schedule_fulfilment(self, partner, po_number, moment,
+                             skip: Sequence[str] = ()) -> None:
         """Promise to pack and to invoice, without doing either yet.
 
         The work is scheduled rather than done, because a despatch delay has
@@ -307,6 +330,8 @@ class Pipeline:
         """
         for kind, delay in ((schema.DESPATCH, self.config.despatch_delay_ms),
                             (schema.INVOICE, self.config.invoice_delay_ms)):
+            if kind in skip:
+                continue
             due = moment + datetime.timedelta(milliseconds=delay)
             self.conn.execute(
                 "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
@@ -331,35 +356,37 @@ class Pipeline:
             if shipment is None:
                 return
             order = documents.order_row(self.conn, po_number)
-            lines = documents.order_lines(self.conn, po_number)
+            lines = documents.consignment_lines(self.conn, shipment["shipment_id"])
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order, lines, shipment,
                 moment)
             self._send(partner, schema.DESPATCH, body, po_number, receipt, moment)
             return
 
-        shipment = documents.latest_shipment(self.conn, po_number)
-        if not shipment:
-            # An invoice due before the despatch: bill what can be billed, the
-            # way a seller who ships and invoices in one motion does.
-            shipment = documents.create_shipment(self.conn, po_number, moment) or {}
-        invoice = documents.create_invoice(
-            self.conn, po_number, shipment.get("shipment_id", ""), moment,
-            self.config.tax_rate)
-        if invoice is None:
-            return
-        order = documents.order_row(self.conn, po_number)
-        lines = documents.order_lines(self.conn, po_number)
-        body = transactions.write_invoice(
-            partner["dialect"], self.us, partner, order, lines, invoice,
-            shipment, moment)
-        self._send(partner, schema.INVOICE, body, po_number, receipt, moment)
-        if partner["behaviour"] == "duplicate-invoice":
-            # The same invoice number, sent twice, a few moments apart: a
-            # partner with a retry bug, which is where duplicate-payment
-            # incidents come from.
-            self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
-                       1000, note="duplicate of the invoice above")
+        # Anything confirmed and not yet packed is packed now, the way a
+        # seller who ships and invoices in one motion does: an invoice due
+        # before the despatch, or before the second consignment of a quantity
+        # raised after the first. The despatch, when it comes, advises that
+        # consignment rather than packing another.
+        documents.create_shipment(self.conn, po_number, moment)
+        for shipment in documents.uninvoiced_shipments(self.conn, po_number):
+            invoice = documents.create_invoice(
+                self.conn, po_number, shipment["shipment_id"], moment,
+                self.config.tax_rate)
+            if invoice is None:
+                continue
+            order = documents.order_row(self.conn, po_number)
+            lines = documents.consignment_lines(self.conn, shipment["shipment_id"])
+            body = transactions.write_invoice(
+                partner["dialect"], self.us, partner, order, lines, invoice,
+                shipment, moment)
+            self._send(partner, schema.INVOICE, body, po_number, receipt, moment)
+            if partner["behaviour"] == "duplicate-invoice":
+                # The same invoice number, sent twice, a few moments apart: a
+                # partner with a retry bug, which is where duplicate-payment
+                # incidents come from.
+                self._send(partner, schema.INVOICE, body, po_number, receipt,
+                           moment, 1000, note="duplicate of the invoice above")
 
     def _queue_change_response(self, partner, order, po_number, receipt,
                                moment) -> None:
