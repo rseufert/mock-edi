@@ -42,6 +42,15 @@ says so where it does.
 
 ### Fixed
 
+- **A PO number with a `/` in it could not be reached by URL** ([#25]).
+  The request path was percent-decoded before it was split on `/`, so
+  `GET /_mock/orders/PO%2F2026%2F1` looked for an order called `PO` and no
+  encoding of `PO/2026/1` reached it - though references like that are how
+  many European buyers number orders. The path is now split first and each
+  segment decoded exactly once; the order and partner handlers no longer
+  decode a second time, which turned a literal `%41` into `A`. The request
+  log now records the path as it was sent, still encoded.
+
 - A dropped file could be read more than once ([#26]). The poller and
   `POST /_mock/drop/scan` could both read it - two interchanges with the same
   ISA13, eight documents back - and a file that could not be moved into
@@ -555,6 +564,7 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#25]: https://github.com/rseufert/mock-edi/issues/25
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1

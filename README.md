@@ -540,7 +540,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-535 tests, every one of them talking to a real mock over real HTTP. Nothing is
+538 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the
