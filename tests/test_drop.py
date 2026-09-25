@@ -280,12 +280,16 @@ class ThePoller(unittest.TestCase):
                 # appear: the order is inserted as `received` and advanced to
                 # `shipped` and then `invoiced` in separate commits, so a
                 # reader on another thread can catch it part way through.
+                # Read under the mock's lock, as every thread in it does: the
+                # poller is writing through this same connection, and two
+                # threads in one SQLite connection at once is API misuse.
                 deadline = time.time() + 15
                 row = None
                 while time.time() < deadline:
-                    row = httpd.mock.conn.execute(
-                        "SELECT * FROM purchase_order WHERE po_number = ?",
-                        ("PO-POLLED",)).fetchone()
+                    with httpd.mock.lock:
+                        row = httpd.mock.conn.execute(
+                            "SELECT * FROM purchase_order WHERE po_number = ?",
+                            ("PO-POLLED",)).fetchone()
                     if row is not None and row["status"] == "invoiced":
                         break
                     time.sleep(0.05)

@@ -20,7 +20,7 @@ sys.path.insert(0, HERE)
 from mockedi import db
 from mockedi.server import Config, make_server
 
-from support import FileDatabaseCase, x12_order
+from support import REQUEST_TIMEOUT, FileDatabaseCase, x12_order
 
 OLD_SCHEMA = os.path.join(HERE, "fixtures", "schema-0.1.0.sql")
 
@@ -61,7 +61,7 @@ class From010(FileDatabase):
         request = urllib.request.Request(
             base + "/edi", data=x12_order("PO-AFTER-UPGRADE").encode(),
             method="POST")
-        with urllib.request.urlopen(request) as response:
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             summary = json.loads(response.read())
         self.assertEqual(summary["orders"], ["PO-AFTER-UPGRADE"])
         self.assertEqual([q["code"] for q in summary["queued"]],
@@ -69,9 +69,10 @@ class From010(FileDatabase):
 
     def test_what_it_held_is_kept_and_new_columns_take_their_defaults(self):
         httpd, _base = self.serve()
-        row = httpd.mock.conn.execute(
-            "SELECT reference, ack_status FROM transaction_set"
-            " WHERE reference = 'PO-FROM-010'").fetchone()
+        with httpd.mock.lock:
+            row = httpd.mock.conn.execute(
+                "SELECT reference, ack_status FROM transaction_set"
+                " WHERE reference = 'PO-FROM-010'").fetchone()
         self.assertEqual(tuple(row), ("PO-FROM-010", ""))
 
     def test_it_is_marked_with_the_current_version(self):
