@@ -1,8 +1,11 @@
 """Trading over a directory: the inbox, the outbox, and the two classic traps."""
+import contextlib
+import io
 import os
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import unittest
 
@@ -137,6 +140,91 @@ class NotReadingFilesTwice(DirectoryCase):
         self.drop_file("order.edi", x12_order("PO-TWICE"))
         self.scan()
         self.assertEqual(self.processed(), ["order-1.edi", "order.edi"])
+
+
+class OneFileOneInterchange(DirectoryCase):
+    """Whatever the combination of scanners, a dropped file is read once."""
+
+    def inbound(self):
+        _status, _headers, rows = self.get("/_mock/interchanges")
+        return [row for row in rows if row["direction"] == "in"]
+
+    def test_the_poller_and_the_endpoint_racing_read_a_file_once(self):
+        # The race is between the poller - which scans on its own thread,
+        # outside the lock every HTTP request holds - and the scan endpoint.
+        # Several of each, released at once.
+        self.drop_file("order.edi", x12_order("PO-RACE"))
+        start = threading.Event()
+
+        def poller():
+            start.wait(5)
+            self.httpd.mock.dropbox.scan()
+
+        def endpoint():
+            start.wait(5)
+            self.post("/_mock/drop/scan")
+
+        workers = [threading.Thread(target=target)
+                   for target in (poller, endpoint) * 8]
+        for worker in workers:
+            worker.start()
+        start.set()
+        for worker in workers:
+            worker.join(30)
+        self.assertEqual(len(self.inbound()), 1)
+        self.assertEqual(self.processed(), ["order.edi"])
+
+    def test_a_claimed_file_is_not_read(self):
+        # The name the mock gives a file while it reads it is one it skips.
+        self.drop_file("order.edi.processing", x12_order("PO-CLAIMED"))
+        self.assertEqual(self.scan()["scanned"], 0)
+
+
+@unittest.skipIf(os.name == "nt", "chmod does not stop writes to a directory on Windows")
+@unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0,
+                 "nothing stops root writing to a directory")
+class AFileThatCannotBeMoved(DirectoryCase):
+    """processed/ is not writable: read once, reported, left where it was."""
+
+    def setUp(self):
+        super().setUp()
+        self.processed_dir = os.path.join(DROP, "processed")
+        os.chmod(self.processed_dir, 0o500)
+        self.addCleanup(os.chmod, self.processed_dir, 0o700)
+        self.path = self.drop_file("order.edi", x12_order("PO-STUCK"))
+        # The warning goes to stderr; keep it, rather than print it.
+        self.said = io.StringIO()
+        redirect = contextlib.redirect_stderr(self.said)
+        redirect.__enter__()
+        self.addCleanup(redirect.__exit__, None, None, None)
+
+    def inbound(self):
+        _status, _headers, rows = self.get("/_mock/interchanges")
+        return [row for row in rows if row["direction"] == "in"]
+
+    def test_it_is_read_once_however_often_the_directory_is_scanned(self):
+        for _ in range(5):
+            self.scan()
+        self.assertEqual(len(self.inbound()), 1)
+
+    def test_it_keeps_its_name_and_is_reported(self):
+        self.scan()
+        self.assertTrue(os.path.exists(self.path))
+        _status, _headers, state = self.get("/_mock/drop")
+        self.assertEqual([item["name"] for item in state["stuck"]], ["order.edi"])
+        self.assertIn("could not move", state["stuck"][0]["reason"])
+        self.assertIn("order.edi", self.said.getvalue())
+        self.assertIn("will not be read again", self.said.getvalue())
+
+    def test_once_it_changes_it_is_read_again(self):
+        self.scan()
+        os.chmod(self.processed_dir, 0o700)
+        with open(self.path, "w", encoding="utf-8") as handle:
+            handle.write(x12_order("PO-STUCK-2"))
+        os.utime(self.path, (time.time() + 5, time.time() + 5))
+        self.scan()
+        self.assertEqual(len(self.inbound()), 2)
+        self.assertEqual(self.processed(), ["order.edi"])
 
 
 class NotReadingHalfWrittenFiles(DirectoryCase):

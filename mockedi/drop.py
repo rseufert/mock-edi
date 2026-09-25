@@ -20,7 +20,17 @@ recommends is not much of an example.
 **Reprocessing.**  A file that has been read must not be read again.  Read
 files are moved into `processed/`, and files that could not be read at all
 into `failed/` - moved rather than deleted, because a mock that eats the
-evidence is no use when a test fails.
+evidence is no use when a test fails.  Two things used to break that promise,
+and both are closed:
+
+* *Two scanners.*  The poller and `POST /_mock/drop/scan` could read the same
+  file at once.  A file is now *claimed* before it is read - renamed to
+  `<name>.processing`, which only one caller can win - and scans take turns.
+* *A file that cannot be moved.*  If `processed/` is not writable the file
+  used to stay put and be read again on every pass.  It is now remembered by
+  name, size and modification time and left alone until it changes, and it
+  is reported in `GET /_mock/drop` and on stderr rather than retried in
+  silence.
 
 The poller is not the only way in.  `POST /_mock/drop/scan` scans once and
 says what it found, for the same reason `POST /_mock/advance` exists: a test
@@ -30,18 +40,24 @@ a scan is neither.
 from __future__ import annotations
 
 import os
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from . import db
 
 PROCESSED = "processed"
 FAILED = "failed"
+NOT_MOVED = "could not move: "
 
-# Never read: a sender's own temporary names, and anything hidden.
-IGNORED_SUFFIXES = (".tmp", ".part", ".filepart", ".writing", ".swp")
+# A file this mock has claimed and is reading.
+CLAIMED = ".processing"
+
+# Never read: a sender's own temporary names, the mock's claim, and anything
+# hidden.
+IGNORED_SUFFIXES = (".tmp", ".part", ".filepart", ".writing", ".swp", CLAIMED)
 
 
 @dataclass
@@ -74,6 +90,10 @@ class DropBox:
         self.written: List[str] = []
         # Names that would have landed outside the pickup directory.
         self.refused: List[str] = []
+        # Files read once that could not be moved out of the way, keyed by
+        # name, with the size and modification time they had and why. Left
+        # alone until either changes.
+        self.stuck: Dict[str, Tuple[int, float, str]] = {}
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
 
@@ -115,8 +135,10 @@ class DropBox:
         while not self._stop.wait(self.interval_ms / 1000.0):
             try:
                 self.scan()
-            except Exception:  # pragma: no cover - a poller must not die
-                pass
+            except Exception as error:  # pragma: no cover - must not die
+                # Said, not swallowed: a poller that fails in silence is how
+                # a file got read eleven times with nothing in the log.
+                sys.stderr.write("mock-edi: drop scan failed: %s\n" % error)
 
     # -- inbound
 
@@ -141,32 +163,58 @@ class DropBox:
             # file's modification time can read as very slightly *ahead* of
             # the clock, so `mtime > now` is true for a file just written and
             # zero would otherwise mean "never ready" rather than "always".
-            if self.settle_ms:
-                try:
-                    if os.path.getmtime(path) > cutoff:
-                        continue
-                except OSError:          # vanished between listing and stat
-                    continue
+            try:
+                stat = os.stat(path)
+            except OSError:              # vanished between listing and stat
+                continue
+            if self.settle_ms and stat.st_mtime > cutoff:
+                continue
+            if name in self.stuck:
+                size, mtime, _reason = self.stuck[name]
+                if (stat.st_size, stat.st_mtime) == (size, mtime):
+                    continue             # read once already; unchanged since
+                del self.stuck[name]     # changed: a new file by the same name
             out.append(name)
         return out
 
     def scan(self) -> List[Scanned]:
-        """Read every settled file in the drop directory, once."""
-        results: List[Scanned] = []
-        for name in self.ready():
-            results.append(self._take(name))
-        with self.lock:
-            self.scans += 1
-            if results:
-                self.last_scan = results
-        return results
+        """Read every settled file in the drop directory, once.
 
-    def _take(self, name: str) -> Scanned:
+        Scans take turns under the mock's own lock. The scan endpoint already
+        holds it - every HTTP request does - so a second lock for scans alone
+        would be taken in the opposite order by the poller, and the two would
+        deadlock the first time they met.
+        """
+        with self.lock:
+            results: List[Scanned] = []
+            for name in self.ready():
+                taken = self._take(name)
+                if taken is not None:
+                    results.append(taken)
+            with self.lock:
+                self.scans += 1
+                if results:
+                    self.last_scan = results
+            return results
+
+    def _take(self, name: str) -> Optional[Scanned]:
         path = os.path.join(self.drop_dir, name)
+        # Claim it first. Whoever wins the rename owns the file; anyone else
+        # finds it gone. A directory the mock may not rename in cannot be
+        # claimed, and is read where it is: scans taking turns and the stuck
+        # list still see to it that it is read once.
+        working = path + CLAIMED
         try:
-            with open(path, "rb") as handle:
+            os.replace(path, working)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            working = path
+        try:
+            with open(working, "rb") as handle:
                 payload = handle.read()
         except OSError as error:
+            self._release(working, path)
             return Scanned(name=name, ok=False, error=str(error))
 
         with self.lock:
@@ -184,9 +232,33 @@ class DropBox:
         else:
             result = Scanned(name=name, ok=False, error=refused[0].error,
                              partner=refused[0].partner, dialect=refused[0].dialect)
-        result.moved_to = self._file_away(path, name,
+        result.moved_to = self._file_away(working, name,
                                           PROCESSED if not refused else FAILED)
+        if result.moved_to.startswith(NOT_MOVED):
+            self._remember_stuck(working, path, name, result.moved_to)
         return result
+
+    def _release(self, working: str, path: str) -> None:
+        """Give a claimed file its own name back."""
+        if working != path:
+            try:
+                os.replace(working, path)
+            except OSError:              # pragma: no cover - left claimed,
+                pass                     # which is ignored: still read once
+
+    def _remember_stuck(self, working: str, path: str, name: str,
+                        reason: str) -> None:
+        """A file read once that could not be put away: never read it again
+        until it changes, and say so."""
+        self._release(working, path)
+        try:
+            stat = os.stat(path if os.path.exists(path) else working)
+        except OSError:                  # pragma: no cover - gone after all
+            return
+        with self.lock:
+            self.stuck[name] = (stat.st_size, stat.st_mtime, reason)
+        sys.stderr.write("mock-edi: read %s but %s; it will not be read again "
+                         "until it changes\n" % (name, reason))
 
     def _file_away(self, path: str, name: str, folder: str) -> str:
         """Move a read file out of the way, without ever overwriting one."""
@@ -203,7 +275,7 @@ class DropBox:
             os.replace(path, candidate)
             return os.path.join(folder, os.path.basename(candidate))
         except OSError as error:         # pragma: no cover - permissions
-            return "could not move: %s" % error
+            return "%s%s" % (NOT_MOVED, error)
 
     # -- outbound
 
@@ -272,5 +344,8 @@ class DropBox:
                 "waiting": self.ready(),
                 "written": list(self.written[-20:]),
                 "refused": list(self.refused[-20:]),
+                "stuck": [{"name": name, "reason": reason}
+                          for name, (_size, _mtime, reason)
+                          in sorted(self.stuck.items())],
                 "lastScan": [vars(item) for item in self.last_scan],
             }

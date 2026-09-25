@@ -42,6 +42,16 @@ says so where it does.
 
 ### Fixed
 
+- A dropped file could be read more than once ([#26]). The poller and
+  `POST /_mock/drop/scan` could both read it - two interchanges with the same
+  ISA13, eight documents back - and a file that could not be moved into
+  `processed/` was read again on every pass, eleven times in a second and a
+  bit, with the poller swallowing the error. A file is now claimed before it
+  is read, by renaming it `<name>.processing`, and scans take turns; a file
+  that cannot be moved keeps its name, is listed under `stuck` in
+  `/_mock/drop` and on stderr, and is left alone until it changes. The
+  poller's own errors go to stderr too.
+
 - **The asynchronous MDN was posted without its MIME boundary** ([#22]). The
   synchronous one went out with the headers `build_mdn` produced; the
   asynchronous one had its headers rebuilt by hand at delivery time, and the
@@ -534,6 +544,7 @@ documents a real one sends.
 [#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
 [#24]: https://github.com/rseufert/mock-edi/issues/24
+[#26]: https://github.com/rseufert/mock-edi/issues/26
 [#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38
