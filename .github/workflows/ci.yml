@@ -28,6 +28,10 @@ jobs:
           - {os: ubuntu-latest, python: "3.11"}
           - {os: ubuntu-latest, python: "3.12"}
           - {os: ubuntu-latest, python: "3.13"}
+          # The newest interpreter turns deprecation warnings into failures:
+          # with no dependencies, nothing but this project's own code can
+          # raise one, so the next removal is met while it is still a warning.
+          - {os: ubuntu-latest, python: "3.14", warnings: error::DeprecationWarning}
           - {os: macos-latest, python: "3.12"}
           - {os: windows-latest, python: "3.12"}
     steps:
@@ -39,6 +43,8 @@ jobs:
         run: python -m compileall -q mockedi tests examples tools
       - name: Run the test suite
         run: python -m unittest discover -s tests -v
+        env:
+          PYTHONWARNINGS: ${{ matrix.warnings }}
 
   docs:
     name: documentation covers every file
