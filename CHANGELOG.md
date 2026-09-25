@@ -8,7 +8,12 @@ says so where it does.
 
 ## [Unreleased]
 
-Nothing yet.
+### Changed
+
+- The package's **Homepage** link on PyPI now points to
+  [rickseufert.com](https://rickseufert.com/#projects), which shows this mock,
+  its counterpart and the worked examples together. **Repository** still
+  points to GitHub.
 
 ## [0.2.0] - 2026-09-24
 
