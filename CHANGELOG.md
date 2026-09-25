@@ -42,6 +42,15 @@ says so where it does.
 
 ### Fixed
 
+- **A pickup file was overwritten after a reset** ([#27]). Outbound files are
+  named `<partner>-<code>-<control>.edi`, a reset starts the control numbers
+  again, and the rename that finished each write replaced whatever had that
+  name - so the answers to an order sent before a reset were silently
+  replaced by the next order's, before anything had collected them. The
+  pickup writer now suffixes a name already taken, as the drop directory
+  always did when filing a read file away, and lists each collision under
+  `renamed` in `GET /_mock/drop`.
+
 - **A PO number with a `/` in it could not be reached by URL** ([#25]).
   The request path was percent-decoded before it was split on `/`, so
   `GET /_mock/orders/PO%2F2026%2F1` looked for an order called `PO` and no
@@ -606,6 +615,8 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#27]: https://github.com/rseufert/mock-edi/issues/27
+
 [#25]: https://github.com/rseufert/mock-edi/issues/25
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43

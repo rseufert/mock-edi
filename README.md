@@ -453,7 +453,10 @@ mock-edi --drop-dir ./edi/in --pickup-dir ./edi/out
 Anything dropped in `./edi/in` goes through the same pipeline a POST does, and
 the answers are written into `./edi/out` as `<partner>-<code>-<control>.edi` —
 written to a temporary name and renamed, so nothing watching the directory
-ever sees a half-written file.
+ever sees a half-written file. Nothing already there is overwritten: after a
+`/_mock/reset` the control numbers start again, so a name can recur before the
+first file is collected, and the new one is written as `...-1.edi` instead and
+listed under `renamed` in `GET /_mock/drop`.
 
 Two things every directory integration meets are handled rather than left to
 bite. A file still being written is not read: anything modified within
@@ -605,7 +608,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-565 tests, every one of them talking to a real mock over real HTTP. Nothing is
+568 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

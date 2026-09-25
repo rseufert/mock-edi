@@ -333,6 +333,43 @@ class WritingThePickupDirectory(DirectoryCase):
                          ["810", "855", "856", "997"])
 
 
+class NothingInThePickupDirectoryIsOverwritten(DirectoryCase):
+    """A reset reuses control numbers; the files from before are kept (#27)."""
+
+    def send_reset_send(self):
+        self.send(x12_order("PO-BEFORE"))
+        first = self.pickup_files()
+        self.post("/_mock/reset")
+        self.send(x12_order("PO-AFTER"))
+        return first
+
+    def test_both_orders_answers_are_there(self):
+        first = self.send_reset_send()
+        names = self.pickup_files()
+        self.assertEqual(len(names), 8, names)
+        self.assertTrue(set(first) <= set(names))
+
+    def test_the_first_file_still_holds_the_first_answer(self):
+        first = self.send_reset_send()
+        invoice = [n for n in first if "-810-" in n][0]
+        with open(os.path.join(PICKUP, invoice), encoding="utf-8") as handle:
+            self.assertIn("PO-BEFORE", handle.read())
+
+    def test_the_collision_is_reported(self):
+        # A reset does not clear the dropbox's memory (#32), so look only at
+        # what this test added.
+        _status, _headers, state = self.get("/_mock/drop")
+        already = len(state["renamed"])
+        first = self.send_reset_send()
+        _status, _headers, state = self.get("/_mock/drop")
+        renamed = state["renamed"][already:]
+        self.assertEqual(sorted(r["name"] for r in renamed), first)
+        for row in renamed:
+            stem = row["name"][:-len(".edi")]
+            self.assertEqual(row["writtenAs"], stem + "-1.edi")
+            self.assertIn(row["writtenAs"], state["written"])
+
+
 class WithoutADropDirectory(MockServerCase):
     def test_scanning_says_so_rather_than_pretending(self):
         status, _headers, data = self.post("/_mock/drop/scan")
