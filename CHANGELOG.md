@@ -41,6 +41,15 @@ says so where it does.
 
 ### Changed
 
+- **The README no longer quotes a test count** ([#17]). The count was added
+  with a check that held it to the number the loader discovers, which did
+  stop it drifting - but an exact number sits in one line of prose that every
+  branch adding a test has to edit, so it conflicted with every other such
+  branch, and a pull request in conflict runs no CI at all. Branches looked
+  stalled when they were only dirty. "Every test talks to a real mock over
+  real HTTP" is the claim worth making, and it cannot go stale; the check went
+  with the number.
+
 - **`advance?seconds=N` moves the mock's clock, and it stays moved** ([#47]).
   The README said it advanced the clock; it released what was due within `N`
   seconds of the real time, once, and remembered nothing - so two advances
