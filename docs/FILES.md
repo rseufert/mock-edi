@@ -90,7 +90,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | What it is |
 | --- | --- |
-| `check_docs.py` | Fails if a tracked file has no row in `docs/FILES.md`, if a row names a file that no longer exists, or if a module is missing from the README's layout block. It checks coverage, not prose. |
+| `check_docs.py` | Fails if a tracked file has no row in `docs/FILES.md`, if a row names a file that no longer exists, if a module is missing from the README's layout block, if the README's test count is not the suite's, or if a command-line flag is never mentioned in the README - it asks the real argument parser. It checks coverage, not prose. |
 | `check_changelog.py` | Fails if `CHANGELOG.md` is malformed, if a released section is edited, if an entry waiting for a release disappears, or if `mockedi/` changed without an entry. A pull request labelled `no changelog` lifts that last rule. |
 
 ## `examples/`
