@@ -17,6 +17,9 @@ jobs:
   test:
     name: tests (py${{ matrix.python }} on ${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    # The suite takes a minute or two. Without a limit, a hung test runs for
+    # GitHub's default of six hours, and no log is served until it ends.
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -42,13 +45,17 @@ jobs:
       - name: Byte-compile every module
         run: python -m compileall -q mockedi tests examples tools
       - name: Run the test suite
-        run: python -m unittest discover -s tests -v
+        # The watchdog in tests/support.py fires well inside the job's limit,
+        # so a hang prints every thread's stack before anything is killed.
+        run: python -X faulthandler -m unittest discover -s tests -v
         env:
           PYTHONWARNINGS: ${{ matrix.warnings }}
+          MOCKEDI_TEST_WATCHDOG: "600"
 
   docs:
     name: documentation covers every file
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
@@ -68,6 +75,7 @@ jobs:
   smoke:
     name: documented examples still work
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -123,6 +131,7 @@ jobs:
   package:
     name: package builds and installs
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -153,6 +162,7 @@ jobs:
   docker:
     name: container image
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - run: docker build -t mock-edi:ci .

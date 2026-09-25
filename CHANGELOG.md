@@ -61,6 +61,28 @@ says so where it does.
   `Pipeline.receive()` returns a list of receipts rather than one, which
   matters to anyone driving the pipeline in process rather than over HTTP.
 
+- A 997 with no `AK2` loop - `AK1` and `AK9` only, the commonest shape there
+  is - validated clean and then acknowledged nothing ([#33]), so the
+  document stayed on `/_mock/unacknowledged` for ever. `AK901` now applies to
+  every set the mock sent in the group `AK102` names, of the kind `AK101`
+  names. A CONTRL with `UCI` and no `UCM` does the same for every message in
+  the interchange `UCI01` quotes.
+
+- An inbound 997 was answered with a 997, and a CONTRL with a CONTRL
+  ([#34]) - which the standards forbid, because two systems that both do it
+  answer each other for ever. A functional group of `FA` is now read and not
+  acknowledged, and a CONTRL is left out of the answer to the interchange it
+  travels in; an interchange carrying nothing else gets no acknowledgment. A
+  `TA1` asked for by `ISA14` is still sent: that answers the envelope.
+
+- A partner id could contain a path ([#24]): `../../trav` was accepted, and
+  its documents were written two directories above `--pickup-dir`. An id may
+  now use only letters, digits, and `.`, `-` or `_` between them - narrower
+  than X12 or EDIFACT allow, and said so, because an id is also a filename and
+  a URL path. The pickup writer also refuses any name that would leave its
+  directory, so a row from an older database cannot either, and lists what it
+  refused in `/_mock/drop`.
+
 - **An X12 envelope carrying no work was answered with silence** ([#55]). A
   functional group with no transaction set in it got no 997, because the
   acknowledgment was built from the messages that arrived rather than from
@@ -463,6 +485,9 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#33]: https://github.com/rseufert/mock-edi/issues/33
+[#34]: https://github.com/rseufert/mock-edi/issues/34
+[#24]: https://github.com/rseufert/mock-edi/issues/24
 [#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38

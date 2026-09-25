@@ -21,7 +21,7 @@ sys.path.insert(0, HERE)
 
 from mockedi.server import Config, make_server
 
-from support import ACME, x12_order
+from support import ACME, REQUEST_TIMEOUT, x12_order
 
 
 def serve(**config):
@@ -34,7 +34,7 @@ def serve(**config):
 def call(base, method, path, body):
     data = body if isinstance(body, bytes) else json.dumps(body).encode()
     request = urllib.request.Request(base + path, data=data, method=method)
-    with urllib.request.urlopen(request) as response:
+    with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
         return response.status
 
 

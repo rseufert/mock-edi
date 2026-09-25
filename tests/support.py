@@ -11,6 +11,7 @@ construction in the way.
 from __future__ import annotations
 
 import datetime
+import faulthandler
 import json
 import os
 import sys
@@ -33,6 +34,20 @@ ACME = "ACME"          # X12, accepts everything
 GLOBEX = "GLOBEX"      # X12 005010, short-ships
 INITECH = "INITECH"    # X12, rejects a line
 EURODIS = "EURODIS"    # EDIFACT
+
+# Every request a test makes gives up after this long. A mock that stops
+# answering is then a failed test naming the request, not a run that blocks
+# until CI kills it. Generous, because a slow Windows or macOS runner is not
+# a hung one.
+REQUEST_TIMEOUT = 30.0
+
+# A watchdog over the whole run, armed only when asked for (CI asks): after
+# MOCKEDI_TEST_WATCHDOG seconds, every thread's stack is written to stderr and
+# the process exits. A hang then fails with the place it hung in the log,
+# instead of running on until the job is cancelled with nothing to show.
+_WATCHDOG = os.environ.get("MOCKEDI_TEST_WATCHDOG")
+if _WATCHDOG:
+    faulthandler.dump_traceback_later(float(_WATCHDOG), exit=True)
 
 
 class MockServerCase(unittest.TestCase):
@@ -71,7 +86,7 @@ class MockServerCase(unittest.TestCase):
         for key, value in (headers or {}).items():
             req.add_header(key, value)
         try:
-            with urllib.request.urlopen(req) as resp:
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
                 payload = resp.read()
                 return resp.status, dict(resp.headers), payload if raw else _maybe_json(payload)
         except urllib.error.HTTPError as err:

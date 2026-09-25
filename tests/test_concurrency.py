@@ -26,7 +26,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import MockServerCase, x12_order
+from support import REQUEST_TIMEOUT, MockServerCase, x12_order
 
 THREADS = 6
 ROUNDS = 4
@@ -41,7 +41,8 @@ class SeveralClientsAtOnce(MockServerCase):
                 request = urllib.request.Request(
                     url, data=data, method="POST" if data else "GET")
                 try:
-                    with urllib.request.urlopen(request) as response:
+                    with urllib.request.urlopen(
+                            request, timeout=REQUEST_TIMEOUT) as response:
                         response.read()
                 except urllib.error.HTTPError as error:
                     with error:
