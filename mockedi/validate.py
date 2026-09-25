@@ -14,7 +14,7 @@ translators differ.  The mock's policy:
 
 * *fatal* rejects the transaction set - an unknown set, a missing mandatory
   segment or element, a control number that does not match its trailer, a
-  segment count that does not add up.  These make the document unreliable to
+  segment count that does not add up, a line number used twice.  These make the document unreliable to
   interpret at all.
 * *error* accepts it and says so - an invalid code value, a length violation,
   a malformed date, a segment the set does not define.  These are real
@@ -236,6 +236,7 @@ def validate_message(message: Message, dialect: str,
     _check_trailer(message, dialect, report)
     _check_version(message, dialect, definition, report)
     _walk(message, definition, report)
+    _check_line_numbers(message, definition, report)
 
     fatal = report.count(FATAL) or any(code in ("1", "3", "4")
                                        for code, _ in report.set_errors)
@@ -429,6 +430,40 @@ def _check_version(message: Message, dialect: str,
             tag=header.tag, position=header.position, code="8",
             note="%s names a directory this mock does not define" % header.tag,
             elements=findings))
+
+
+def _check_line_numbers(message: Message, definition: schema.TransactionSet,
+                        report: MessageReport) -> None:
+    """A line number used twice in one set is fatal.
+
+    The standards leave PO101 and LIN's 1082 free to repeat; almost every
+    implementation guide forbids it, because a line is what an 855, an 856
+    and an 810 each refer back to by that number. An empty number is read as
+    the line's position, as the reader does, so an empty one can collide too.
+    """
+    if not definition.line_number:
+        return
+    tag, position = definition.line_number
+    segment = definition.segment_for(tag)
+    element = segment.element(position) if segment is not None else None
+    seen: Dict[str, int] = {}
+    lines = [item for item in message.segments if item.tag == tag]
+    for index, item in enumerate(lines, start=1):
+        number = item.get(position).strip() or str(index)
+        if number not in seen:
+            seen[number] = item.position
+            continue
+        report.segments.append(SegmentFinding(
+            tag=tag, position=item.position, loop=tag, code="8", severity=FATAL,
+            note="%s has data element errors" % tag,
+            elements=[ElementFinding(
+                position=position, component=0,
+                ref=element.ref if element is not None else "", code="7",
+                value=number, severity=FATAL,
+                note="line number %s is already used by the %s at segment %d; "
+                     "the standard allows a repeat, but nearly every "
+                     "implementation guide does not, and the mock stores "
+                     "lines by number" % (number, tag, seen[number]))]))
 
 
 # ---------------------------------------------------------------------------

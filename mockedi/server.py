@@ -189,6 +189,10 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:          # pragma: no cover - client hung up
             return
         except Exception as error:       # pragma: no cover - last resort
+            # Whatever the handler wrote before it failed is undone here, so
+            # the request log's commit below cannot commit half of it.
+            with self.mock.lock:
+                self.mock.conn.rollback()
             status, written = self._json(500, {"error": str(error),
                                                "type": type(error).__name__})
         finally:

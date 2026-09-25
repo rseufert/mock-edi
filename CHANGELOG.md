@@ -36,6 +36,15 @@ says so where it does.
 
 ### Fixed
 
+- Two lines with the same number in one order were a 500 that left the
+  database half-written ([#42]): the interchange was recorded, and if the PO
+  number already existed its lines were deleted and not put back. A repeated
+  line number (`PO101`, `POC01`, `LIN` 1082) is now a fatal finding, so the
+  set is rejected by a 997 or CONTRL that says which line; and receiving an
+  interchange is one unit of work, so any failure inside it rolls back
+  everything it wrote. A handler that fails anywhere else is rolled back
+  too, so the request log can no longer commit half of it.
+
 - `/_mock/send` would send one partner's purchase order to another ([#40]).
   It never checked ownership, so ACME's order could be delivered to EURODIS as
   an 855 - letting a test prove something that could not happen on a real
@@ -278,6 +287,7 @@ documents a real one sends.
 
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#40]: https://github.com/rseufert/mock-edi/issues/40
+[#42]: https://github.com/rseufert/mock-edi/issues/42
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#46]: https://github.com/rseufert/mock-edi/issues/46

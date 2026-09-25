@@ -136,6 +136,10 @@ class TransactionSet:
     group: str = ""
     version: str = ""
     purpose: str = ""
+    # The segment and element that number a line, when the set has lines the
+    # mock stores by that number. The standards do not require it to be
+    # unique; nearly every implementation guide does, and so does the mock.
+    line_number: Tuple[str, int] = ()
 
     def walk(self) -> Iterator[Tuple[Union[Use, Loop], Optional[Loop]]]:
         """Every use in the set, depth first, each with the loop containing it."""
@@ -800,7 +804,7 @@ X12_850 = TransactionSet("850", "Purchase Order", "X12", (
     ), OPTIONAL, 100000),
     Use(CTT),
     Use(SE, MANDATORY),
-), group="PO", version="004010",
+), group="PO", version="004010", line_number=("PO1", 1),
    purpose="The buyer orders goods: what, how many, at what price, delivered when.")
 
 X12_855 = TransactionSet("855", "Purchase Order Acknowledgment", "X12", (
@@ -897,7 +901,7 @@ X12_860 = TransactionSet("860", "Purchase Order Change Request", "X12", (
     ), OPTIONAL, 100000),
     Use(CTT),
     Use(SE, MANDATORY),
-), group="PC", version="004010",
+), group="PC", version="004010", line_number=("POC", 1),
    purpose="The buyer changes an order it has already placed: a quantity, a "
            "price, a line added or deleted, or the whole order cancelled.")
 
@@ -1419,7 +1423,7 @@ EDIFACT_ORDERS = TransactionSet("ORDERS", "Purchase Order Message", "EDIFACT", (
     Use(UNS, MANDATORY),
     Use(CNT, max_use=10),
     Use(UNT, MANDATORY),
-), version="D:96A:UN",
+), version="D:96A:UN", line_number=("LIN", 1),
    purpose="The EDIFACT order. Same intent as an 850; almost nothing in common at the surface.")
 
 EDIFACT_ORDRSP = TransactionSet("ORDRSP", "Purchase Order Response Message", "EDIFACT", (
@@ -1453,7 +1457,7 @@ EDIFACT_ORDRSP = TransactionSet("ORDRSP", "Purchase Order Response Message", "ED
 # the same parts rather than written out again.
 EDIFACT_ORDCHG = TransactionSet("ORDCHG", "Purchase Order Change Request Message",
                                 "EDIFACT", EDIFACT_ORDERS.children,
-   version="D:96A:UN",
+   version="D:96A:UN", line_number=("LIN", 1),
    purpose="The EDIFACT change request. BGM carries document code 230 and "
            "each LIN carries an action code; there is no separate change "
            "acknowledgment message, so an ORDRSP answers it.")

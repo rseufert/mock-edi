@@ -395,7 +395,8 @@ curl -X POST --data-binary @broken.edi http://127.0.0.1:8080/_mock/validate
 Severity is the mock's own policy, and it is stated rather than implied. A
 *fatal* finding rejects the transaction set — an unknown set, a missing
 mandatory segment or element, a control number that does not match its
-trailer, a segment count that does not add up. Everything else is accepted
+trailer, a segment count that does not add up, a line number used twice in
+one order (the standards allow it; almost no implementation guide does). Everything else is accepted
 with errors noted: an invalid code, a length violation, a malformed date, a
 segment the set does not define. A partner set to `strict` rejects on either.
 

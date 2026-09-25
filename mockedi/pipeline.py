@@ -80,7 +80,7 @@ class Pipeline:
     """The mock's own behaviour as a trading partner."""
 
     def __init__(self, conn: sqlite3.Connection, config):
-        self.conn = conn
+        self.conn = conn if isinstance(conn, db.UnitOfWork) else db.UnitOfWork(conn)
         self.config = config
         # Set by the server to the courier that posts documents to partners
         # who have an AS2 URL. Left unset, documents wait in the mailbox,
@@ -100,7 +100,27 @@ class Pipeline:
 
     def receive(self, payload: bytes, transport: str = "http",
                 message_id: str = "", mic: str = "") -> Receipt:
-        """Read an interchange, decide what it means, and queue the answers."""
+        """Read an interchange, decide what it means, and queue the answers.
+
+        All of it or none of it: an exception anywhere leaves the database as
+        it was before the interchange arrived. Documents released along the
+        way are handed to the courier only once that is certain, so it never
+        posts one that was rolled back.
+        """
+        notify, released = self.on_release, []
+        if notify is not None:
+            self.on_release = released.extend
+        try:
+            with self.conn.atomic():
+                receipt = self._receive(payload, transport, message_id, mic)
+        finally:
+            self.on_release = notify
+        if notify is not None and released:
+            notify(released)
+        return receipt
+
+    def _receive(self, payload: bytes, transport: str, message_id: str,
+                 mic: str) -> Receipt:
         text = payload.decode("utf-8", "replace") if isinstance(payload, bytes) else payload
         try:
             dialect = sniff(text)
