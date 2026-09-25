@@ -60,9 +60,14 @@ class ElementFinding:
 
     @property
     def edifact_code(self) -> str:
-        """The nearest EDIFACT 0085 code, for a CONTRL."""
-        return {"1": "13", "2": "13", "3": "16", "4": "12", "5": "12",
-                "6": "12", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
+        """The EDIFACT 0085 code for the same fault, for a CONTRL.
+
+        0085 has its own words for most of what 723 says: too short is 40,
+        too long 39, a character of the wrong type 37. An invalid code, date
+        or time is 12, Invalid value.
+        """
+        return {"1": "13", "2": "13", "3": "16", "4": "40", "5": "39",
+                "6": "37", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
 
 
 @dataclass
@@ -95,6 +100,15 @@ class EnvelopeFinding:
     tag: str = ""             # the envelope segment at fault: IEA, UNZ, ISA...
     position: int = 0         # its element, when one element is at fault
     severity: str = FATAL
+
+
+# 718 (AK5) set-level codes, as 0085 says them in a UCM, with the service
+# segment at fault: 1 an unknown message type is 14, Value not supported in
+# this position; 2 a missing UNT is 13, Missing; 3 a UNT that quotes another
+# reference is 28, References do not match; 4 a UNT that miscounts is 29,
+# Control count does not match number of instances received.
+SET_ERRORS_AS_0085 = {"1": ("14", "UNH"), "2": ("13", "UNT"),
+                      "3": ("28", "UNT"), "4": ("29", "UNT")}
 
 
 @dataclass
