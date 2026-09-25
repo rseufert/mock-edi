@@ -52,8 +52,8 @@ def group_reports(interchange: Interchange,
 def functional_acknowledgment(functional_id: str, group_control: str,
                               version: str,
                               messages: Sequence[MessageReport],
-                              group_errors: Sequence[Tuple[str, str]] = ()
-                              ) -> List[Seg]:
+                              group_errors: Sequence[Tuple[str, str]] = (),
+                              carries_version: bool = False) -> List[Seg]:
     """The body of a 997, acknowledging one functional group.
 
     AK9's three counts are the part receivers actually check: transaction sets
@@ -64,8 +64,12 @@ def functional_acknowledgment(functional_id: str, group_control: str,
     control number that does not match - and go in AK905 onward. Any of them
     rejects the whole group, however clean the sets inside it were.
     """
-    out: List[Seg] = [seg("AK1", functional_id or "??", _digits(group_control),
-                          version or "")]
+    # AK103 exists from 005010 on: a 997 at 004010 names the group and its
+    # control number, and nothing more.
+    ak1 = [functional_id or "??", _digits(group_control)]
+    if carries_version:
+        ak1.append(version or "")
+    out: List[Seg] = [seg("AK1", *ak1)]
     accepted = 0
     for item in messages:
         out.append(seg("AK2", item.code, item.control))

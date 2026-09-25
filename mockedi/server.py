@@ -541,7 +541,7 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, partners.BEHAVIOURS)
 
         if head == "dictionary":
-            return self._json(200, _dictionary(rest))
+            return self._json(200, _dictionary(rest, _first(query, "version")))
 
         if head == "partners":
             return self._partners(method, rest, query, body)
@@ -1149,16 +1149,21 @@ def _document_params(query: Dict[str, List[str]]) -> List[str]:
             if _first(query, name)]
 
 
-def _dictionary(rest: List[str]) -> Any:
+def _dictionary(rest: List[str], version: str = "") -> Any:
     """The dictionary, served as data.
 
     Everything the mock validates against is derived from `schema.py`, so
     publishing it is not documentation that can go stale - it is the rules
     themselves.  A mapping tool can read this instead of a PDF.
+
+    `?version=005010` serves a set as that version has it; without it, the
+    set as declared.
     """
     if not rest:
         return {
             "dialects": list(schema.DIALECTS),
+            "versions": {dialect: list(versions)
+                         for dialect, versions in schema.VERSIONS.items()},
             "transactionSets": [
                 {"dialect": item.dialect, "code": item.code, "name": item.name,
                  "kind": schema.kind_of(item.dialect, item.code),
@@ -1172,7 +1177,11 @@ def _dictionary(rest: List[str]) -> Any:
         return {"dialect": dialect,
                 "transactionSets": sorted(code for d, code in schema.SETS
                                           if d == dialect)}
-    definition = schema.lookup(dialect, rest[1].upper())
+    if version and not schema.supports(dialect, version):
+        return {"error": "no %s dictionary at version %s; this mock speaks %s"
+                         % (dialect, version,
+                            " and ".join(schema.VERSIONS.get(dialect, ())))}
+    definition = schema.lookup(dialect, rest[1].upper(), version)
     if definition is None:
         return {"error": "no transaction set %s/%s" % (dialect, rest[1])}
     return {

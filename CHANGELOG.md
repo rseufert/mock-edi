@@ -23,6 +23,14 @@ says so where it does.
   schema version is now 6**, so a file this version has opened is refused by
   an older mock.
 
+- **The dictionary knows its versions** ([#46]): X12 004010 and 005010,
+  EDIFACT D.96A. Sets are declared at 004010 and 005010 is recorded as the
+  segments that differ in it - `ST03`, `AK103`, `AK203`, and `REF02` at 50
+  characters rather than 30. An X12 set is read against the version its
+  `GS08` names, and `/_mock/dictionary/X12/850?version=005010` serves it that
+  way. The README says which versions the mock speaks, and why it answers
+  with a 997 at every version rather than a 999.
+
 - **A failed delivery can be tried again** ([#30]).
   `POST /_mock/outbox/<id>/retry` delivers one document again, and
   `POST /_mock/advance?failed` does the same for everything that failed, in
@@ -62,6 +70,14 @@ says so where it does.
   stalled when they were only dirty. "Every test talks to a real mock over
   real HTTP" is the claim worth making, and it cannot go stale; the check went
   with the number.
+
+- **The 997 for a 004010 partner no longer carries `AK103`** ([#46]), an
+  element 004010 does not have; one for a 005010 partner still does. A group
+  whose `GS08` names a version the mock has no dictionary for is refused in
+  its 997 with `AK905 = 2` rather than read as 004010; `REF02` over 30
+  characters in a 004010 set is now reported; and a partner can no longer be
+  set to a version the mock would write without the dictionary for it -
+  `D:01B:UN`, which #40 allowed, is refused.
 
 - **`advance?seconds=N` moves the mock's clock, and it stays moved** ([#47]).
   The README said it advanced the clock; it released what was due within `N`
@@ -679,6 +695,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#46]: https://github.com/rseufert/mock-edi/issues/46
 [#23]: https://github.com/rseufert/mock-edi/issues/23
 [#28]: https://github.com/rseufert/mock-edi/issues/28
 [#33]: https://github.com/rseufert/mock-edi/issues/33
@@ -689,7 +706,6 @@ documents a real one sends.
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38
 [#41]: https://github.com/rseufert/mock-edi/issues/41
-[#46]: https://github.com/rseufert/mock-edi/issues/46
 [#49]: https://github.com/rseufert/mock-edi/issues/49
 [#50]: https://github.com/rseufert/mock-edi/issues/50
 [#51]: https://github.com/rseufert/mock-edi/issues/51
