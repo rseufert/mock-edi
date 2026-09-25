@@ -445,7 +445,10 @@ bite. A file still being written is not read: anything modified within
 are never read at all. A file that has been read is not read again: it is
 moved into `processed/`, or into `failed/` if it could not be read — moved
 rather than deleted, because a mock that eats the evidence is no use when a
-test fails.
+test fails. While it is being read it is renamed `<name>.processing`, so the
+poller and a manual scan cannot both take it. And if it cannot be moved — a
+read-only `processed/`, say — it keeps its name, is listed under `stuck` in
+`GET /_mock/drop` and on stderr, and is not read again until it changes.
 
 The poller runs every `--drop-interval-ms`, but it is not the only way in:
 
@@ -537,7 +540,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-530 tests, every one of them talking to a real mock over real HTTP. Nothing is
+535 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the
