@@ -44,6 +44,10 @@ respective bodies; AS2 is RFC 4130. This project implements publicly
 documented wire formats for testing purposes and is not affiliated with or
 endorsed by any standards body or vendor.
 
+By [Rick Seufert](https://rickseufert.com). The [projects page](https://rickseufert.com/#projects)
+has this mock, [mock-sap](https://github.com/rseufert/mock-sap) and the worked examples
+that use them together.
+
 ---
 
 ## Quick start
@@ -451,3 +455,6 @@ is another.
 uses the two mocks together: purchase orders out and confirmations in, then
 invoices checked against what was ordered and shipped, with the failure modes
 each test exercises.
+
+[rickseufert.com](https://rickseufert.com/#projects) lists both mocks side by
+side, with the worked examples and how to run each one.
