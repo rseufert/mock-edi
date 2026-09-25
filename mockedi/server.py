@@ -543,10 +543,31 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, rows)
 
         if head == "outbox":
+            if len(rest) == 2 and rest[1] == "retry":
+                if method != "POST":
+                    return self._text(405, "POST to retry a delivery")
+                try:
+                    outbound_id = int(rest[0])
+                except ValueError:
+                    return self._json(404, {"error": "no outbound document %r"
+                                                     % rest[0]})
+                row = db.one(conn, "SELECT status FROM outbound WHERE id = ?",
+                             (outbound_id,))
+                if row is None:
+                    return self._json(404, {"error": "no outbound document %d"
+                                                     % outbound_id})
+                if row["status"] != "failed":
+                    return self._json(409, {
+                        "error": "outbound document %d is %s, not failed; only a "
+                                 "failed delivery can be retried"
+                                 % (outbound_id, row["status"])})
+                retried = self.mock.pipeline.redeliver(outbound_id)
+                return self._json(200, {"retried": retried, "count": len(retried)})
             return self._json(200, db.rows(
                 conn, "SELECT id, partner, dialect, code, kind, reference, status,"
                       " message_id, control, due_at, released_at, delivered_at,"
-                      " delivery, note, at FROM outbound ORDER BY id DESC LIMIT ?",
+                      " delivery, note, attempts, last_error, last_attempt_at,"
+                      " at FROM outbound ORDER BY id DESC LIMIT ?",
                 (_limit(query),)))
 
         if head == "drop":
@@ -575,6 +596,13 @@ class Handler(BaseHTTPRequestHandler):
         if head == "advance":
             if method != "POST":
                 return self._text(405, "POST to advance the queue")
+            if _flag(query, "failed"):
+                # Everything a partner's listener missed while it was down,
+                # in queue order, unchanged.
+                retried = self.mock.pipeline.redeliver(
+                    partner_id=_first(query, "partner") or "")
+                return self._json(200, {"retried": retried,
+                                        "count": len(retried)})
             everything = _flag(query, "all")
             seconds = float(_first(query, "seconds") or 0)
             released = self.mock.pipeline.advance(seconds, everything)
@@ -1124,7 +1152,9 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice."),
         ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
         ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
-        ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything."),
+        ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything, "
+                                   "<code>?failed</code> to redeliver what failed."),
+        ("POST", "/_mock/outbox/{id}/retry", "Deliver a failed document again, unchanged."),
         ("POST", "/_mock/send", "Send a document out of band."),
         ("GET", "/_mock/mdns", "Receipts, sent and received."),
         ("GET", "/_mock/unacknowledged", "What we sent that nobody has acknowledged."),

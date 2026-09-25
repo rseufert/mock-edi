@@ -294,6 +294,30 @@ Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
 
+## A delivery that failed can be tried again
+
+A partner's listener restarts between the 997 and the 855, and the mock has
+four documents in flight. The 997 fails; the rest arrive. The partner now
+holds a response, a ship notice and an invoice for an order whose
+acknowledgment it never received.
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/outbox/3/retry     # one document
+curl -X POST "http://127.0.0.1:8080/_mock/advance?failed"   # everything that failed
+```
+
+The same bytes and the same control numbers go out again, in the order they
+were queued. That is a *retry*, not a resend: `/_mock/send` builds a new
+document with a new control number, which is a different event on the wire —
+and being idempotent about a control number it has already seen is exactly
+the thing a listener has to get right.
+
+`/_mock/outbox` carries the history: `attempts`, `last_error` and
+`last_attempt_at`, so a document delivered on the second try says so.
+
+Nothing retries on a timer. A test that wants a retry asks for one, the same
+reason `/_mock/advance` exists.
+
 ## Changing an order
 
 A buyer changes an order it has already placed with an **860** (or an
@@ -608,7 +632,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-568 tests, every one of them talking to a real mock over real HTTP. Nothing is
+579 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

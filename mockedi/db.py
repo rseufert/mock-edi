@@ -193,6 +193,13 @@ CREATE TABLE IF NOT EXISTS outbound (
     delivered_at TEXT NOT NULL DEFAULT '',
     delivery     TEXT NOT NULL DEFAULT '',
     note         TEXT NOT NULL DEFAULT '',
+    -- What delivery has been tried, so that a failure is a history rather
+    -- than a dead end. A retry sends this row again, byte for byte and with
+    -- the same control numbers, which is what a listener that has to be
+    -- idempotent needs to be tested against.
+    attempts     INTEGER NOT NULL DEFAULT 0,
+    last_error   TEXT NOT NULL DEFAULT '',
+    last_attempt_at TEXT NOT NULL DEFAULT '',
     at           TEXT NOT NULL
 );
 
@@ -330,7 +337,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 4
+SCHEMA_VERSION = 5
 
 
 class DatabaseError(Exception):
