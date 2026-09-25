@@ -432,7 +432,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _control(self, method: str, path: str, query: Dict[str, List[str]],
                  body: bytes) -> Tuple[int, int]:
-        parts = [p for p in path.split("/") if p][1:]   # drop "_mock"
+        parts = _segments(path)[1:]                     # drop "_mock"
         head = parts[0] if parts else ""
         rest = parts[1:]
         conn = self.mock.conn
@@ -481,7 +481,7 @@ class Handler(BaseHTTPRequestHandler):
 
         if head == "orders":
             if rest:
-                order = documents.order_row(conn, urllib.parse.unquote(rest[0]))
+                order = documents.order_row(conn, rest[0])
                 if order is None:
                     return self._json(404, {"error": "no purchase order %r" % rest[0]})
                 order["lines"] = documents.order_lines(conn, order["po_number"])
@@ -648,7 +648,7 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(201, row)
             return self._text(405, "GET or POST partners")
 
-        identifier = urllib.parse.unquote(rest[0])
+        identifier = rest[0]
         if method == "GET":
             row = partners.get(conn, identifier)
             if row is None:
@@ -869,11 +869,20 @@ class Handler(BaseHTTPRequestHandler):
 
 def _split(target: str) -> Tuple[str, Dict[str, List[str]]]:
     parsed = urllib.parse.urlsplit(target)
+    # The path stays encoded: it is split on `/` before any segment is
+    # decoded, or an encoded slash in a PO number (`PO%2F2026%2F1`) would
+    # become a real one and the order could never be reached. `_segments`
+    # decodes each piece, once.
     # `keep_blank_values` matters: the flags are written `?all`, `?raw`,
     # `?leave`, with no value at all, and the default parse drops them - so
     # every flag silently read as false.
-    return (urllib.parse.unquote(parsed.path),
+    return (parsed.path,
             urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
+
+
+def _segments(path: str) -> List[str]:
+    """The segments of a still-encoded path, each percent-decoded once."""
+    return [urllib.parse.unquote(p) for p in path.split("/") if p]
 
 
 def _first(query: Dict[str, List[str]], name: str, default: str = "") -> str:

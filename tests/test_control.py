@@ -240,6 +240,28 @@ class NotFound(MockServerCase):
         self.assertIn("mock-edi", body.decode())
 
 
+class EncodedPathSegments(MockServerCase):
+    """A path is split on `/` first, and each segment is decoded once (#25)."""
+
+    def test_an_order_number_with_a_slash_is_reachable(self):
+        self.send(x12_order("PO/2026/1"))
+        status, _h, data = self.get("/_mock/orders/PO%2F2026%2F1")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["po_number"], "PO/2026/1")
+
+    def test_a_segment_is_decoded_exactly_once(self):
+        # `%2541` is `%41` decoded once, and `A` decoded twice.
+        self.send(x12_order("PO%41"))
+        status, _h, data = self.get("/_mock/orders/PO%2541")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["po_number"], "PO%41")
+
+    def test_a_missing_order_is_named_as_decoded(self):
+        status, _h, data = self.get("/_mock/orders/PO%2FNONE")
+        self.assertEqual(status, 404)
+        self.assertIn("'PO/NONE'", data["error"])
+
+
 class Authentication(MockServerCase):
     config_kwargs = {"basic_auth": "edi:secret"}
 
