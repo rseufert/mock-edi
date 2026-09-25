@@ -65,9 +65,14 @@ class Elements(unittest.TestCase):
         self.assertFalse(report.messages[0].accepted)
         self.assertTrue(any("mandatory and empty" in note for note in notes(report)))
 
-    def test_an_element_beyond_the_segments_definition_is_reported(self):
-        report = check([GOOD[0], seg("CTT", "1", "10", "extra", "more")])
-        self.assertTrue(any("has no element at position" in note
+    def test_an_element_beyond_the_segments_width_is_reported(self):
+        # CTT has seven elements in 004010, so the eighth does not exist.
+        # This used to pass with four, back when the dictionary's own short
+        # definition was treated as the standard's width - see
+        # tests/test_segment_widths.py.
+        report = check([GOOD[0], seg("CTT", "1", "10", "3", "LB", "4", "CF",
+                                     "note", "beyond")])
+        self.assertTrue(any("has no element at position 8" in note
                             for note in notes(report)))
 
 

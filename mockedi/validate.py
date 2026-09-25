@@ -665,11 +665,15 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
         raw = item.raw(position)
         if element is None:
             present = any(raw) if isinstance(raw, list) else bool(raw)
-            if present:
+            if present and position > definition.width:
                 findings.append(ElementFinding(
                     position=position, component=0, ref="", code="3", value=str(raw),
                     note="%s has no element at position %d" % (definition.tag, position),
                     severity=ERROR))
+            # Inside the standard's width but past what this dictionary
+            # declares: the mock does not check it and does not pretend it is
+            # wrong. Saying a correct SAC15 is an error sends someone looking
+            # for a bug in a document that has none.
             continue
         if element.composite:
             components = raw if isinstance(raw, list) else ([raw] if raw else [])
@@ -688,6 +692,14 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
             for index, sub in enumerate(element.components, start=1):
                 value = components[index - 1] if index <= len(components) else ""
                 findings.extend(_check_value(value, sub, position, index, definition))
+            # A component past the definition is *not* reported, and that is
+            # deliberate rather than an oversight to match up with the rule
+            # above. A segment's element list is complete here unless it
+            # declares a full_width; a composite's component list is not known
+            # to be - the same composite is declared at two different widths
+            # in two places in this file, which is how the short ones below
+            # were found. Reporting against a definition that may itself be
+            # short is the bug this change exists to remove.
         else:
             value = raw[0] if isinstance(raw, list) and raw else (
                 "" if isinstance(raw, list) else raw)

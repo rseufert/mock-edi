@@ -52,6 +52,27 @@ says so where it does.
   `/_mock/drop` and on stderr, and is left alone until it changes. The
   poller's own errors go to stderr too.
 
+- **Legitimate elements were reported as "too many data elements"** ([#54]).
+  The dictionary stops several segment definitions short of the standard on
+  purpose - `SAC` has sixteen elements in 004010 and the five declared here
+  carry almost every real allowance - but the validator treated the end of a
+  definition as the end of the segment, so a correct `SAC15` description came
+  back as X12 error 3 and the 997 said the document was wrong. Code 3 means
+  the element does not exist at that position; there it does. A partner
+  testing a correct document against the mock was told it was broken.
+
+  A segment now declares the width the standard gives it. A position past the
+  definition but inside that width is carried and not checked; past the width,
+  error 3 is the truth and is still reported. The nine segments this affects
+  are `SAC`, `PO4`, `TD5`, `ITD`, `N1`, `CTT`, `PO1`, `IT1` and `LIN`, plus
+  `PIA` on the EDIFACT side, which carries up to five item numbers and
+  declared one. `/_mock/dictionary` reports `width` beside `checkedTo`, so a
+  guide writer can tell an unchecked position from a wrong one.
+
+  `PIA`'s `C212` was also declared with two components while `LIN`'s had four.
+  A composite is one thing in the standard, so `PIA` now uses the longer
+  definition, which is how the short one came to light.
+
 - **The asynchronous MDN was posted without its MIME boundary** ([#22]). The
   synchronous one went out with the headers `build_mdn` produced; the
   asynchronous one had its headers rebuilt by hand at delivery time, and the
@@ -537,6 +558,7 @@ documents a real one sends.
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52
+[#54]: https://github.com/rseufert/mock-edi/issues/54
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
