@@ -70,6 +70,15 @@ LIMITS = {
 }
 
 
+# The characters an id may use: letters, digits, and `.`, `-` and `_` between
+# them. Narrower than either standard - X12's basic set allows `/`, for one -
+# and on purpose: an id also becomes a pickup filename and a path in the
+# control plane's URLs, and it must not carry a delimiter onto the wire. So no
+# `/` or `\`, no leading dot, no spaces, and nothing a translator treats as
+# punctuation.
+ID_PATTERN = re.compile(r"^[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?$")
+
+
 class Invalid(ValueError):
     """A partner field the mock would not be able to act on."""
 
@@ -136,6 +145,11 @@ def check(fields: Dict[str, Any], dialect: str,
 def _check_id(identifier: str, dialect: str, limits) -> None:
     if not identifier.strip():
         raise Invalid("a partner needs an id")
+    if not ID_PATTERN.match(identifier):
+        raise Invalid(
+            "id %r may use only letters, digits, and '.', '-' or '_' between "
+            "them: it goes on the wire, into a pickup filename and into URLs"
+            % identifier)
     if len(identifier) > limits["id"]:
         raise Invalid(
             "id %r is %d characters; %s carries at most %d, and a longer one "

@@ -42,6 +42,14 @@ says so where it does.
 
 ### Fixed
 
+- A partner id could contain a path ([#24]): `../../trav` was accepted, and
+  its documents were written two directories above `--pickup-dir`. An id may
+  now use only letters, digits, and `.`, `-` or `_` between them - narrower
+  than X12 or EDIFACT allow, and said so, because an id is also a filename and
+  a URL path. The pickup writer also refuses any name that would leave its
+  directory, so a row from an older database cannot either, and lists what it
+  refused in `/_mock/drop`.
+
 - **An X12 envelope carrying no work was answered with silence** ([#55]). A
   functional group with no transaction set in it got no 997, because the
   acknowledgment was built from the messages that arrived rather than from
@@ -67,6 +75,13 @@ says so where it does.
   228, against a suite of 454. `tools/check_docs.py` now asks the loader how
   many tests there are and fails when the README disagrees, so the number
   cannot drift again without CI saying so.
+
+- On a file database, documents left `ready` for an AS2 partner when the
+  mock stopped were never posted after it restarted ([#41]), and nor were
+  asynchronous MDNs left `pending`: the courier learns of work only when it is
+  released. Both are now put back on its queue at startup, in the order they
+  were first queued. The suite has its first tests that restart a mock on the
+  same file.
 
 - A `--db` file written by 0.1.0 stopped the current version starting, with
   `no such column: ack_status` and no hint that the file was the cause
@@ -436,9 +451,11 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#24]: https://github.com/rseufert/mock-edi/issues/24
 [#35]: https://github.com/rseufert/mock-edi/issues/35
 [#37]: https://github.com/rseufert/mock-edi/issues/37
 [#38]: https://github.com/rseufert/mock-edi/issues/38
+[#41]: https://github.com/rseufert/mock-edi/issues/41
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#49]: https://github.com/rseufert/mock-edi/issues/49
 [#50]: https://github.com/rseufert/mock-edi/issues/50

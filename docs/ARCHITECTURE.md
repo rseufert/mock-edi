@@ -127,6 +127,11 @@ restart when the mock runs on a file database — duplicate control numbers are
 a real trading-partner failure, and replaying one means being able to control
 them.
 
+Unfinished deliveries survive too. The courier learns of work when it is
+released, so on startup `Mock.resume` puts back on its queue every document
+still `ready` for a partner with an AS2 URL, and every asynchronous MDN still
+`pending`, in the order they were first queued.
+
 A file database outlives the version of the mock that wrote it, so it is
 upgraded in place when it is opened. `PRAGMA user_version` records the schema
 version; `db.upgrade` creates any table the file lacks and adds any column the

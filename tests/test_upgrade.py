@@ -8,11 +8,8 @@ never bound its port.
 import hashlib
 import json
 import os
-import shutil
 import sqlite3
 import sys
-import tempfile
-import threading
 import unittest
 import urllib.request
 
@@ -23,29 +20,20 @@ sys.path.insert(0, HERE)
 from mockedi import db
 from mockedi.server import Config, make_server
 
-from support import REQUEST_TIMEOUT, x12_order
+from support import REQUEST_TIMEOUT, FileDatabaseCase, x12_order
 
 OLD_SCHEMA = os.path.join(HERE, "fixtures", "schema-0.1.0.sql")
 
 
-class FileDatabase(unittest.TestCase):
-    def setUp(self):
-        self.directory = tempfile.mkdtemp(prefix="mock-edi-db-")
-        self.path = os.path.join(self.directory, "mock.db")
-
-    def tearDown(self):
-        shutil.rmtree(self.directory, ignore_errors=True)
+class FileDatabase(FileDatabaseCase):
+    start_on_setup = False
 
     def serve(self):
-        httpd = make_server(Config(host="127.0.0.1", port=0, db_path=self.path,
-                                   quiet=True))
-        threading.Thread(target=httpd.serve_forever, daemon=True).start()
-        self.addCleanup(httpd.server_close)
-        self.addCleanup(httpd.shutdown)
-        return httpd, "http://127.0.0.1:%d" % httpd.server_address[1]
+        httpd = self.start()
+        return httpd, self.base
 
     def user_version(self):
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.db_path)
         try:
             return conn.execute("PRAGMA user_version").fetchone()[0]
         finally:
@@ -57,7 +45,7 @@ class From010(FileDatabase):
 
     def setUp(self):
         super().setUp()
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.db_path)
         with open(OLD_SCHEMA, encoding="utf-8") as handle:
             conn.executescript(handle.read())
         conn.execute(
@@ -91,27 +79,27 @@ class From010(FileDatabase):
         self.assertEqual(self.user_version(), db.SCHEMA_VERSION)
 
     def test_the_upgrade_says_what_it_added_and_is_done_once(self):
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.db_path)
         try:
-            added = db.upgrade(conn, self.path)
+            added = db.upgrade(conn, self.db_path)
             self.assertIn("transaction_set.ack_status", added)
             self.assertIn("outbound.set_control", added)
-            self.assertEqual(db.upgrade(conn, self.path), [])
+            self.assertEqual(db.upgrade(conn, self.db_path), [])
         finally:
             conn.close()
 
 
 class FromANewerMock(FileDatabase):
     def test_it_is_refused_with_the_file_and_both_versions(self):
-        conn = sqlite3.connect(self.path)
+        conn = sqlite3.connect(self.db_path)
         conn.execute("PRAGMA user_version = %d" % (db.SCHEMA_VERSION + 1))
         conn.commit()
         conn.close()
         with self.assertRaises(db.DatabaseError) as caught:
-            make_server(Config(host="127.0.0.1", port=0, db_path=self.path,
+            make_server(Config(host="127.0.0.1", port=0, db_path=self.db_path,
                                quiet=True))
         message = str(caught.exception)
-        self.assertIn(self.path, message)
+        self.assertIn(self.db_path, message)
         self.assertIn("version %d" % (db.SCHEMA_VERSION + 1), message)
         self.assertIn("knows %d" % db.SCHEMA_VERSION, message)
         # And nothing was changed on the way to refusing it.

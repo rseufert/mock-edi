@@ -183,7 +183,10 @@ field is named rather than dropped, a `version` has to match the dialect
 (`004010` or `D:96A:UN`), `test` is a flag, `as2_url` needs a scheme the
 courier can use, and an id has to fit the envelope — fifteen characters for
 X12, because ISA06 is fixed at that width and a longer one would be truncated
-to something the partner could never be found by.
+to something the partner could never be found by. It may use only letters,
+digits, and `.`, `-` or `_` between them: narrower than the standards allow,
+because an id also becomes a pickup filename and part of a URL, and one with a
+`/` in it once wrote documents outside `--pickup-dir`.
 
 | Behaviour | What the partner does |
 | --- | --- |
@@ -490,7 +493,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-472 tests, every one of them talking to a real mock over real HTTP. Nothing is
+479 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

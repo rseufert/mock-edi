@@ -179,6 +179,29 @@ class IgnoredNames(DirectoryCase):
         self.assertEqual(self.scan()["scanned"], 0)
 
 
+class NothingLandsOutsideThePickupDirectory(DirectoryCase):
+    """Even for a partner whose id was never checked - one from an old file."""
+
+    def test_a_partner_id_with_a_path_in_it_is_refused_not_followed(self):
+        conn = self.httpd.mock.conn
+        with self.httpd.mock.lock:
+            row = dict(conn.execute(
+                "SELECT * FROM partner WHERE id = ?", (ACME,)).fetchone())
+            row["id"] = "../../trav"
+            conn.execute("INSERT INTO partner (%s) VALUES (%s)" % (
+                ", ".join(row), ", ".join("?" for _ in row)), list(row.values()))
+            conn.commit()
+        self.send(x12_order("PO-TRAVERSE", sender="../../trav"))
+
+        above = os.path.normpath(os.path.join(PICKUP, "..", ".."))
+        self.assertEqual([n for n in os.listdir(above) if n.startswith("trav-")], [])
+        self.assertEqual(self.pickup_files(), [])
+        _status, _headers, state = self.get("/_mock/drop")
+        self.assertTrue(state["refused"])
+        self.assertTrue(all(name.startswith("../../trav-")
+                            for name in state["refused"]))
+
+
 class WritingThePickupDirectory(DirectoryCase):
     def test_released_documents_are_written_out(self):
         self.send(x12_order("PO-PICKUP"))
