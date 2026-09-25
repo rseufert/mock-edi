@@ -69,6 +69,7 @@ nothing to compile.
 | A validation check | `mockedi/validate.py` | Produce a finding, not a sentence: it has to render as both a 997 and a CONTRL |
 | An endpoint | `mockedi/server.py` | Add it to the index page and the README table too |
 | A CLI flag | `mockedi/__main__.py` and `server.Config` | |
+| A table, column or index | `mockedi/db.py` `SCHEMA` / `INDEXES` | Bump `SCHEMA_VERSION`; `tests/test_upgrade.py` fails until you do. Additions upgrade old files by themselves; a rename or retype needs a step in `db.upgrade` |
 
 If a change touches more than one of these, it is usually two changes.
 
