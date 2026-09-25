@@ -9,7 +9,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import ACME, MockServerCase, x12_order
+import sqlite3
+
+from support import ACME, FileDatabaseCase, MockServerCase, as2_headers, parse, x12_order
 
 
 class Listener(BaseHTTPRequestHandler):
@@ -170,6 +172,72 @@ class AsynchronousReceipts(MockServerCase):
         _s, _h, rows = self.get("/_mock/mdns")
         self.assertEqual(rows[0]["status"], "sent")
 
+
+
+class AfterARestart(FileDatabaseCase):
+    """Documents left ready by one run are delivered by the next.
+
+    The courier learns of work when it is released. A run that stopped with
+    documents still ready - collected by nobody, posted by nobody - used to
+    leave them there for good.
+    """
+
+    config_kwargs = {"deliver_timeout": 3.0}
+
+    def setUp(self):
+        super().setUp()
+        Listener.received = []
+        Listener.reply_status = 200
+        self.listener = HTTPServer(("127.0.0.1", 0), Listener)
+        threading.Thread(target=self.listener.serve_forever, daemon=True).start()
+        self.addCleanup(self.listener.server_close)
+        self.addCleanup(self.listener.shutdown)
+        self.url = "http://127.0.0.1:%d/as2" % self.listener.server_address[1]
+
+    def leave_ready(self):
+        """An order answered while ACME had nowhere to post to, then an URL."""
+        self.send(x12_order("PO-RESTART"))
+        self.patch("/_mock/partners/" + ACME, {"as2_url": self.url})
+        _status, _headers, rows = self.get("/_mock/outbox")
+        self.assertEqual({r["status"] for r in rows}, {"ready"})
+        self.assertEqual(Listener.received, [])
+        # The outbox lists newest first; delivery is in the order queued.
+        return [r["code"] for r in sorted(rows, key=lambda r: r["id"])]
+
+    def test_what_was_ready_is_delivered_in_order(self):
+        codes = self.leave_ready()
+        self.restart()
+        rows = self.settle()
+        self.assertEqual({r["status"] for r in rows}, {"delivered"})
+        self.assertEqual(len(Listener.received), len(codes))
+        self.assertEqual([parse(item["body"]).codes()[0]
+                          for item in Listener.received], codes)
+
+    def test_a_partner_with_nowhere_to_post_to_keeps_its_documents(self):
+        self.send(x12_order("PO-COLLECT"))
+        self.restart()
+        self.httpd.mock.courier.drain(5.0)
+        self.assertEqual(Listener.received, [])
+        self.assertEqual(len(self.mailbox(ACME)), 4)
+
+    def test_an_asynchronous_mdn_left_pending_is_posted(self):
+        # The run that received the message died before posting its MDN: the
+        # row is written, the post never happened.
+        self.post("/as2", x12_order("PO-ASYNC"),
+                  headers=as2_headers(async_url=self.url))
+        self.httpd.mock.courier.drain(5.0)
+        self.stop()
+        Listener.received = []
+        conn = sqlite3.connect(self.db_path)
+        conn.execute("UPDATE mdn SET status = 'pending' WHERE mode = 'async'")
+        conn.commit()
+        conn.close()
+
+        self.start()
+        self.httpd.mock.courier.drain(5.0)
+        posted = [item for item in Listener.received
+                  if "disposition-notification" in item["headers"].get("Content-Type", "")]
+        self.assertEqual(len(posted), 1)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
