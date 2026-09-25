@@ -16,7 +16,9 @@ demand is a support ticket and a fortnight.
 """
 from __future__ import annotations
 
+import dataclasses
 import datetime
+import hmac
 import json
 import math
 import random
@@ -72,6 +74,14 @@ class Config:
     invoice_delay_ms: int = 0
     mdn: bool = True
     deliver_timeout: float = 10.0
+    # Hosts the courier may POST to. Empty means anywhere, which is what a
+    # laptop wants. A mock reachable from a network is a different matter: it
+    # posts released documents to whatever `as2_url` a partner carries, and
+    # asynchronous MDNs to whatever `Receipt-Delivery-Option` an *unauthenticated*
+    # AS2 sender names - `/as2` cannot require authentication and still be AS2.
+    # So it can be asked to post stored payloads at an internal address, and
+    # this says which ones are allowed.
+    deliver_to: Tuple[str, ...] = ()
     # The largest request body read, and how long a request may take to
     # arrive. Every payload is stored, so the cap protects a --db file too.
     max_body_bytes: int = 16 * 1024 * 1024
@@ -391,6 +401,19 @@ class Handler(BaseHTTPRequestHandler):
             return self._mdn(inbound, body, as2.ERROR,
                              "AS2-To is %r; this mock answers to %r."
                              % (inbound.receiver, self.config.as2_id))
+        if inbound.async_url and not delivery.permitted(inbound.async_url,
+                                                        self.config.deliver_to):
+            # `/as2` cannot require authentication and still be AS2, so
+            # `Receipt-Delivery-Option` is a URL an unauthenticated sender
+            # chose. With --deliver-to set, one outside it is refused here
+            # rather than posted to - and refused in an MDN the sender gets
+            # now, because the address it named is the one we will not use.
+            return self._mdn(dataclasses.replace(inbound, async_url=""),
+                             body, as2.FAILED,
+                             "Receipt-Delivery-Option names %s, which is not a "
+                             "host this mock is allowed to post to. It was "
+                             "started with --deliver-to, and the MDN is "
+                             "returned here instead." % inbound.async_url)
         if inbound.wants_signed_receipt:
             # RFC 4130: a receiver that cannot produce the signed receipt the
             # sender required answers with a failure, not with an unsigned
@@ -933,7 +956,10 @@ class Handler(BaseHTTPRequestHandler):
             decoded = base64.b64decode(header[6:]).decode("utf-8")
         except Exception:
             return False
-        return decoded == self.config.basic_auth
+        # Constant time, so that the comparison does not leak how much of the
+        # credential was right. This is a mock and the stakes are low, but the
+        # one-line version of the right answer costs nothing.
+        return hmac.compare_digest(decoded, self.config.basic_auth)
 
     def _challenge(self) -> Tuple[int, int]:
         self.send_response(401)

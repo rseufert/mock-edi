@@ -102,6 +102,15 @@ python3 -m mockedi --port 8080
 docker build -t mock-edi . && docker run -p 8080:8080 mock-edi
 ```
 
+The container binds `0.0.0.0`, because `127.0.0.1` inside a container is
+unreachable from outside it. On anything but your own machine, give it a
+password — the control plane can reset the database, rewrite the partners and
+read every archived document, and the mock says so on startup if you have not:
+
+```bash
+docker run -p 8080:8080 mock-edi --auth edi:s3cret
+```
+
 A guided tour of every endpoint, in curl:
 
 ```bash
@@ -646,7 +655,8 @@ everything in memory.
 
 | Flag | What it is for |
 | --- | --- |
-| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. |
+| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. |
+| `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed; a `Receipt-Delivery-Option` outside the list is refused with a failure MDN. |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |

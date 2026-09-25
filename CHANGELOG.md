@@ -10,6 +10,26 @@ says so where it does.
 
 ### Added
 
+- **A warning when the control plane is exposed, and `--deliver-to`**
+  ([#29]). Three things that are fine on a laptop and worth stating before
+  the container runs on a shared network.
+
+  The Dockerfile binds `0.0.0.0`, which is right - `127.0.0.1` inside a
+  container is unreachable - but it means anyone who can reach the port can
+  `POST /_mock/reset`, rewrite the partners and read every archived document.
+  Binding a non-loopback address with no `--auth` now prints a warning
+  naming the flag and what is at stake, and the README's Docker example
+  passes `--auth`.
+
+  The courier posted to any URL it was given: a partner's `as2_url`, which
+  anyone can set, and an asynchronous MDN's `Receipt-Delivery-Option`, which
+  an *unauthenticated* AS2 sender names - `/as2` cannot require
+  authentication and still be AS2. So a reachable mock could be asked to post
+  stored payloads at an internal address. `--deliver-to HOST[,HOST]` is an
+  allowlist of hosts it may post to, empty by default; a
+  `Receipt-Delivery-Option` outside it is refused with a `failed/Failure` MDN
+  returned to the sender, and the interchange is not read.
+
 - **`--keep-requests` and `--retention-days`, for a mock left running**
   ([#48]). The request log gained a row per request and every interchange
   was kept in full, for ever, so a shared staging partner on `--db` grew
@@ -144,6 +164,11 @@ says so where it does.
   trouble - it sends them looking for the bug somewhere else.
 
 ### Fixed
+
+- Basic-auth credentials were compared with `==` ([#29]), which leaks how
+  much of a credential was right through how long the comparison took. They
+  go through `hmac.compare_digest` now. The stakes are low in a mock; the
+  one-line version of the right answer costs nothing.
 
 - **A reset left the courier's and the dropbox's memory behind** ([#32]).
   `/_mock/reset` cleared the tables but not the in-process lists beside them,
@@ -714,6 +739,7 @@ documents a real one sends.
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#21]: https://github.com/rseufert/mock-edi/issues/21
+[#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
 [#52]: https://github.com/rseufert/mock-edi/issues/52

@@ -25,7 +25,7 @@ import queue
 import sqlite3
 import threading
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence
 
 from . import as2, db
 
@@ -136,6 +136,11 @@ class Courier:
                              (row["partner"],))
             if partner is None or not partner["as2_url"]:
                 return False   # a mailbox partner: leave it to be collected
+            if not permitted(partner["as2_url"], self.config.deliver_to):
+                _finish(conn, outbound_id, "failed", partner["as2_url"],
+                        "refused: %s is not in --deliver-to"
+                        % partner["as2_url"])
+                return False
             body, _charset = self.pipeline.wire(row)
 
         headers = as2.outbound_headers(
@@ -172,6 +177,11 @@ class Courier:
         with self.lock:
             row = db.one(conn, "SELECT * FROM mdn WHERE id = ?", (mdn_id,))
             if row is None or row["status"] != "pending" or not row["url"]:
+                return False
+            if not permitted(row["url"], self.config.deliver_to):
+                conn.execute("UPDATE mdn SET status = ? WHERE id = ?",
+                             ("refused", mdn_id))
+                conn.commit()
                 return False
         headers = _mdn_headers(row, self.config.as2_id)
         try:
@@ -238,6 +248,29 @@ def _finish(conn: sqlite3.Connection, outbound_id: int, status: str,
         (status, db.now(), url, note, db.now(),
          note if status == "failed" else "", outbound_id))
     conn.commit()
+
+
+def permitted(url: str, allowed: Sequence[str]) -> bool:
+    """Whether the courier may post to this URL.
+
+    An empty allowlist permits everything, which is what a laptop wants. With
+    one configured, the URL's host must be on it: a mock reachable from a
+    network posts to whatever `as2_url` a partner carries and to whatever
+    `Receipt-Delivery-Option` an unauthenticated AS2 sender names, so without
+    this it can be asked to post stored payloads at an internal address.
+
+    The host is compared without its port, case-folded, and a URL that cannot
+    be parsed into a host is refused rather than given the benefit of the
+    doubt.
+    """
+    if not allowed:
+        return True
+    try:
+        host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    except ValueError:
+        return False
+    return bool(host) and host in {item.strip().lower() for item in allowed
+                                   if item.strip()}
 
 
 def _mdn_headers(row, as2_id: str) -> Dict[str, str]:

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ipaddress
 import sqlite3
 import sys
 
@@ -72,6 +73,8 @@ def build_parser() -> argparse.ArgumentParser:
     testing = p.add_argument_group("testing")
     testing.add_argument("--auth", dest="basic_auth", metavar="USER:PASSWORD",
                          help="require HTTP basic authentication")
+    testing.add_argument("--deliver-to", metavar="HOST[,HOST]", default="",
+                         help="hosts the courier may POST to; anywhere by default")
     testing.add_argument("--seed", dest="seed_value", type=int, default=42,
                          help="seed for the generated demo data (default: 42)")
     testing.add_argument("--latency-ms", type=int, default=0,
@@ -111,7 +114,42 @@ def config_from_args(args: argparse.Namespace) -> Config:
     # argparse leaves an unset path as None; Config wants a string.
     values["drop_dir"] = values.get("drop_dir") or ""
     values["pickup_dir"] = values.get("pickup_dir") or ""
+    values["deliver_to"] = tuple(
+        host.strip() for host in (values.get("deliver_to") or "").split(",")
+        if host.strip())
     return Config(**values)
+
+
+def is_loopback(host: str) -> bool:
+    """Whether a bind address can only be reached from this machine.
+
+    An empty host or `0.0.0.0` means every interface, which is the right
+    default in a container - `127.0.0.1` inside one is unreachable from
+    outside - and exactly the case worth saying something about.
+    """
+    host = (host or "").strip().strip("[]").lower()
+    if not host or host in ("0.0.0.0", "::", "*"):
+        return False
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return host == "localhost" or host.endswith(".localhost")
+
+
+def exposure_warning(config) -> str:
+    """What to say when the control plane is reachable and unguarded.
+
+    `/_mock` can reset the database, rewrite the partners and read every
+    archived document. On a laptop bound to loopback that is the whole point.
+    Bound to an address other machines can reach, with no `--auth`, it is
+    worth saying out loud once rather than leaving someone to find out.
+    """
+    if is_loopback(config.host) or config.basic_auth:
+        return ""
+    return ("mock-edi: WARNING - listening on %s with no --auth. Anyone who "
+            "can reach this port can POST /_mock/reset, rewrite the partners "
+            "and read every archived document. Pass --auth USER:PASSWORD, or "
+            "bind 127.0.0.1." % (config.host or "every interface"))
 
 
 def main(argv=None) -> int:
@@ -146,6 +184,8 @@ def main(argv=None) -> int:
     print("  Mailbox  GET  %s/_mock/mailbox" % base)
     print("  Control  GET  %s/_mock/state, /_mock/partners, /_mock/orders" % base)
     print("  Index    %s/" % base)
+    if config.deliver_to:
+        print("  Deliver  only to %s" % ", ".join(config.deliver_to))
     if config.drop_dir:
         print("  Drop     %s  (every %dms)" % (config.drop_dir, config.drop_interval_ms))
     if config.pickup_dir:
@@ -153,6 +193,10 @@ def main(argv=None) -> int:
     for row in httpd.mock.conn.execute(
             "SELECT id, dialect, behaviour FROM partner ORDER BY id"):
         print("  partner  %-10s %-8s %s" % (row["id"], row["dialect"], row["behaviour"]))
+    warning = exposure_warning(config)
+    if warning:
+        # Last, so that it is the line still on the screen.
+        print(warning, file=sys.stderr)
     try:
         httpd.serve_forever()
     except KeyboardInterrupt:
