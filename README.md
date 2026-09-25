@@ -377,6 +377,12 @@ matched properly. X12 names a *transaction set inside a functional group* —
 only unique within its group. EDIFACT names a *message inside an interchange*,
 with `UCI01` quoting UNB's control reference and `UCM01` quoting UNH01.
 
+Either can also answer for everything at once, and most translators do when
+nothing went wrong: a 997 of `AK1` and `AK9` with no `AK2` loop marks every set
+of that functional group with `AK901`'s verdict (only sets of the group `AK101`
+names — an `AK1*PR` answers 855s), and a CONTRL with `UCI` and no `UCM` marks
+every message in the interchange it quotes.
+
 An acknowledgment naming something the mock never sent comes back
 `"matched": false` rather than being silently dropped — it is real and common,
 and usually evidence of the bug you are looking for.
@@ -495,7 +501,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-484 tests, every one of them talking to a real mock over real HTTP. Nothing is
+490 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

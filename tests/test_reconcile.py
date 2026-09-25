@@ -10,6 +10,8 @@ sys.path.insert(0, HERE)
 
 from mockedi import edifact, x12
 
+from mockedi.envelope import seg
+
 from support import (ACME, EURODIS, MockServerCase, acknowledge, edifact_order,
                      parse, x12_order)
 
@@ -143,6 +145,87 @@ class NotAcknowledgingAnAcknowledgment(MockServerCase):
                          ["CONTRL", "ORDRSP"])
         contrl = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
         self.assertEqual([u.comp(2, 1) for u in contrl.find_all("UCM")], ["ORDERS"])
+
+
+class AcknowledgingAWholeGroupAtOnce(MockServerCase):
+    """AK1 and AK9 alone - the commonest 997 there is, when all went well."""
+
+    def setUp(self):
+        super().setUp()
+        self.send(x12_order("PO-SUMMARY"))
+        self.documents = {row["code"]: parse(row["payload"])
+                          for row in self.mailbox(ACME, leave=False)}
+
+    def summary_997(self, code, verdict="A", functional_id=None):
+        """A 997 for the group `code` went out in, with no AK2 loop."""
+        group = self.documents[code].groups[0]
+        body = [seg("AK1", functional_id or group.functional_id, group.control),
+                seg("AK9", verdict, "1", "1", "1" if verdict == "A" else "0")]
+        return self.send(x12.render(x12.wrap(
+            [x12.message("997", "0001", body)], ACME, "MOCKEDI",
+            "000000501", "501", "FA")))
+
+    def status(self, code):
+        _status, _headers, rows = self.get(
+            "/_mock/documents?direction=out&code=" + code)
+        return rows[0]["ack_status"]
+
+    def test_ak9_marks_every_set_in_the_group(self):
+        summary = self.summary_997("855")
+        self.assertEqual([(a["code"], a["status"], a["matched"])
+                          for a in summary["acknowledged"]],
+                         [("855", "accepted", True)])
+        self.assertEqual(self.status("855"), "accepted")
+
+    def test_and_it_is_no_longer_outstanding(self):
+        self.summary_997("855")
+        _status, _headers, rows = self.get("/_mock/unacknowledged")
+        self.assertNotIn("855", [row["code"] for row in rows])
+
+    def test_a_rejecting_ak9_rejects_them(self):
+        self.summary_997("810", "R")
+        self.assertEqual(self.status("810"), "rejected")
+
+    def test_only_the_sets_of_the_group_ak101_names(self):
+        # The 856's group control, but AK1 says PR: that group answers 855s.
+        summary = self.summary_997("856", functional_id="PR")
+        self.assertFalse(summary["acknowledged"][0]["matched"])
+        self.assertEqual(self.status("856"), "")
+
+
+class AcknowledgingAWholeInterchangeAtOnce(MockServerCase):
+    """A CONTRL of UCI alone: 0083 answers for every message in it."""
+
+    EDIFACT = {"Content-Type": "application/edifact"}
+
+    def setUp(self):
+        super().setUp()
+        self.send(edifact_order("PO-UCI"), headers=self.EDIFACT)
+        self.documents = {row["code"]: parse(row["payload"])
+                          for row in self.mailbox(EURODIS, leave=False)}
+
+    def uci_only(self, code, action):
+        sent = self.documents[code]
+        body = [seg("UCI", sent.control, [sent.sender, sent.sender_qualifier],
+                    [sent.receiver, sent.receiver_qualifier], action)]
+        return self.send(edifact.render(edifact.wrap(
+            [edifact.message("CONTRL", "1", body, "D:3:UN")], EURODIS,
+            "MOCKEDI", "9601")), headers=self.EDIFACT)
+
+    def status(self, code):
+        _status, _headers, rows = self.get(
+            "/_mock/documents?direction=out&code=" + code)
+        return rows[0]["ack_status"]
+
+    def test_uci_seven_accepts_the_messages_it_quotes(self):
+        summary = self.uci_only("ORDRSP", "7")
+        self.assertEqual([(a["code"], a["matched"]) for a in summary["acknowledged"]],
+                         [("ORDRSP", True)])
+        self.assertEqual(self.status("ORDRSP"), "accepted")
+
+    def test_uci_four_rejects_them(self):
+        self.uci_only("INVOIC", "4")
+        self.assertEqual(self.status("INVOIC"), "rejected")
 
 
 class AcknowledgingAnEdifactDocument(MockServerCase):

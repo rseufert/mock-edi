@@ -16,6 +16,12 @@ two dialects address the thing they are acknowledging differently:
   UNB's control reference and `UCM01` quotes UNH01, with the action code in
   `0083` at each level.
 
+Both may also answer for everything at once, and most translators do when
+nothing was wrong: a 997 of `AK1` and `AK9` alone, with no `AK2` loop, is the
+commonest shape in the wild, and a CONTRL may carry `UCI` and no `UCM`.  That
+verdict applies to every set in the group, or every message in the
+interchange, that the acknowledgment names.
+
 An acknowledgment naming something the mock never sent is recorded as
 unmatched rather than dropped.  It is a real and common condition - a
 duplicate, a receipt for a document that was never delivered, or a partner
@@ -64,10 +70,18 @@ class Matched:
     note: str = ""
     document_id: int = 0
     reference: str = ""
+    # Set when the verdict is for a whole group (the AK101 functional id) or
+    # a whole interchange, rather than for one set; `code` and `control` are
+    # then empty until it is matched to the sets it covers.
+    covers: str = ""
 
     @property
     def matched(self) -> bool:
         return bool(self.document_id)
+
+
+GROUP = "group"
+INTERCHANGE = "interchange"
 
 
 def apply(conn: sqlite3.Connection, partner: str, dialect: str,
@@ -77,9 +91,13 @@ def apply(conn: sqlite3.Connection, partner: str, dialect: str,
         results = _read_997(message)
     else:
         results = _read_contrl(message, interchange_control)
+    out: List[Matched] = []
     for result in results:
-        _record(conn, partner, dialect, result)
-    return results
+        for item in _expand(conn, partner, dialect, result) if result.covers \
+                else [result]:
+            _record(conn, partner, dialect, item)
+            out.append(item)
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -93,10 +111,23 @@ def _read_997(message: Message) -> List[Matched]:
     current: Optional[Matched] = None
     notes: List[str] = []
 
+    functional_id = ""
+    loops = 0
+
     for item in message.segments:
         if item.tag == "AK1":
-            group_control = item.get(2)
+            functional_id, group_control, loops = item.get(1), item.get(2), 0
+        elif item.tag == "AK9" and not loops:
+            # AK1 and AK9 alone: AK901 is the verdict on every set in the
+            # group, which is how most translators say "all accepted".
+            out.append(Matched(
+                code="", control="", group_control=group_control,
+                verdict=item.get(1),
+                status=X12_VERDICTS.get(item.get(1), ACCEPTED_WITH_ERRORS),
+                note="acknowledged for the whole group by AK9, with no AK2 loop",
+                covers=functional_id or GROUP))
         elif item.tag == "AK2":
+            loops += 1
             current = Matched(code=item.get(1), control=item.get(2),
                               group_control=group_control)
             notes = []
@@ -132,9 +163,11 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
     current: Optional[Matched] = None
     notes: List[str] = []
 
+    verdict = ""
     for item in message.segments:
         if item.tag == "UCI":
             acknowledged_interchange = item.get(1)
+            verdict = item.get(4)
         elif item.tag == "UCM":
             if current is not None:
                 current.note = "; ".join(notes)
@@ -153,6 +186,13 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
     if current is not None:
         current.note = "; ".join(notes)
         out.append(current)
+    if not out and verdict:
+        # UCI and no UCM: 0083 answers for every message in the interchange.
+        out.append(Matched(
+            code="", control="", group_control=acknowledged_interchange,
+            verdict=verdict, status=EDIFACT_VERDICTS.get(verdict, ACCEPTED),
+            note="acknowledged for the whole interchange by UCI, with no UCM",
+            covers=INTERCHANGE))
     return out
 
 
@@ -187,6 +227,45 @@ def _record(conn: sqlite3.Connection, partner: str, dialect: str,
         " ack_at = ? WHERE id = ?",
         (result.status, result.verdict, result.note, db.now(), row["id"]))
     conn.commit()
+
+
+def _expand(conn: sqlite3.Connection, partner: str, dialect: str,
+            result: Matched) -> List[Matched]:
+    """A verdict for a whole group or interchange, as one per set it covers.
+
+    A 997's AK101 names the functional group, so only the sets that belong
+    to it are covered: an `AK1*PR` group answers 855s, not the 856 that went
+    out with the same group control number to someone else's group. What
+    the mock sent in answer to the partner - its own acknowledgments - is
+    never covered. With nothing to cover, the verdict is kept, unmatched.
+    """
+    answers = tuple(ACKNOWLEDGMENT_KINDS)
+    if dialect == "X12":
+        codes = [code for code, definition in schema.X12_SETS.items()
+                 if definition.group == result.covers]
+        if not codes:
+            return [result]
+        rows = db.rows(
+            conn,
+            "SELECT * FROM transaction_set WHERE direction = 'out'"
+            " AND partner = ? AND group_control = ? AND code IN (%s)"
+            " ORDER BY id" % ", ".join("?" for _ in codes),
+            [partner, result.group_control] + codes)
+    else:
+        rows = db.rows(
+            conn,
+            "SELECT t.* FROM transaction_set t JOIN interchange i"
+            " ON i.id = t.interchange_id"
+            " WHERE t.direction = 'out' AND t.partner = ? AND i.control = ?"
+            " AND t.kind NOT IN (%s) ORDER BY t.id"
+            % ", ".join("?" for _ in answers),
+            [partner, result.group_control] + list(answers))
+    if not rows:
+        return [result]
+    return [Matched(code=row["code"], control=row["control"],
+                    group_control=result.group_control, status=result.status,
+                    verdict=result.verdict, note=result.note)
+            for row in rows]
 
 
 def _find(conn: sqlite3.Connection, partner: str, dialect: str,

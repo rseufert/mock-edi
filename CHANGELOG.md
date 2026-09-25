@@ -42,6 +42,13 @@ says so where it does.
 
 ### Fixed
 
+- A 997 with no `AK2` loop - `AK1` and `AK9` only, the commonest shape there
+  is - validated clean and then acknowledged nothing ([#33]), so the
+  document stayed on `/_mock/unacknowledged` for ever. `AK901` now applies to
+  every set the mock sent in the group `AK102` names, of the kind `AK101`
+  names. A CONTRL with `UCI` and no `UCM` does the same for every message in
+  the interchange `UCI01` quotes.
+
 - An inbound 997 was answered with a 997, and a CONTRL with a CONTRL
   ([#34]) - which the standards forbid, because two systems that both do it
   answer each other for ever. A functional group of `FA` is now read and not
@@ -458,6 +465,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#33]: https://github.com/rseufert/mock-edi/issues/33
 [#34]: https://github.com/rseufert/mock-edi/issues/34
 [#24]: https://github.com/rseufert/mock-edi/issues/24
 [#35]: https://github.com/rseufert/mock-edi/issues/35
