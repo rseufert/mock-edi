@@ -69,9 +69,10 @@ class From010(FileDatabase):
 
     def test_what_it_held_is_kept_and_new_columns_take_their_defaults(self):
         httpd, _base = self.serve()
-        row = httpd.mock.conn.execute(
-            "SELECT reference, ack_status FROM transaction_set"
-            " WHERE reference = 'PO-FROM-010'").fetchone()
+        with httpd.mock.lock:
+            row = httpd.mock.conn.execute(
+                "SELECT reference, ack_status FROM transaction_set"
+                " WHERE reference = 'PO-FROM-010'").fetchone()
         self.assertEqual(tuple(row), ("PO-FROM-010", ""))
 
     def test_it_is_marked_with_the_current_version(self):
