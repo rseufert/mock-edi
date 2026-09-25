@@ -40,6 +40,10 @@ TEXT = "text/plain; charset=utf-8"
 HTML = "text/html; charset=utf-8"
 ALLOWED_METHODS = "GET, HEAD, POST, PATCH, PUT, DELETE, OPTIONS"
 
+# How many logged requests pass between prunes, so a mock nobody advances is
+# still bounded without a timer of its own.
+PRUNE_EVERY = 1000
+
 
 @dataclass
 class Config:
@@ -90,6 +94,11 @@ class Config:
     log_requests: bool = True
     quiet: bool = False
 
+    # Retention, for a mock left running on a file database. Pruned at
+    # startup, after every advance and every PRUNE_EVERY requests.
+    keep_requests: int = 5000        # newest request-log rows kept; 0 keeps all
+    retention_days: float = 0.0      # older records removed; 0 keeps everything
+
 
 class Mock:
     """The mock's state: a database, a pipeline, and a courier."""
@@ -115,6 +124,19 @@ class Mock:
         self.dropbox.lock = self.lock
         self.started = datetime.datetime.now()
         self.random = random.Random(config.seed_value)
+        self.pruned: Dict[str, int] = {}
+        self.requests_since_prune = 0
+        self.prune()
+
+    def prune(self) -> Dict[str, int]:
+        """Apply --keep-requests and --retention-days, and keep a running total."""
+        with self.lock:
+            removed = db.prune(self.conn, self.config.keep_requests,
+                               self.config.retention_days)
+            for table, count in removed.items():
+                self.pruned[table] = self.pruned.get(table, 0) + count
+            self.requests_since_prune = 0
+        return removed
 
     def _released(self, outbound_ids) -> None:
         """A document became ready: post it, write it, or leave it to be collected.
@@ -194,6 +216,7 @@ class Mock:
             # otherwise report failures and files for orders that are gone.
             self.courier.forget()
             self.dropbox.forget()
+            self.pruned = {}
 
 
 # ---------------------------------------------------------------------------
@@ -508,6 +531,10 @@ class Handler(BaseHTTPRequestHandler):
                     "despatch": self.config.despatch_delay_ms,
                     "invoice": self.config.invoice_delay_ms},
                 "courierFailures": list(self.mock.courier.failures[-10:]),
+                "retention": {
+                    "keepRequests": self.config.keep_requests,
+                    "retentionDays": self.config.retention_days,
+                    "pruned": dict(self.mock.pruned)},
             })
 
         if head == "behaviours":
@@ -652,6 +679,7 @@ class Handler(BaseHTTPRequestHandler):
                 released = self.mock.pipeline.advance(seconds, everything)
             except ValueError as error:
                 return self._json(400, {"error": str(error), "parameter": "seconds"})
+            self.mock.prune()
             clock = self.mock.pipeline
             return self._json(200, {
                 "released": released, "count": len(released),
@@ -939,6 +967,9 @@ class Handler(BaseHTTPRequestHandler):
                     (method, path, status, bytes_in, bytes_out,
                      self.headers.get("AS2-From", "") or "", db.now()))
                 self.mock.conn.commit()
+                self.mock.requests_since_prune += 1
+                if self.mock.requests_since_prune >= PRUNE_EVERY:
+                    self.mock.prune()
         except sqlite3.Error:            # pragma: no cover - logging must not fail a request
             pass
 

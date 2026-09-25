@@ -613,6 +613,9 @@ everything in memory.
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
 | `--no-request-log` | Keep requests out of the `request_log` table, and out of `/_mock/requests`. |
 
+**Keeping it bounded** - `--keep-requests` and `--retention-days`, for a mock
+left running on a `--db` file; see [Leaving it running](#leaving-it-running).
+
 ## Layout
 
 ```

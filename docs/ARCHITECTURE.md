@@ -135,6 +135,12 @@ released, so on startup `Mock.resume` puts back on its queue every document
 still `ready` for a partner with an AS2 URL, and every asynchronous MDN still
 `pending`, in the order they were first queued.
 
+A file database left running would otherwise grow for ever, so `db.prune`
+applies `--keep-requests` and `--retention-days` at startup, after every
+advance and every thousand requests - no timer, like everything else. It
+removes the record of what the mock did, never what it is: partners, orders
+and number ranges stay, and so does anything still waiting to go out.
+
 A file database outlives the version of the mock that wrote it, so it is
 upgraded in place when it is opened. `PRAGMA user_version` records the schema
 version; `db.upgrade` creates any table the file lacks and adds any column the

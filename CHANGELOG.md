@@ -10,6 +10,19 @@ says so where it does.
 
 ### Added
 
+- **`--keep-requests` and `--retention-days`, for a mock left running**
+  ([#48]). The request log gained a row per request and every interchange
+  was kept in full, for ever, so a shared staging partner on `--db` grew
+  without bound and the only remedy, `/_mock/reset`, threw away the partners
+  and orders too. `--keep-requests N` keeps the newest `N` request-log rows
+  (default 5000); `--retention-days D` removes interchanges, finished
+  documents and MDNs and request-log rows older than `D` days (default off).
+  Both apply at startup, after every advance and every thousand requests,
+  and `GET /_mock/state` reports what went under `retention`. Shipments and
+  invoices are now indexed by PO number, and interchanges by age. **The
+  schema version is now 6**, so a file this version has opened is refused by
+  an older mock.
+
 - **A failed delivery can be tried again** ([#30]).
   `POST /_mock/outbox/<id>/retry` delivers one document again, and
   `POST /_mock/advance?failed` does the same for everything that failed, in
@@ -683,6 +696,8 @@ documents a real one sends.
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#48]: https://github.com/rseufert/mock-edi/issues/48
+
 [#32]: https://github.com/rseufert/mock-edi/issues/32
 
 [#47]: https://github.com/rseufert/mock-edi/issues/47
