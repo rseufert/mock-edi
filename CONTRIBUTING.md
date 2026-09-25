@@ -94,7 +94,8 @@ If a change touches more than one of these, it is usually two changes.
   let an entry waiting for a release disappear. A change that genuinely needs
   no entry - a comment, a rename, a pure refactor - can carry the
   `no changelog` label, which lifts that one rule and leaves the others
-  standing.
+  standing. Only someone with triage rights can label a pull request, so say
+  in the description why no entry is needed and a maintainer will apply it.
 - **No new dependencies.** See above.
 - **A commit message that says what changed and why.** The why is the part a
   reader cannot reconstruct. Wrap at 72 characters.
