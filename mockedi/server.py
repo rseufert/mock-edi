@@ -65,6 +65,10 @@ class Config:
     invoice_delay_ms: int = 0
     mdn: bool = True
     deliver_timeout: float = 10.0
+    # The largest request body read, and how long a request may take to
+    # arrive. Every payload is stored, so the cap protects a --db file too.
+    max_body_bytes: int = 16 * 1024 * 1024
+    request_timeout: float = 60.0
     # Accept an interchange control number a partner has already used. Off by
     # default: a real receiver refuses the replay rather than shipping twice.
     allow_duplicates: bool = False
@@ -187,9 +191,28 @@ class Mock:
 # Routing
 # ---------------------------------------------------------------------------
 
+class BodyError(Exception):
+    """A request body that cannot be read, and the status that says why.
+
+    Every one of these closes the connection: a body that was not read to its
+    end leaves bytes on the socket that would otherwise be parsed as the next
+    request.
+    """
+
+    def __init__(self, status: int, message: str):
+        super().__init__(message)
+        self.status = status
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "mock-edi"
     protocol_version = "HTTP/1.1"
+
+    def setup(self) -> None:
+        # A socket timeout, so a client that sends headers and then nothing
+        # is let go of rather than holding a thread for as long as it likes.
+        self.timeout = self.server.mock.config.request_timeout or None
+        super().setup()
 
     # -- plumbing
 
@@ -223,9 +246,16 @@ class Handler(BaseHTTPRequestHandler):
     def _handle(self, method: str) -> None:
         started = time.time()
         path, query = _split(self.path)
-        body = self._read_body()
         status = 500
         written = 0
+        try:
+            body = self._read_body()
+        except BodyError as error:
+            self.close_connection = True
+            status, written = self._text(error.status, str(error))
+            if self.config.log_requests:
+                self._log_request_row(method, path, status, 0, written)
+            return
         try:
             if self.config.latency_ms:
                 time.sleep(self.config.latency_ms / 1000.0)
@@ -688,13 +718,74 @@ class Handler(BaseHTTPRequestHandler):
     # -- responses
 
     def _read_body(self) -> bytes:
-        length = self.headers.get("Content-Length")
+        """The request body, from Content-Length or chunked transfer coding.
+
+        Refused rather than guessed at: a length that is not a number, a
+        body over `max_body_bytes`, a transfer coding other than chunked, and
+        a client that stops sending all raise `BodyError`.
+        """
+        coding = (self.headers.get("Transfer-Encoding") or "").strip().lower()
+        if coding and coding != "identity":
+            if coding != "chunked":
+                raise BodyError(501, "Transfer-Encoding %r is not supported; "
+                                     "send chunked or a Content-Length" % coding)
+            return self._read_chunked()
+        length = (self.headers.get("Content-Length") or "").strip()
         if not length:
             return b""
+        if not length.isdigit():
+            raise BodyError(400, "Content-Length must be a non-negative number, "
+                                 "not %r" % length)
+        size = int(length)
+        if size > self.config.max_body_bytes:
+            raise BodyError(413, "the body is %d bytes; this mock reads at most "
+                                 "%d (--max-body)" % (size, self.config.max_body_bytes))
+        body = self._read_exactly(size)
+        return body
+
+    def _read_exactly(self, size: int) -> bytes:
         try:
-            return self.rfile.read(int(length))
-        except (ValueError, OSError):    # pragma: no cover - truncated request
-            return b""
+            body = self.rfile.read(size)
+        except (TimeoutError, OSError):
+            raise BodyError(408, "the body did not arrive within %gs"
+                                 % self.config.request_timeout)
+        if len(body) < size:
+            raise BodyError(400, "the body ended after %d of %d bytes"
+                                 % (len(body), size))
+        return body
+
+    def _read_line(self) -> bytes:
+        try:
+            return self.rfile.readline(65537)
+        except (TimeoutError, OSError):
+            raise BodyError(408, "the body did not arrive within %gs"
+                                 % self.config.request_timeout)
+
+    def _read_chunked(self) -> bytes:
+        """RFC 9112 chunked coding: hex sizes, data, CRLF, a zero, trailers."""
+        chunks: List[bytes] = []
+        total = 0
+        while True:
+            line = self._read_line()
+            try:
+                size = int(line.split(b";", 1)[0].strip(), 16)
+            except ValueError:
+                raise BodyError(400, "a chunk size must be hexadecimal, not %r"
+                                     % line[:40])
+            if size < 0:
+                raise BodyError(400, "a chunk size cannot be negative")
+            if size == 0:
+                # Trailer fields, if any, end with an empty line.
+                while self._read_line() not in (b"\r\n", b"\n", b""):
+                    pass
+                return b"".join(chunks)
+            total += size
+            if total > self.config.max_body_bytes:
+                raise BodyError(413, "the body is over %d bytes (--max-body)"
+                                     % self.config.max_body_bytes)
+            chunks.append(self._read_exactly(size))
+            if self._read_line() not in (b"\r\n", b"\n"):
+                raise BodyError(400, "a chunk is not followed by CRLF")
 
     def _raw(self, status: int, payload: bytes,
              headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
@@ -704,6 +795,8 @@ class Handler(BaseHTTPRequestHandler):
         if not any(k.lower() == "content-type" for k in (headers or {})):
             self.send_header("Content-Type", TEXT)
         self.send_header("Content-Length", str(len(payload)))
+        if self.close_connection:
+            self.send_header("Connection", "close")
         self.end_headers()
         self.wfile.write(payload)
         return status, len(payload)
@@ -945,6 +1038,12 @@ def _dictionary(rest: List[str]) -> Any:
             {"tag": use.tag, "name": use.segment.name, "requirement": use.req,
              "maxUse": use.max_use, "loop": loop.id if loop else "",
              "purpose": use.segment.purpose,
+             # `width` is how wide the standard makes the segment; the
+             # elements below are the ones this mock checks. Where they differ,
+             # the positions in between are carried and not validated - so a
+             # guide that uses one of them is not wrong, it is untested.
+             "width": use.segment.width,
+             "checkedTo": len(use.segment.elements),
              "elements": [
                  {"position": position, "ref": element.ref, "name": element.name,
                   "type": element.type, "requirement": element.req,

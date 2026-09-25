@@ -6,17 +6,22 @@ still true, only whether a file exists that nobody documented, or a file is
 documented that no longer exists.  That catches the common failure - a module
 added without a line in the index - and leaves the judgement calls to review.
 
-Four checks:
+Five checks:
 
 1. every tracked file is named in docs/FILES.md
 2. every file named in docs/FILES.md exists
 3. every module of the package appears in the README's layout block
 4. the test count the README quotes is the number unittest discovers
+5. every command-line flag is mentioned in the README
 
 The fourth is the one number in the prose that can be checked mechanically,
 and it had drifted by eighty before anyone noticed.  It is counted by asking
 the loader rather than by grepping for `def test_`, so a test method that
 arrives through a base class is counted the way running the suite counts it.
+
+The fifth asks the real argument parser for its flags, so a flag added to
+`mockedi/__main__.py` without a word in the README fails the build - fourteen
+of them once existed only in `--help`.
 
 Run it directly (`python3 tools/check_docs.py`); CI runs it on every push.
 """
@@ -66,6 +71,16 @@ def count_tests():
         return 1
 
     return walk(suite)
+
+
+def cli_flags():
+    """Every long flag the command line accepts, from the parser itself."""
+    sys.path.insert(0, ROOT)
+    from mockedi.__main__ import build_parser
+    flags = set()
+    for action in build_parser()._actions:
+        flags.update(o for o in action.option_strings if o.startswith("--"))
+    return sorted(flags - {"--help"})
 
 
 def main():
@@ -119,6 +134,13 @@ def main():
                 "%s says %s tests, the suite has %d - say %d"
                 % (README, quoted.group(1), discovered, discovered))
 
+    # 5. every flag the command line takes is mentioned in the README
+    for flag in cli_flags():
+        if not re.search(r"(?<![\w-])%s(?![\w-])" % re.escape(flag), readme):
+            problems.append(
+                "%s is a command-line flag the README never mentions - add it to "
+                "the Configuration section" % flag)
+
     if problems:
         print("documentation is out of date:\n")
         for problem in problems:
@@ -127,8 +149,8 @@ def main():
         return 1
 
     print("docs/FILES.md covers every tracked file, names nothing that is gone, "
-          "the README layout block lists every module, and it quotes the right "
-          "test count.")
+          "the README layout block lists every module, it quotes the right "
+          "test count, and it mentions every command-line flag.")
     return 0
 
 

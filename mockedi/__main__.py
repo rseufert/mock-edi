@@ -81,6 +81,15 @@ def build_parser() -> argparse.ArgumentParser:
     testing.add_argument("--no-request-log", dest="log_requests",
                          action="store_false",
                          help="do not record requests in the request_log table")
+    limits = p.add_argument_group("limits")
+    limits.add_argument("--max-body", dest="max_body_bytes", type=int,
+                        default=16 * 1024 * 1024, metavar="BYTES",
+                        help="largest request body read; larger is answered "
+                             "413 (default: 16 MiB)")
+    limits.add_argument("--request-timeout", type=float, default=60.0,
+                        metavar="SECONDS",
+                        help="how long a request may take to arrive before the "
+                             "connection is closed (default: 60)")
     p.add_argument("-q", "--quiet", action="store_true", help="suppress the access log")
     p.add_argument("--version", action="version", version="mock-edi " + __version__)
     return p

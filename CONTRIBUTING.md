@@ -85,8 +85,10 @@ If a change touches more than one of these, it is usually two changes.
   own output against its own dictionary.
 - **Documentation that keeps up.** `tools/check_docs.py` fails the build if a
   tracked file has no row in `docs/FILES.md`, if a row names a file that is
-  gone, or if a module is missing from the README's layout block. It checks
-  coverage, not prose - keeping the prose true is on you.
+  gone, if a module is missing from the README's layout block, if the README's
+  test count is wrong, or if a command-line flag has no mention in the README's
+  Configuration section. It checks coverage, not prose - keeping the prose
+  true is on you.
 - **A line in the changelog.** `tools/check_changelog.py` fails a pull request
   that touches `mockedi/` without adding an entry under `## [Unreleased]` - an
   entry, not merely a changed file. It is what a user of the published package
