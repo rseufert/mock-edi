@@ -162,8 +162,10 @@ class Pipeline:
                     # holds that is a change, not a replacement.
                     known = documents.order_row(self.conn, order.po_number)
                     if order.purpose in transactions.CHANGE_PURPOSES and known:
+                        held = [row["line"] for row in
+                                documents.order_lines(self.conn, order.po_number)]
                         self._apply_change(
-                            partner, transactions.change_from_order(order),
+                            partner, transactions.change_from_order(order, held),
                             receipt)
                     else:
                         documents.record_order(self.conn, partner, order,

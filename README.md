@@ -276,6 +276,12 @@ an **865**. EDIFACT has no separate change acknowledgment message, so an
 ORDCHG is answered by an **ORDRSP** — the difference most likely to catch out
 someone porting a mapping from X12.
 
+A restated 850 (`BEG01 = 04` or `05`) is read as the whole order: a line it
+leaves out is deleted, and the 865 says so with `DI` — or refuses, if that
+line has already shipped. For `05` (Replace) that is the only reading; for
+`04` it is the mock's choice, because an 850 has no other way to drop a line.
+To change some lines and leave the rest alone, send an 860.
+
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
 ACK*IA*60*EA*068*20260926~                 the seller agrees

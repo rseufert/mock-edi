@@ -36,6 +36,13 @@ says so where it does.
 
 ### Fixed
 
+- An 850 restated with `BEG01 = 04` or `05` kept, confirmed and shipped any
+  line it left out ([#38]), and the 865 never mentioned it. A line the
+  restatement omits is now deleted, and the 865 answers it `DI` - or refuses
+  it with the reason, if it has already shipped. For `04` this is a choice,
+  and the README says so: to change some lines and leave the rest, send an
+  860.
+
 - **The 855 and 865 change on the wire** ([#49]). `BAK`, `BCH` and `BCA`
   were declared out of step with ASC X12 004010 from position 6 on, and the
   writers followed the declaration, so the 855 put its acknowledgment date in
@@ -360,6 +367,7 @@ documents a real one sends.
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#37]: https://github.com/rseufert/mock-edi/issues/37
+[#38]: https://github.com/rseufert/mock-edi/issues/38
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#49]: https://github.com/rseufert/mock-edi/issues/49
 [#50]: https://github.com/rseufert/mock-edi/issues/50

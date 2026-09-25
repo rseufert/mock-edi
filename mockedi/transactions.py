@@ -779,13 +779,20 @@ def _read_change_edifact(message: Message) -> Change:
     return change
 
 
-def change_from_order(order: Order) -> Change:
+def change_from_order(order: Order, held: Sequence[str] = ()) -> Change:
     """An 850 sent with a change purpose, read as the change it is.
 
     A buyer may restate a whole order rather than send an 860, and `BEG01`
-    says so with `04`.  Every line is a change to the line of the same number,
-    and a line the order no longer mentions has been deleted - which the
-    caller works out, because only it knows what the order used to hold.
+    says so with `04` (Change) or `05` (Replace).  Every line is a change to
+    the line of the same number, and a line in `held` - the numbers the
+    order used to have - that the restatement no longer mentions has been
+    deleted.
+
+    For `05` that reading is the only one. For `04` it is a choice, and the
+    mock makes the same one: an 850 has no line-level change codes, so a
+    restated order can say "drop this line" only by leaving it out. A
+    partner that sends `04` with just the lines it is changing needs an 860
+    instead.
     """
     change = Change(po_number=order.po_number, purpose=order.purpose,
                     changed_on=order.ordered_on, ordered_on=order.ordered_on,
@@ -795,6 +802,10 @@ def change_from_order(order: Order) -> Change:
             number=line.number, sku=line.sku, upc=line.upc,
             description=line.description, quantity=line.quantity,
             uom=line.uom, price=line.price, action=CHANGE_LINE))
+    mentioned = {line.number for line in order.lines}
+    for number in held:
+        if number not in mentioned:
+            change.lines.append(ChangeLine(number=number, action=DELETE))
     return change
 
 
