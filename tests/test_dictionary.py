@@ -57,6 +57,47 @@ class TheModel(unittest.TestCase):
                                                 "%s %s" % (use.tag, candidate.ref))
 
 
+class LaidOutAs004010(unittest.TestCase):
+    """The beginning segments, element by element, as ASC X12 004010 has them.
+
+    Written out here rather than read from `schema.py`, because the point is
+    to check the dictionary against something it did not produce.
+    """
+    STANDARD = {
+        "BAK": ("353", "587", "324", "373", "328", "326", "367", "127", "373"),
+        "BCH": ("353", "92", "324", "328", "327", "373", "326", "367", "127",
+                "373", "373"),
+        "BCA": ("353", "587", "324", "328", "327", "373", "326", "367", "127",
+                "373", "373"),
+    }
+
+    def test_the_declarations_follow_the_standard(self):
+        for tag, refs in self.STANDARD.items():
+            segment = getattr(schema, tag)
+            self.assertEqual(tuple(e.ref for e in segment.elements), refs, tag)
+
+    def check(self, code, group, body):
+        interchange = x12.parse(x12.render(x12.wrap(
+            [x12.message(code, "0001", body)], "ACME", "MOCKEDI", "1", "1", group)))
+        report = validate.validate(interchange)
+        self.assertTrue(report.clean, [m.summary() for m in report.messages])
+
+    def test_an_860_with_a_contract_number_in_bch08_is_clean(self):
+        from mockedi.envelope import seg
+        self.check("860", "PC", [
+            seg("BCH", "04", "SA", "S1", "", "1", "20260925", "REQ-7",
+                "CTR-2026-01", "", "20260924"),
+            seg("POC", "1", "QI", "5", "", "EA", "12.50", "", "VP", "WIDGET-001"),
+            seg("CTT", "1")])
+
+    def test_an_855_with_a_contract_number_in_bak07_is_clean(self):
+        from mockedi.envelope import seg
+        self.check("855", "PR", [
+            seg("BAK", "00", "AD", "S1", "20260924", "", "REQ-1", "CTR-9", "",
+                "20260925"),
+            seg("CTT", "0")])
+
+
 class GeneratedDocumentsAreValid(unittest.TestCase):
     """Everything the mock writes passes the checks it applies to what it reads."""
 

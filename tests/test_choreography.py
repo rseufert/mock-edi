@@ -46,6 +46,16 @@ class X12OrderToCash(MockServerCase):
         self.assertEqual([a.get(1) for a in acks], ["IA", "IA"])
         self.assertEqual([a.get(2) for a in acks], ["100", "40"])
 
+    def test_the_855_puts_its_references_and_dates_where_004010_does(self):
+        # By position, from the standard, not from the mock's dictionary:
+        # writer and validator share that, so they would agree if both drifted.
+        bak = self.document(ACME, "response").groups[0].messages[0].find("BAK")
+        order = self.order("4500000042")
+        self.assertEqual(bak.get(4), "20260924")               # PO date
+        self.assertEqual([bak.get(6), bak.get(7)], ["", ""])    # request ref, contract
+        self.assertEqual(bak.get(8), order["seller_order"])    # 127: seller's order
+        self.assertRegex(bak.get(9), r"^20\d{6}$")              # 373: acknowledged on
+
     def test_the_856_is_a_tree_of_shipment_order_and_item(self):
         message = self.document(ACME, "despatch").groups[0].messages[0]
         self.assertEqual(message.find("BSN").get(5), "0004")

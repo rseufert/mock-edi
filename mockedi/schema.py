@@ -360,9 +360,13 @@ BAK = Segment("BAK", "Beginning Segment for Purchase Order Acknowledgment", (
     _e("324", "Purchase Order Number", "AN", 1, 22, MANDATORY),
     _e("373", "Date", "DT", 8, 8, MANDATORY),
     _e("328", "Release Number", "AN", 1, 30),
-    _e("367", "Contract Number", "AN", 1, 30),
-    _e("373", "Acknowledgment Date", "DT", 8, 8),
     _e("326", "Request Reference Number", "AN", 1, 45),
+    _e("367", "Contract Number", "AN", 1, 30),
+    # BAK08 is where the seller's own order number goes, and BAK09 the date
+    # the seller acknowledged. Get 06-09 in the wrong order and a translator
+    # reads the acknowledgment date as a contract number.
+    _e("127", "Reference Identification", "AN", 1, 30),
+    _e("373", "Acknowledgment Date", "DT", 8, 8),
 ), "Identifies the order being acknowledged and the overall verdict on it.")
 
 BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
@@ -372,10 +376,11 @@ BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
     _e("328", "Release Number", "AN", 1, 30),
     _e("327", "Change Order Sequence Number", "AN", 1, 8),
     _e("373", "Date", "DT", 8, 8, MANDATORY),
-    _e("367", "Contract Number", "AN", 1, 30),
-    _e("587", "Acknowledgment Type", "ID", 2, 2, OPTIONAL, ACK_TYPE_CODES),
     _e("326", "Request Reference Number", "AN", 1, 45),
+    _e("367", "Contract Number", "AN", 1, 30),
+    _e("127", "Reference Identification", "AN", 1, 30),
     _e("373", "Purchase Order Date", "DT", 8, 8),
+    _e("373", "Date", "DT", 8, 8),
 ), "Identifies the order being changed, and which change this is.")
 
 BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment", (
@@ -385,9 +390,11 @@ BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment
     _e("328", "Release Number", "AN", 1, 30),
     _e("327", "Change Order Sequence Number", "AN", 1, 8),
     _e("373", "Date", "DT", 8, 8, MANDATORY),
-    _e("367", "Contract Number", "AN", 1, 30),
     _e("326", "Request Reference Number", "AN", 1, 45),
+    _e("367", "Contract Number", "AN", 1, 30),
+    _e("127", "Reference Identification", "AN", 1, 30),
     _e("373", "Purchase Order Date", "DT", 8, 8),
+    _e("373", "Date", "DT", 8, 8),
 ), "The seller's verdict on a change request, and which request it answers.")
 
 POC = Segment("POC", "Line Item Change", (
