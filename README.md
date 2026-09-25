@@ -320,6 +320,34 @@ which is the whole point, and why `GET /_mock/scheduled` shows work promised
 but not done, separately from `/_mock/outbox`, which shows documents that
 already exist.
 
+## One file, several interchanges
+
+A file from a VAN or an SFTP drop often holds more than one interchange, one
+after another. Every one of them is read: each is its own envelope, with its
+own control number, its own acknowledgment and its own verdict, so one being
+refused says nothing about the rest. Each may even declare its own delimiters,
+because the VAN concatenated what its senders gave it and they need not agree.
+
+The summary keeps the shape it has for a single interchange — the keys beside
+`interchanges` describe the whole payload, and `interchanges` describes each
+one in turn:
+
+```json
+{
+  "accepted": true,
+  "orders": ["4500000042", "4500000043"],
+  "interchanges": [
+    {"interchange": "000000077", "accepted": true, "orders": ["4500000042"], "...": "..."},
+    {"interchange": "000000078", "accepted": true, "orders": ["4500000043"], "...": "..."}
+  ]
+}
+```
+
+An interchange that is refused carries its own `error` and leaves the others
+alone; the payload as a whole is `accepted` only when every interchange in it
+was. Over AS2 one MDN answers the whole file, and says *processed* only when
+all of it was. A dropped file is filed as processed on the same terms.
+
 ## A replayed interchange is refused
 
 A retry bug on the sender's side is ordinary, and processing a duplicate order
@@ -490,7 +518,7 @@ mockedi/server.py        HTTP: AS2, /edi, and the control plane
 python3 -m unittest discover -s tests -v
 ```
 
-475 tests, every one of them talking to a real mock over real HTTP. Nothing is
+494 tests, every one of them talking to a real mock over real HTTP. Nothing is
 stubbed. The most valuable one is in `tests/test_dictionary.py`: every document
 the mock generates is validated against the same dictionary it validates yours
 with, so the day someone adds a segment to a writer and forgets the

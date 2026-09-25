@@ -168,17 +168,22 @@ class DropBox:
             return Scanned(name=name, ok=False, error=str(error))
 
         with self.lock:
-            receipt = self.pipeline.receive(payload, transport="drop")
+            receipts = self.pipeline.receive(payload, transport="drop")
 
-        if receipt.ok:
-            result = Scanned(name=name, ok=True, partner=receipt.partner,
-                             dialect=receipt.dialect, orders=list(receipt.orders),
-                             produced=[q.code for q in receipt.queued])
+        # A dropped file may hold several interchanges. It is filed as
+        # processed only when every one of them was read: a file with one bad
+        # interchange in it is a file somebody needs to look at.
+        refused = [receipt for receipt in receipts if not receipt.ok]
+        if not refused:
+            result = Scanned(name=name, ok=True, partner=receipts[0].partner,
+                             dialect=receipts[0].dialect,
+                             orders=[po for r in receipts for po in r.orders],
+                             produced=[q.code for r in receipts for q in r.queued])
         else:
-            result = Scanned(name=name, ok=False, error=receipt.error,
-                             partner=receipt.partner, dialect=receipt.dialect)
+            result = Scanned(name=name, ok=False, error=refused[0].error,
+                             partner=refused[0].partner, dialect=refused[0].dialect)
         result.moved_to = self._file_away(path, name,
-                                          PROCESSED if receipt.ok else FAILED)
+                                          PROCESSED if not refused else FAILED)
         return result
 
     def _file_away(self, path: str, name: str, folder: str) -> str:

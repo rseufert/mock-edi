@@ -115,7 +115,7 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
         cls.conn.close()
 
     def _run(self, partner_id, payload):
-        receipt = self.pipeline.receive(payload.encode())
+        receipt = self.pipeline.receive(payload.encode())[0]
         self.assertTrue(receipt.ok, receipt.error)
         rows = self.pipeline.collect(partner_id=partner_id, leave=False)
         self.assertTrue(rows, "nothing was produced for %s" % partner_id)

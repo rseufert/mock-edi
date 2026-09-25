@@ -297,13 +297,17 @@ class Handler(BaseHTTPRequestHandler):
                              % (inbound.receiver, self.config.as2_id))
 
         mic = as2.mic(body, inbound.micalg) if body else ""
-        receipt = self.mock.pipeline.receive(
+        receipts = self.mock.pipeline.receive(
             body, transport="as2", message_id=inbound.message_id, mic=mic)
-        if not receipt.ok:
-            return self._mdn(inbound, body, as2.ERROR, receipt.error)
+        if not any(receipt.ok for receipt in receipts):
+            return self._mdn(inbound, body, as2.ERROR, receipts[0].error)
 
-        explanation = _receipt_text(receipt)
-        disposition = as2.PROCESSED if receipt.accepted else as2.ERROR
+        # One MDN answers the whole payload, so it is only "processed" when
+        # every interchange in it was: a file half of which was refused has
+        # not been processed, whatever the other half did.
+        explanation = _delivery_text(receipts)
+        disposition = (as2.PROCESSED if all(r.accepted for r in receipts)
+                       else as2.ERROR)
         return self._mdn(inbound, body, disposition, explanation)
 
     def _mdn(self, inbound: as2.Inbound, body: bytes, disposition: str,
@@ -356,26 +360,27 @@ class Handler(BaseHTTPRequestHandler):
         return self._json(200, {"recorded": True, "fields": fields})
 
     def _plain_inbound(self, body: bytes, query) -> Tuple[int, int]:
-        receipt = self.mock.pipeline.receive(body, transport="http")
-        if not receipt.ok:
-            return self._json(422, {"accepted": False, "error": receipt.error})
-        report = receipt.report
-        return self._json(200, {
-            "accepted": receipt.accepted,
-            "partner": receipt.partner,
-            "dialect": receipt.dialect,
-            "interchange": receipt.control,
-            "orders": receipt.orders,
-            "transactionSets": [
-                {"code": m.code, "control": m.control, "kind": m.kind,
-                 "accepted": m.accepted, "findings": _findings(m)}
-                for m in (report.messages if report else [])],
-            "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
-                        "dueAt": q.due_at} for q in receipt.queued],
-            "acknowledged": receipt.acknowledged,
-            "changed": receipt.changes,
-            "refusals": receipt.refusals,
+        receipts = self.mock.pipeline.receive(body, transport="http")
+        if len(receipts) == 1 and not receipts[0].ok:
+            return self._json(422, {"accepted": False, "error": receipts[0].error})
+
+        # A payload holding several interchanges answers with the same keys it
+        # always has, summed over the lot, and `interchanges` holds them one by
+        # one. For the usual payload of one that is the same object twice, so
+        # nothing reading this needs to know about the case until it meets it.
+        each = [_interchange_summary(receipt) for receipt in receipts]
+        summary = dict(each[0])
+        summary.update({
+            "accepted": all(item["accepted"] for item in each),
+            "orders": [po for item in each for po in item["orders"]],
+            "transactionSets": [t for item in each for t in item["transactionSets"]],
+            "queued": [q for item in each for q in item["queued"]],
+            "acknowledged": [a for item in each for a in item["acknowledged"]],
+            "changed": [c for item in each for c in item["changed"]],
+            "refusals": [r for item in each for r in item["refusals"]],
+            "interchanges": each,
         })
+        return self._json(200, summary)
 
     # -- the control plane
 
@@ -620,10 +625,13 @@ class Handler(BaseHTTPRequestHandler):
         text = body.decode("utf-8", "replace")
         try:
             dialect = sniff(text)
-            interchange = x12.parse(text) if dialect == "X12" else edifact.parse(text)
+            parts = x12.split(text) if dialect == "X12" else edifact.split(text)
+            interchanges = [x12.parse(part) if dialect == "X12"
+                            else edifact.parse(part) for part in parts]
         except EdiSyntaxError as error:
             return self._json(422, {"parsed": False, "error": str(error)})
-        report = validate.validate(interchange)
+        reports = [validate.validate(item) for item in interchanges]
+        interchange, report = interchanges[0], reports[0]
         from . import ack
         return self._json(200, {
             "parsed": True,
@@ -631,8 +639,15 @@ class Handler(BaseHTTPRequestHandler):
             "sender": interchange.sender,
             "receiver": interchange.receiver,
             "control": interchange.control,
-            "clean": report.clean,
+            "clean": all(item.clean for item in reports),
             "groupCode": report.group_code,
+            # As with the plain endpoint: the keys beside this one describe the
+            # first interchange, and this describes each of them.
+            "interchanges": [
+                {"control": item.control, "sender": item.sender,
+                 "receiver": item.receiver, "clean": each.clean,
+                 "explain": ack.explain(each)}
+                for item, each in zip(interchanges, reports)],
             "messages": [
                 {"code": m.code, "control": m.control, "kind": m.kind,
                  "accepted": m.accepted, "findings": _findings(m)}
@@ -783,6 +798,40 @@ def _findings(message_report) -> List[str]:
             out.append("%s@%d: %s" % (finding.tag, finding.position, finding.note))
     out.extend(note for _code, note in message_report.set_errors)
     return out
+
+
+def _interchange_summary(receipt) -> Dict[str, Any]:
+    """One interchange's outcome, as the plain endpoint reports it."""
+    report = receipt.report
+    summary = {
+        "accepted": receipt.accepted,
+        "partner": receipt.partner,
+        "dialect": receipt.dialect,
+        "interchange": receipt.control,
+        "orders": receipt.orders,
+        "transactionSets": [
+            {"code": m.code, "control": m.control, "kind": m.kind,
+             "accepted": m.accepted, "findings": _findings(m)}
+            for m in (report.messages if report else [])],
+        "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
+                    "dueAt": q.due_at} for q in receipt.queued],
+        "acknowledged": receipt.acknowledged,
+        "changed": receipt.changes,
+        "refusals": receipt.refusals,
+    }
+    if not receipt.ok:
+        # One interchange of several can be refused while the rest are read.
+        summary["error"] = receipt.error
+    return summary
+
+
+def _delivery_text(receipts) -> str:
+    """The prose an MDN carries about a whole payload."""
+    if len(receipts) == 1:
+        return _receipt_text(receipts[0])
+    parts = ["The payload held %d interchanges." % len(receipts)]
+    parts.extend(receipt.error or _receipt_text(receipt) for receipt in receipts)
+    return " ".join(parts)
 
 
 def _receipt_text(receipt) -> str:

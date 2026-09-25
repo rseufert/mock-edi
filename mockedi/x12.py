@@ -22,6 +22,7 @@ import datetime
 from typing import List, Optional, Sequence
 
 from .envelope import (Delimiters, EdiSyntaxError, Group, Interchange, Message,
+                       cut_interchanges,
                        Seg, Value, X12_DEFAULTS, ccyymmdd, hhmm,
                        render_segment, seg, split_elements, split_segments,
                        yymmdd)
@@ -59,6 +60,11 @@ def read_delimiters(payload: str) -> Delimiters:
     repetition = parts[11] if version >= "00501" and parts[11] not in ("", "U") else "^"
     return Delimiters(segment=segment, element=element, component=component,
                       repetition=repetition, release="", decimal=".")
+
+
+def split(payload: str) -> List[str]:
+    """The payload cut into one string per interchange, ISA to IEA."""
+    return cut_interchanges(payload, read_delimiters, "IEA")
 
 
 def parse(payload: str, delimiters: Optional[Delimiters] = None) -> Interchange:

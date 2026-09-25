@@ -244,6 +244,55 @@ def split_segments(body: str, delims: Delimiters) -> List[str]:
     return out
 
 
+def cut_interchanges(payload: str, read_delimiters, trailer_tag: str) -> List[str]:
+    """One string per interchange in a payload that may hold several.
+
+    A file holding more than one interchange is ordinary on a VAN and over
+    SFTP, and not rare over AS2.  Reading only the first is the kind of
+    silence this mock exists not to produce.
+
+    Each interchange is cut at *its own* trailer rather than at the first one
+    found in the text, and its delimiters are read from its own header: two
+    interchanges in one file need not be punctuated alike, and the second is
+    entitled to declare its own.
+    """
+    parts: List[str] = []
+    rest = payload
+    while rest.strip("\r\n\t "):
+        delims = read_delimiters(rest)   # raises if this is not an interchange
+        end = _end_of_interchange(rest, delims, trailer_tag)
+        parts.append(rest[:end])
+        rest = rest[end:]
+    return parts or [payload]
+
+
+def _end_of_interchange(text: str, delims: Delimiters, trailer_tag: str) -> int:
+    """Where the interchange's trailer ends, or the end of the text.
+
+    Walked character by character rather than searched for, because EDIFACT's
+    release character can escape a segment terminator, and because `IEA` and
+    `UNZ` are ordinary text inside an element.
+    """
+    escaped = False
+    start = 0
+    for index, char in enumerate(text):
+        if escaped:
+            escaped = False
+            continue
+        if delims.release and char == delims.release:
+            escaped = True
+            continue
+        if char != delims.segment:
+            continue
+        segment = text[start:index].strip("\r\n\t ")
+        start = index + 1
+        if segment.split(delims.element, 1)[0].strip() == trailer_tag:
+            return start
+    # No trailer at all: hand the whole of it over, and let the parser and the
+    # envelope check report the truncation, which they already do.
+    return len(text)
+
+
 def split_elements(segment: str, delims: Delimiters) -> List[Value]:
     """Split a segment into elements, and composite elements into components."""
     fields = _split(segment, delims.element, delims.release)

@@ -42,6 +42,25 @@ says so where it does.
 
 ### Fixed
 
+- **A payload holding several interchanges was truncated to the first**
+  ([#52]). `x12.parse` stopped at the first `IEA` and `edifact.parse` at the
+  first `UNZ`, and everything after it was dropped without a word: one
+  interchange stored, one 997 back, one order created, and no sign that the
+  file had held two. Files with several interchanges in them are ordinary on
+  a VAN and over SFTP, so a test could pass while half its input vanished.
+
+  Every interchange in a payload is now read. Each is its own envelope - its
+  own control number, its own acknowledgment, its own verdict - so one being
+  refused leaves the rest alone, and each may declare its own delimiters,
+  because a VAN concatenates what its senders gave it. The summary keeps the
+  shape it has for a single interchange and gains an `interchanges` list
+  describing them one by one; `/_mock/validate` does the same. Over AS2 one
+  MDN answers the whole file and says *processed* only when every interchange
+  in it was, and a dropped file is filed on the same terms.
+
+  `Pipeline.receive()` returns a list of receipts rather than one, which
+  matters to anyone driving the pipeline in process rather than over HTTP.
+
 - **An X12 envelope carrying no work was answered with silence** ([#55]). A
   functional group with no transaction set in it got no 997, because the
   acknowledgment was built from the messages that arrived rather than from
@@ -440,6 +459,7 @@ documents a real one sends.
 [#17]: https://github.com/rseufert/mock-edi/issues/17
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#42]: https://github.com/rseufert/mock-edi/issues/42
+[#52]: https://github.com/rseufert/mock-edi/issues/52
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
