@@ -30,6 +30,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Tuple
 
+from . import db
+
 AS2_VERSION = "1.2"
 
 # Content types that carry EDI, and the dialect each implies when present.
@@ -167,7 +169,10 @@ def build_mdn(inbound: Inbound, payload: bytes, receiver: str,
     and the text part is the only place the actual reason can go - so it is
     the first thing anyone reads when an interchange is rejected.
     """
-    when = moment or datetime.datetime.now()
+    # Aware, so that the RFC 5322 `Date` below carries a zone. A naive value
+    # is formatted as whatever strftime is given, which is a date a strict
+    # client cannot place.
+    when = moment or db.utcnow()
     boundary = "----=_MDN_%s" % uuid.uuid4().hex[:16]
     mdn_id = message_id(receiver)
     algorithm = inbound.micalg
@@ -235,7 +240,7 @@ def outbound_headers(sender: str, receiver: str, subject: str, dialect: str,
                      notify_to: str = "",
                      moment: Optional[datetime.datetime] = None) -> Dict[str, str]:
     """Headers for a document the mock posts to a partner's AS2 URL."""
-    when = moment or datetime.datetime.now()
+    when = moment or db.utcnow()
     headers = {
         "Content-Type": "application/edi-x12" if dialect == "X12"
                         else "application/edifact",

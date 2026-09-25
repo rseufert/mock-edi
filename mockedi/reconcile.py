@@ -317,10 +317,10 @@ def unacknowledged(conn: sqlite3.Connection, older_than: float = 0.0,
         clauses.append("partner = ?")
         params.append(partner)
     if older_than:
-        cutoff = (datetime.datetime.now()
+        cutoff = (db.utcnow()
                   - datetime.timedelta(seconds=older_than))
         clauses.append("at <= ?")
-        params.append(cutoff.replace(microsecond=0).isoformat())
+        params.append(db.stamp(cutoff))
     params.append(limit)
     return db.rows(conn, "SELECT id, partner, dialect, code, kind, control,"
                          " group_control, reference, at FROM transaction_set"

@@ -113,7 +113,7 @@ class Mock:
         self.lock = threading.RLock()
         self.courier.lock = self.lock
         self.dropbox.lock = self.lock
-        self.started = datetime.datetime.now()
+        self.started = db.utcnow()
         self.random = random.Random(config.seed_value)
 
     def _released(self, outbound_ids) -> None:
@@ -478,7 +478,7 @@ class Handler(BaseHTTPRequestHandler):
         if head == "health":
             return self._json(200, {
                 "status": "ok", "as2Id": self.config.as2_id,
-                "started": self.mock.started.isoformat(),
+                "started": db.stamp(self.mock.started),
                 "partners": _count(conn, "partner"),
                 "queued": _count(conn, "outbound", "status = 'ready'"),
             })
