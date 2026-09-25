@@ -110,8 +110,14 @@ def main():
 
     heading("Now make the partner reject a line, and order again")
     call("PATCH", "/_mock/partners/ACME", {"behaviour": "reject-line"})
-    call("POST", "/edi", ORDER.replace("4500000701", "4500000702"),
-         {"Content-Type": "application/edi-x12"})
+    # A second order is a second interchange, and carries its own control
+    # number: the mock refuses a replay of one it has already taken in, the
+    # way a real partner does. 301 appears in ISA13, GS06, GE02 and IEA02.
+    again = (ORDER.replace("4500000701", "4500000702")
+                  .replace("000000301", "000000303")
+                  .replace("*1030*301*", "*1030*303*")
+                  .replace("GE*1*301~", "GE*1*303~"))
+    call("POST", "/edi", again, {"Content-Type": "application/edi-x12"})
     order = call("GET", "/_mock/orders/4500000702")
     for line in order["lines"]:
         print("  line %s %-12s %s  %s"
