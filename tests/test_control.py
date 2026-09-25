@@ -365,6 +365,14 @@ class Authentication(MockServerCase):
         self.assertEqual(status, 401)
         self.assertIn("Basic", headers["WWW-Authenticate"])
 
+    def test_wrong_ones_are_challenged_too(self):
+        import base64
+        token = base64.b64encode(b"edi:guess").decode()
+        status, headers, _body = self.get(
+            "/_mock/health", headers={"Authorization": "Basic " + token}, raw=True)
+        self.assertEqual(status, 401)
+        self.assertIn("Basic", headers["WWW-Authenticate"])
+
     def test_with_them_it_works(self):
         import base64
         token = base64.b64encode(b"edi:secret").decode()

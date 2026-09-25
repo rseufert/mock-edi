@@ -356,18 +356,38 @@ class NothingInThePickupDirectoryIsOverwritten(DirectoryCase):
             self.assertIn("PO-BEFORE", handle.read())
 
     def test_the_collision_is_reported(self):
-        # A reset does not clear the dropbox's memory (#32), so look only at
-        # what this test added.
-        _status, _headers, state = self.get("/_mock/drop")
-        already = len(state["renamed"])
+        # The reset in the middle clears what came before it (#32), so this
+        # is exactly the second order's collisions.
         first = self.send_reset_send()
         _status, _headers, state = self.get("/_mock/drop")
-        renamed = state["renamed"][already:]
+        renamed = state["renamed"]
         self.assertEqual(sorted(r["name"] for r in renamed), first)
         for row in renamed:
             stem = row["name"][:-len(".edi")]
             self.assertEqual(row["writtenAs"], stem + "-1.edi")
             self.assertIn(row["writtenAs"], state["written"])
+
+
+class AResetForgetsWhatItDid(DirectoryCase):
+    """/_mock/drop after a reset describes only what happened since (#32)."""
+
+    def test_written_scanned_and_last_scan_are_cleared(self):
+        self.drop_file("order.edi", x12_order("PO-BEFORE-RESET"))
+        self.scan()
+        _s, _h, state = self.get("/_mock/drop")
+        self.assertTrue(state["written"])
+        self.assertTrue(state["lastScan"])
+        self.post("/_mock/reset")
+        _s, _h, state = self.get("/_mock/drop")
+        self.assertEqual(state["written"], [])
+        self.assertEqual(state["lastScan"], [])
+        self.assertEqual(state["scans"], 0)
+
+    def test_the_files_themselves_are_left_alone(self):
+        self.send(x12_order("PO-KEPT"))
+        before = self.pickup_files()
+        self.post("/_mock/reset")
+        self.assertEqual(self.pickup_files(), before)
 
 
 class WithoutADropDirectory(MockServerCase):

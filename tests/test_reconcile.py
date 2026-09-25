@@ -12,8 +12,8 @@ from mockedi import edifact, x12
 
 from mockedi.envelope import seg
 
-from support import (ACME, EURODIS, MockServerCase, acknowledge, edifact_order,
-                     parse, x12_order)
+from support import (ACME, EURODIS, MockServerCase, _next_control, acknowledge,
+                     edifact_order, parse, x12_order)
 
 
 class AcknowledgingAnX12Document(MockServerCase):
@@ -161,9 +161,12 @@ class AcknowledgingAWholeGroupAtOnce(MockServerCase):
         group = self.documents[code].groups[0]
         body = [seg("AK1", functional_id or group.functional_id, group.control),
                 seg("AK9", verdict, "1", "1", "1" if verdict == "A" else "0")]
+        # A control number from the suite's own counter: a fixed one is
+        # refused as a replay whenever the counter happens to reach it first.
+        control = _next_control(9)
         return self.send(x12.render(x12.wrap(
             [x12.message("997", "0001", body)], ACME, "MOCKEDI",
-            "000000501", "501", "FA")))
+            control, str(int(control)), "FA")))
 
     def status(self, code):
         _status, _headers, rows = self.get(

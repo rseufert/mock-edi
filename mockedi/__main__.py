@@ -95,6 +95,15 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+def config_from_args(args: argparse.Namespace) -> Config:
+    """The Config a parsed command line describes."""
+    values = dict(vars(args))
+    # argparse leaves an unset path as None; Config wants a string.
+    values["drop_dir"] = values.get("drop_dir") or ""
+    values["pickup_dir"] = values.get("pickup_dir") or ""
+    return Config(**values)
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
     # Line-buffer the output: piped or run in a container, a block-buffered
@@ -104,11 +113,7 @@ def main(argv=None) -> int:
     except (AttributeError, ValueError):  # pragma: no cover - odd stdout
         pass
 
-    values = vars(args)
-    # argparse leaves an unset path as None; Config wants a string.
-    values["drop_dir"] = values.get("drop_dir") or ""
-    values["pickup_dir"] = values.get("pickup_dir") or ""
-    config = Config(**values)
+    config = config_from_args(args)
     try:
         httpd = make_server(config)
     except OSError as error:

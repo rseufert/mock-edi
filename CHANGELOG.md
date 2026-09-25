@@ -91,6 +91,14 @@ says so where it does.
 
 ### Fixed
 
+- **A reset left the courier's and the dropbox's memory behind** ([#32]).
+  `/_mock/reset` cleared the tables but not the in-process lists beside them,
+  so `GET /_mock/state` went on reporting `courierFailures` from before it and
+  `GET /_mock/drop` listed files written for orders that no longer existed -
+  and a test that reset between cases and asserted no delivery failures
+  could fail on the previous case's. Both are now cleared with the tables.
+  The files in the drop and pickup directories are left where they are.
+
 - **A pickup file was overwritten after a reset** ([#27]). Outbound files are
   named `<partner>-<code>-<control>.edi`, a reset starts the control numbers
   again, and the rename that finished each write replaced whatever had that
@@ -675,6 +683,8 @@ documents a real one sends.
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
+[#32]: https://github.com/rseufert/mock-edi/issues/32
+
 [#47]: https://github.com/rseufert/mock-edi/issues/47
 
 [#31]: https://github.com/rseufert/mock-edi/issues/31
