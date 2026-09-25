@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mock-edi"
-version = "0.2.0"
+version = "0.2.1"
 description = "A mock EDI trading partner: X12 and EDIFACT over AS2, with the whole order-to-cash choreography, over SQLite, with zero dependencies."
 readme = "README.md"
 requires-python = ">=3.8"

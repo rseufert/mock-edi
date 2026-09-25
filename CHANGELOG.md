@@ -8,6 +8,13 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.2.1] - 2026-09-25
+
+No change to the package itself: the PyPI Homepage link now points at the
+projects page that shows mock-edi, mock-sap and the worked examples together.
+
 ### Changed
 
 - The package's **Homepage** link on PyPI now points to
@@ -193,6 +200,7 @@ documents a real one sends.
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rseufert/mock-edi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rseufert/mock-edi/releases/tag/v0.1.0
