@@ -600,6 +600,9 @@ SN1 = Segment("SN1", "Item Detail - Shipment", (
     _e("646", "Quantity Shipped to Date", "R", 1, 9),
     _e("330", "Quantity Ordered", "R", 1, 15),
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
+    # SN107 comes before the status: a line status in SN107 is one position
+    # early, and a translator reads it as a container code.
+    _e("728", "Returnable Container Load Make-Up Code", "ID", 1, 10),
     _e("668", "Line Item Status Code", "ID", 2, 2, OPTIONAL, LINE_STATUS_CODES),
 ), "How many of the item above it are in this shipment.")
 
