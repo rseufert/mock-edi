@@ -172,6 +172,10 @@ class Interchange:
     ack_requested: bool = False
     delimiters: Delimiters = X12_DEFAULTS
     groups: List[Group] = field(default_factory=list)
+    # Segments that sit between ISA and the first GS, belonging to the
+    # interchange rather than to any group. A TA1 is the one that matters: it
+    # is a whole interchange's content, with no functional group anywhere.
+    preamble: List[Seg] = field(default_factory=list)
     # ISA/IEA or UNB/UNZ as they arrived. Only a parsed interchange has them;
     # one built to be written leaves them empty and the writer derives both.
     header: Optional[Seg] = None

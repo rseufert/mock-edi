@@ -42,6 +42,27 @@ says so where it does.
 
 ### Fixed
 
+- **An X12 envelope carrying no work was answered with silence** ([#55]). A
+  functional group with no transaction set in it got no 997, because the
+  acknowledgment was built from the messages that arrived rather than from
+  the groups that did; an interchange with no group at all got nothing
+  either. Worst of the three, an empty group *beside* a good one left the
+  interchange accepted and one group unacknowledged, with nothing anywhere
+  saying so - a sender cannot tell that from a group that never arrived.
+
+  Now every group in the envelope gets a 997 of its own, an empty one
+  carrying `AK9*R*0*0*0`; and an interchange with no functional group is
+  refused by a `TA1` with note code 024, *Invalid Interchange Content*. A
+  transaction set that arrived outside any `GS` is refused the same way
+  rather than answered with `AK1*??*0`, which the mock's own dictionary
+  rejected. **This changes behaviour:** a transaction set sent outside a
+  functional group used to be processed, and is now refused.
+
+  A `TA1` is the one interchange that holds no group by design, so the
+  parser now keeps the segments between `ISA` and the first `GS` instead of
+  discarding them, and an interchange whose whole content is a `TA1` is read
+  as complete rather than empty.
+
 - The README quoted a test count that had been wrong since 0.2.0 ([#17]) -
   228, against a suite of 454. `tools/check_docs.py` now asks the loader how
   many tests there are and fails when the README disagrees, so the number
@@ -412,6 +433,7 @@ documents a real one sends.
 [#17]: https://github.com/rseufert/mock-edi/issues/17
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#42]: https://github.com/rseufert/mock-edi/issues/42
+[#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
 [#35]: https://github.com/rseufert/mock-edi/issues/35
