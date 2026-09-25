@@ -50,7 +50,8 @@ class TheCommandLine(unittest.TestCase):
             "--drop-interval-ms", "5", "--drop-settle-ms", "6",
             "--auth", "u:p", "--seed", "7", "--latency-ms", "8",
             "--error-rate", "0.5", "--no-request-log", "-q",
-            "--keep-requests", "10", "--retention-days", "1.5")
+            "--keep-requests", "10", "--retention-days", "1.5",
+            "--max-body", "1024", "--request-timeout", "2.5")
         self.assertEqual(config, Config(
             host="0.0.0.0", port=9, db_path="x.db",
             as2_id="US", name="Us Ltd", qualifier="01",
@@ -61,7 +62,8 @@ class TheCommandLine(unittest.TestCase):
             drop_interval_ms=5, drop_settle_ms=6,
             basic_auth="u:p", seed_value=7, latency_ms=8,
             error_rate=0.5, log_requests=False, quiet=True,
-            keep_requests=10, retention_days=1.5))
+            keep_requests=10, retention_days=1.5,
+            max_body_bytes=1024, request_timeout=2.5))
 
 
 class AddressedToSomeoneElse(MockServerCase):
