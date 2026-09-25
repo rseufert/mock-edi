@@ -32,6 +32,29 @@ from . import as2, db
 DEFAULT_TIMEOUT = 10.0
 
 
+def allowlist(text: str) -> frozenset:
+    """The hosts `--deliver-to` names, lower-cased; empty allows any host."""
+    return frozenset(host.strip().lower() for host in (text or "").split(",")
+                     if host.strip())
+
+
+def refusal(url: str, allowed: frozenset) -> str:
+    """Why the courier may not POST to `url`, or "" if it may.
+
+    The courier posts wherever a partner's `as2_url` or a sender's
+    `Receipt-Delivery-Option` points, and either can be set by someone who
+    only has to reach the mock. On a shared network that would let them aim
+    stored payloads at an internal address, so `--deliver-to` narrows it.
+    """
+    if not allowed:
+        return ""
+    host = (urllib.parse.urlsplit(url).hostname or "").lower()
+    if host in allowed:
+        return ""
+    return ("%s is not a host this mock may deliver to; --deliver-to allows %s"
+            % (host or repr(url), ", ".join(sorted(allowed))))
+
+
 class Courier:
     """Delivers released documents and asynchronous MDNs, in the background."""
 
@@ -52,6 +75,7 @@ class Courier:
         self._thread: Optional[threading.Thread] = None
         self._stop = threading.Event()
         self.failures: List[str] = []
+        self.allowed = allowlist(getattr(self.config, "deliver_to", ""))
 
     def forget(self) -> None:
         """Drop what the courier remembers of past deliveries, for a reset."""
@@ -136,6 +160,11 @@ class Courier:
                              (row["partner"],))
             if partner is None or not partner["as2_url"]:
                 return False   # a mailbox partner: leave it to be collected
+            refused = refusal(partner["as2_url"], self.allowed)
+            if refused:
+                _finish(conn, outbound_id, "failed", partner["as2_url"], refused)
+                self.failures.append("document %d: %s" % (outbound_id, refused))
+                return False
             body, _charset = self.pipeline.wire(row)
 
         headers = as2.outbound_headers(
@@ -172,6 +201,13 @@ class Courier:
         with self.lock:
             row = db.one(conn, "SELECT * FROM mdn WHERE id = ?", (mdn_id,))
             if row is None or row["status"] != "pending" or not row["url"]:
+                return False
+            refused = refusal(row["url"], self.allowed)
+            if refused:
+                conn.execute("UPDATE mdn SET status = 'failed' WHERE id = ?",
+                             (mdn_id,))
+                conn.commit()
+                self.failures.append("mdn %d: %s" % (mdn_id, refused))
                 return False
         headers = _mdn_headers(row, self.config.as2_id)
         try:

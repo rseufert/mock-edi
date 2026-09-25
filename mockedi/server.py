@@ -17,6 +17,7 @@ demand is a support ticket and a fortnight.
 from __future__ import annotations
 
 import datetime
+import hmac
 import json
 import math
 import random
@@ -88,6 +89,8 @@ class Config:
 
     # Testing knobs.
     basic_auth: Optional[str] = None
+    # Hosts the courier may POST to, comma-separated; empty allows any.
+    deliver_to: str = ""
     seed_value: int = 42
     latency_ms: int = 0
     error_rate: float = 0.0
@@ -403,6 +406,15 @@ class Handler(BaseHTTPRequestHandler):
                              "not one it will pretend to. Ask for "
                              "signed-receipt-protocol=optional, or put a real "
                              "AS2 gateway in front of it.")
+        if inbound.asynchronous and inbound.wants_mdn and self.config.mdn:
+            refused = delivery.refusal(inbound.async_url, self.mock.courier.allowed)
+            if refused:
+                # Answered here and now, since the receipt cannot go where it
+                # was asked to; and, like any refused receipt, the interchange
+                # is not read.
+                return self._mdn(inbound, body, as2.FAILED,
+                                 "The asynchronous MDN was refused: %s." % refused,
+                                 synchronous=True)
 
         mic = as2.mic(body, inbound.micalg) if body else ""
         receipts = self.mock.pipeline.receive(
@@ -420,8 +432,12 @@ class Handler(BaseHTTPRequestHandler):
         return self._mdn(inbound, body, disposition, explanation)
 
     def _mdn(self, inbound: as2.Inbound, body: bytes, disposition: str,
-             explanation: str) -> Tuple[int, int]:
-        """Answer an AS2 POST: an MDN now, an MDN later, or neither."""
+             explanation: str, synchronous: bool = False) -> Tuple[int, int]:
+        """Answer an AS2 POST: an MDN now, an MDN later, or neither.
+
+        `synchronous` answers on this response even when the sender asked for
+        its receipt later - for a receipt that cannot go where it was asked.
+        """
         if not self.config.mdn or not inbound.wants_mdn:
             return self._text(200, explanation)
 
@@ -430,7 +446,7 @@ class Handler(BaseHTTPRequestHandler):
             user_agent="mock-edi", moment=self.mock.pipeline.now())
         partner = inbound.sender or "unknown"
 
-        if inbound.asynchronous:
+        if inbound.asynchronous and not synchronous:
             cursor = self.mock.conn.execute(
                 "INSERT INTO mdn (partner, direction, original_id, message_id,"
                 " disposition, mic, mode, url, status, payload, headers, at)"
@@ -746,6 +762,9 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = payload.pop("id", "")
                 if not identifier:
                     return self._json(400, {"error": "a partner needs an id"})
+                refused = self._refused_url(payload)
+                if refused:
+                    return self._json(400, {"error": refused})
                 try:
                     row = partners.create(conn, identifier, payload.pop("name", ""),
                                           **payload)
@@ -761,8 +780,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": "no partner %r" % identifier})
             return self._json(200, row)
         if method in ("PATCH", "PUT"):
+            payload = _json_body(body)
+            refused = self._refused_url(payload)
+            if refused:
+                return self._json(400, {"error": refused})
             try:
-                row = partners.update(conn, identifier, **_json_body(body))
+                row = partners.update(conn, identifier, **payload)
             except partners.UnknownPartner:
                 return self._json(404, {"error": "no partner %r" % identifier})
             except ValueError as error:
@@ -922,6 +945,14 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- authentication
 
+    def _refused_url(self, payload: Dict[str, Any]) -> str:
+        """Refuse an `as2_url` the courier would refuse to post to."""
+        url = payload.get("as2_url")
+        if not url or not isinstance(url, str):
+            return ""
+        refused = delivery.refusal(url, self.mock.courier.allowed)
+        return "as2_url refused: %s" % refused if refused else ""
+
     def _authorised(self) -> bool:
         if not self.config.basic_auth:
             return True
@@ -933,7 +964,10 @@ class Handler(BaseHTTPRequestHandler):
             decoded = base64.b64decode(header[6:]).decode("utf-8")
         except Exception:
             return False
-        return decoded == self.config.basic_auth
+        # Constant time, so the comparison says nothing about how much of a
+        # guess was right.
+        return hmac.compare_digest(decoded.encode("utf-8"),
+                                   self.config.basic_auth.encode("utf-8"))
 
     def _challenge(self) -> Tuple[int, int]:
         self.send_response(401)
