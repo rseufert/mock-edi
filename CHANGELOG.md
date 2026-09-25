@@ -15,6 +15,21 @@ says so where it does.
   sense on its own line, and these parts are joined inline. Cosmetic, but it
   is the text a person reads when a document they sent was refused.
 
+- The CONTRL named the partner's directory in its `UNH` - `CONTRL:D:96A:UN`
+  for a D.96A partner - where a service message names the syntax version:
+  `CONTRL:D:3:UN` ([#50]). There is no CONTRL in D.96A, so a translator that
+  matches acknowledgments on S009 would not have recognised the mock's, and a
+  strict one would have rejected it. Business messages still use the
+  partner's directory.
+
+- The validator now compares an EDIFACT `UNH`'s message version and release
+  with the directory its definition is declared in, and reports a mismatch as
+  an error on `UNH` rather than reading the message against definitions it
+  does not claim - which is how the wrong CONTRL passed the mock's own
+  dictionary. An `ORDERS:D:01B:UN` is still accepted, now with that finding.
+  X12 is not checked yet: every 005010 set is read against the 004010
+  dictionary until [#46] makes it version-aware.
+
 ## [0.2.1] - 2026-09-25
 
 No change to the package itself: the PyPI Homepage link now points at the
@@ -204,6 +219,8 @@ documents a real one sends.
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#46]: https://github.com/rseufert/mock-edi/issues/46
+[#50]: https://github.com/rseufert/mock-edi/issues/50
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1

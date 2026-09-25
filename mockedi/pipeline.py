@@ -397,7 +397,12 @@ class Pipeline:
                 moment=moment, test=bool(partner["test"]))
             payload = x12.render(interchange, newline=self.config.pretty)
         else:
-            version = partner["version"] if ":" in partner["version"] else "D:96A:UN"
+            # CONTRL is a service message: its UNH names the syntax
+            # version (D:3:UN), not the directory the partner trades in.
+            if kind == schema.ACKNOWLEDGMENT:
+                version = definition.version
+            else:
+                version = partner["version"] if ":" in partner["version"] else "D:96A:UN"
             message = edifact.message(code, control, body, version)
             interchange = edifact.wrap(
                 [message], self.config.as2_id, partner_id, interchange_control,
