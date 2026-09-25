@@ -8,7 +8,12 @@ says so where it does.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- An acknowledgment note read `errors;   element 4` - three spaces after the
+  separator. The element detail carried a two-space indent that only makes
+  sense on its own line, and these parts are joined inline. Cosmetic, but it
+  is the text a person reads when a document they sent was refused.
 
 ## [0.2.1] - 2026-09-25
 
