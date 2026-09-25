@@ -140,6 +140,49 @@ class Delays(MockServerCase):
         self.assertEqual([r["kind"] for r in rows], ["invoice"])
 
 
+class TheClockMoves(MockServerCase):
+    """`advance?seconds=N` moves the mock's clock, and it stays moved (#47)."""
+    config_kwargs = {"invoice_delay_ms": 90000}     # ninety seconds away
+
+    def test_two_small_advances_add_up(self):
+        self.send(x12_order("PO-CLOCK"))
+        _s, _h, first = self.post("/_mock/advance?seconds=60")
+        self.assertEqual(first["count"], 0)
+        _s, _h, second = self.post("/_mock/advance?seconds=60")
+        self.assertEqual(second["count"], 1)
+        self.assertEqual([r["code"] for r in self.mailbox(ACME, "invoice")], ["810"])
+
+    def test_it_says_where_the_clock_is(self):
+        self.post("/_mock/advance?seconds=60")
+        _s, _h, data = self.post("/_mock/advance?seconds=30")
+        self.assertEqual(data["advancedSeconds"], 90.0)
+        self.assertIn("T", data["clock"])
+
+    def test_documents_are_dated_by_the_moved_clock(self):
+        import datetime
+        self.post("/_mock/advance?seconds=%d" % (3 * 86400))
+        before = datetime.date.today()
+        self.send(x12_order("PO-LATER-DATE"))
+        after = datetime.date.today()
+        self.post("/_mock/advance?seconds=90")
+        invoice = self.document(ACME, "invoice").groups[0].messages[0]
+        dated = invoice.find("BIG").get(1)
+        expected = {(day + datetime.timedelta(days=3)).strftime("%Y%m%d")
+                    for day in (before, after)}
+        self.assertIn(dated, expected)
+
+    def test_a_reset_puts_the_clock_back(self):
+        self.post("/_mock/advance?seconds=3600")
+        self.post("/_mock/reset")
+        _s, _h, data = self.post("/_mock/advance?seconds=0")
+        self.assertEqual(data["advancedSeconds"], 0.0)
+
+    def test_it_does_not_go_backwards(self):
+        status, _h, data = self.post("/_mock/advance?seconds=-60")
+        self.assertEqual(status, 400, data)
+        self.assertIn("negative", data["error"])
+
+
 class SendOnDemand(MockServerCase):
     def setUp(self):
         super().setUp()

@@ -95,6 +95,9 @@ of zero, everything is released before the POST returns and a test reads four
 documents back on the next line. With real delays configured,
 `POST /_mock/advance?all` releases them without anyone waiting — because a
 test that sleeps is slow and flaky, and one that advances a clock is neither.
+`?seconds=N` moves an offset on `Pipeline.now()`, which every due time and
+document date reads, so the clock it advances is the mock's own and stays
+moved until a reset.
 
 Nothing runs on a timer. That is deliberate.
 
