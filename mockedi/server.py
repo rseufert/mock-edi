@@ -189,6 +189,11 @@ class Mock:
             self.conn.commit()
             db.seed(self.conn, self.config.seed_value, self.config.as2_id)
             self.pipeline.offset = datetime.timedelta(0)
+            # What the courier and the dropbox hold in memory describes the
+            # data just thrown away, so /_mock/state and /_mock/drop would
+            # otherwise report failures and files for orders that are gone.
+            self.courier.forget()
+            self.dropbox.forget()
 
 
 # ---------------------------------------------------------------------------

@@ -338,6 +338,19 @@ class DropBox:
             return None
         return final
 
+    def forget(self) -> None:
+        """Drop what the dropbox remembers of past scans and writes, for a reset.
+
+        The directories themselves are left alone: what is on disk is the
+        user's, and a file written before the reset may not be collected yet.
+        """
+        with self.lock:
+            self.last_scan = []
+            self.scans = 0
+            self.written.clear()
+            self.refused.clear()
+            self.renamed.clear()
+
     # -- reporting
 
     def state(self) -> Dict[str, Any]:

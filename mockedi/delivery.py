@@ -53,6 +53,11 @@ class Courier:
         self._stop = threading.Event()
         self.failures: List[str] = []
 
+    def forget(self) -> None:
+        """Drop what the courier remembers of past deliveries, for a reset."""
+        with self.lock:
+            self.failures.clear()
+
     # -- lifecycle
 
     def start(self) -> None:
