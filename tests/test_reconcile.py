@@ -50,6 +50,10 @@ class AcknowledgingAnX12Document(MockServerCase):
         self.assertIn("BIG at segment 2", row["ack_note"])
         self.assertIn("invalid code value", row["ack_note"].lower())
         self.assertIn("BADCODE", row["ack_note"])
+        # The parts are joined inline, so the separator appears exactly once
+        # between them - a note a person reads should not have a gap in it.
+        self.assertNotIn(";  ", row["ack_note"])
+        self.assertIn("; element", row["ack_note"])
 
     def test_accepted_with_errors_is_neither_accepted_nor_rejected(self):
         self.ack("856", "E", errors=[("HL", 5, "8", 3, "5", "toolong")])

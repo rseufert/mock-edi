@@ -102,7 +102,10 @@ def _read_997(message: Message) -> List[Matched]:
                          % (item.get(1), item.get(2) or "?",
                             _segment_error(item.get(4))))
         elif item.tag == "AK4" and current is not None:
-            notes.append("  element %s: %s%s"
+            # No leading indent: these are joined inline with "; ", so the
+            # two spaces that would indent a nested line just doubled up the
+            # separator in the note a user reads.
+            notes.append("element %s: %s%s"
                          % (item.get(1), _element_error(item.get(3)),
                             " (%r)" % item.get(4) if item.has(4) else ""))
         elif item.tag == "AK5" and current is not None:
@@ -142,7 +145,7 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
             notes.append("segment %s: %s"
                          % (item.get(1), _edifact_error(item.get(2))))
         elif item.tag == "UCD" and current is not None:
-            notes.append("  element %s: %s"
+            notes.append("element %s: %s"
                          % (item.comp(2, 1), _edifact_error(item.get(1))))
     if current is not None:
         current.note = "; ".join(notes)
