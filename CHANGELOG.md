@@ -8,6 +8,14 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.1] - 2026-09-26
+
+One fix, for a race a test can see: a request was logged after its answer
+had gone out, so `/_mock/requests` asked at the wrong moment did not yet have
+it. It is logged first now.
+
 ### Fixed
 
 - A request was logged after its answer had been sent, so a client that
@@ -855,7 +863,8 @@ documents a real one sends.
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rseufert/mock-edi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rseufert/mock-edi/compare/v0.1.0...v0.2.0
