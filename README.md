@@ -229,6 +229,36 @@ GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
 them.
 
+## One order, one conversation
+
+When a test fails, the question is always the same: what actually happened to
+this order?
+
+```bash
+curl -s http://127.0.0.1:8080/_mock/orders/4500000042/timeline
+```
+
+```
+received 850 0001 (order)
+order recorded: 2 line(s), 1416.00 USD
+despatch promised, due 2026-09-26T21:14:19Z
+invoice promised, due 2026-09-26T22:14:19Z (not done yet)
+packed SHP8000002: 2 line(s), 6 carton(s), United Parcel Service
+sent 997 0001 (acknowledgment); delivery delivered
+sent 855 0002 (response); delivery delivered after 2 attempts
+the partner's receipt accepted our 855 0002
+```
+
+Both directions, in order, with findings inline, whether each document was
+delivered and how many attempts it took, and what the seller promised but has
+not done yet. Every event carries the structured form beside that prose, so a
+test can assert on it. `?raw` adds the payloads, which makes one call enough
+to attach to a bug report.
+
+Nothing new is recorded — this is the same rows `/_mock/documents`,
+`/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
+happened in.
+
 ## Partner behaviours
 
 Four partners are seeded. Change any of them at runtime:
@@ -687,6 +717,7 @@ mockedi/charsets.py      which character set a document is in, bytes and back
 mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
+mockedi/timeline.py      one order's whole conversation, in order
 mockedi/transactions.py  business documents in, business documents out
 mockedi/documents.py     what the seller decides, and the shipment and invoice
 mockedi/partners.py      who we trade with, and how each one misbehaves
