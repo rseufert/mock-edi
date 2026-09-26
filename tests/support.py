@@ -10,25 +10,19 @@ construction in the way.
 """
 from __future__ import annotations
 
-import datetime
 import faulthandler
-import json
 import os
 import sys
 import itertools
 import shutil
 import tempfile
-import threading
-import time
 import unittest
-import urllib.error
-import urllib.request
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from mockedi import edifact, x12                      # noqa: E402
 from mockedi.envelope import seg                      # noqa: E402
-from mockedi.server import Config, make_server        # noqa: E402
+from mockedi.testing import Mock, MockError           # noqa: E402
 
 ACME = "ACME"          # X12, accepts everything
 GLOBEX = "GLOBEX"      # X12 005010, short-ships
@@ -51,61 +45,48 @@ if _WATCHDOG:
 
 
 class MockServerCase(unittest.TestCase):
+    """A mock of this suite's own, and unittest's assertions over it.
+
+    The HTTP is `mockedi.testing.Mock`, which is the client the project ships
+    for exactly this. What is left here is the part that is about unittest:
+    the lifecycle, and helpers that fail a test rather than raise.
+    """
     config_kwargs: dict = {}
 
     @classmethod
     def setUpClass(cls):
-        kwargs = dict(host="127.0.0.1", port=0, db_path=":memory:", quiet=True)
-        kwargs.update(cls.config_kwargs)
-        cls.httpd = make_server(Config(**kwargs))
+        cls.mock = Mock.start(timeout=REQUEST_TIMEOUT, **cls.config_kwargs)
+        cls.httpd = cls.mock.server
         cls.port = cls.httpd.server_address[1]
-        cls.base = "http://127.0.0.1:%d" % cls.port
-        cls.thread = threading.Thread(target=cls.httpd.serve_forever, daemon=True)
-        cls.thread.start()
+        cls.base = cls.mock.base
 
     @classmethod
     def tearDownClass(cls):
-        cls.httpd.shutdown()
-        cls.httpd.server_close()
+        cls.mock.close()
 
     def setUp(self):
         # Each test starts from a freshly seeded partner, so that one test
         # changing a behaviour cannot reach the next.
         self.post("/_mock/reset")
 
-    # -- HTTP
+    # -- HTTP, through the shipped client
 
     def request(self, method, path, body=None, headers=None, raw=False):
-        url = self.base + path.replace(" ", "%20")
-        data = body
-        if isinstance(data, (dict, list)):
-            data = json.dumps(data).encode()
-        elif isinstance(data, str):
-            data = data.encode()
-        req = urllib.request.Request(url, data=data, method=method)
-        for key, value in (headers or {}).items():
-            req.add_header(key, value)
-        try:
-            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT) as resp:
-                payload = resp.read()
-                return resp.status, dict(resp.headers), payload if raw else _maybe_json(payload)
-        except urllib.error.HTTPError as err:
-            # Read *and* close: an unclosed HTTPError leaves a temporary file
-            # behind and turns every negative test into a ResourceWarning.
-            with err:
-                payload = err.read()
-            return err.code, dict(err.headers), payload if raw else _maybe_json(payload)
+        return self.mock.request(method, path, body, headers=headers, raw=raw)
 
     def get(self, path, **kw):
-        return self.request("GET", path, **kw)
+        return self.mock.get(path, **kw)
 
     def post(self, path, body=None, **kw):
-        return self.request("POST", path, body, **kw)
+        return self.mock.post(path, body, **kw)
 
     def patch(self, path, body=None, **kw):
-        return self.request("PATCH", path, body, **kw)
+        return self.mock.patch(path, body, **kw)
 
     # -- convenience
+    #
+    # These differ from the client's own by failing the test rather than
+    # raising, which is what makes a failure read as an assertion.
 
     def send(self, payload, headers=None):
         """POST an interchange to the plain endpoint and return the summary."""
@@ -121,13 +102,7 @@ class MockServerCase(unittest.TestCase):
         return data
 
     def mailbox(self, partner="", kind="", leave=True):
-        query = ["leave"] if leave else []
-        if partner:
-            query.append("partner=" + partner)
-        if kind:
-            query.append("kind=" + kind)
-        path = "/_mock/mailbox" + ("?" + "&".join(query) if query else "")
-        status, _headers, data = self.get(path)
+        status, _headers, data = self.get(_mailbox_path(partner, kind, leave))
         self.assertEqual(status, 200, data)
         return data
 
@@ -140,27 +115,25 @@ class MockServerCase(unittest.TestCase):
         return parse(rows[0]["payload"])
 
     def settle(self, timeout=30.0):
-        """Wait until nothing in the outbox is still waiting to be delivered.
-
-        Not a sleep, and not a fixed number of drains: on some platforms a
-        connection to a dead port takes seconds to be refused rather than
-        failing immediately, so the only reliable signal is the state itself.
-        """
-        deadline = time.time() + timeout
-        rows = []
-        self.httpd.mock.courier.drain(timeout)
-        while time.time() < deadline:
-            _status, _headers, rows = self.get("/_mock/outbox")
-            if all(row["status"] != "ready" for row in rows):
-                return rows
-            time.sleep(0.05)
-        self.fail("the outbox still held undelivered documents after %gs: %s"
-                  % (timeout, [(r["code"], r["status"]) for r in rows]))
+        """Wait until nothing that will be delivered is still waiting."""
+        try:
+            return self.mock.settle(timeout)
+        except MockError as error:
+            self.fail(str(error))
 
     def order(self, po_number):
         status, _headers, data = self.get("/_mock/orders/" + po_number)
         self.assertEqual(status, 200, data)
         return data
+
+
+def _mailbox_path(partner="", kind="", leave=True):
+    query = ["leave"] if leave else []
+    if partner:
+        query.append("partner=" + partner)
+    if kind:
+        query.append("kind=" + kind)
+    return "/_mock/mailbox" + ("?" + "&".join(query) if query else "")
 
 
 class FileDatabaseCase(MockServerCase):
@@ -186,36 +159,30 @@ class FileDatabaseCase(MockServerCase):
         self.directory = tempfile.mkdtemp(prefix="mock-edi-db-")
         self.db_path = os.path.join(self.directory, "mock.db")
         self.httpd = None
+        self.mock = None
         self.addCleanup(shutil.rmtree, self.directory, True)
         self.addCleanup(self.stop)
         if self.start_on_setup:
             self.start()
 
     def start(self):
-        kwargs = dict(host="127.0.0.1", port=0, db_path=self.db_path, quiet=True)
-        kwargs.update(self.config_kwargs)
-        self.httpd = make_server(Config(**kwargs))
+        self.mock = Mock.start(timeout=REQUEST_TIMEOUT, db_path=self.db_path,
+                               **self.config_kwargs)
+        self.httpd = self.mock.server
         self.port = self.httpd.server_address[1]
-        self.base = "http://127.0.0.1:%d" % self.port
-        threading.Thread(target=self.httpd.serve_forever, daemon=True).start()
+        self.base = self.mock.base
         return self.httpd
 
     def stop(self):
-        if self.httpd is not None:
-            self.httpd.shutdown()
-            self.httpd.server_close()
-            self.httpd = None
+        if getattr(self, "mock", None) is not None:
+            self.mock.close()
+            self.mock = None
+        self.httpd = None
 
     def restart(self):
         self.stop()
         return self.start()
 
-
-def _maybe_json(payload: bytes):
-    try:
-        return json.loads(payload.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return payload.decode("utf-8", "replace")
 
 
 def parse(payload: str):

@@ -117,6 +117,37 @@ A guided tour of every endpoint, in curl:
 bash examples/demo.sh
 ```
 
+## Driving it from a test
+
+The control plane is plain HTTP and JSON so that any language can drive it.
+From Python, the package ships the client rather than leaving you to write it:
+
+```python
+from mockedi.testing import Mock
+
+with Mock.start(invoice_delay_ms=3600_000) as mock:   # own port, in this process
+    summary = mock.send(order)                        # dialect sniffed from the bytes
+    assert summary["accepted"]
+
+    response = mock.document(partner="ACME", kind="response")
+    assert response.find("ACK").get(1) == "IA"        # no splitting on ~
+
+    assert mock.order("4500000042")["status"] == "confirmed"
+    mock.settle()                                     # nothing left undelivered
+```
+
+`Mock("http://host:9000")` talks to one that is already running, wherever it
+is. `Mock.start(**config)` starts one on a port the OS picks and stops it
+again, and takes the same keywords as the command line.
+
+A call that comes back with an unexpected status raises `MockError` carrying
+what the mock said, because a refusal here names the field, the flag or the
+finding. `mock.get(...)` and friends return the status instead, for a test
+that is *about* the refusal.
+
+Still no dependencies. `tests/support.py` in this repository is written on top
+of it, which is the only test of such a thing that means anything.
+
 And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
 sends SAP purchase orders as 850s and posts the 855s back into SAP, and
 [`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
@@ -718,6 +749,7 @@ mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
 mockedi/timeline.py      one order's whole conversation, in order
+mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out
 mockedi/documents.py     what the seller decides, and the shipment and invoice
 mockedi/partners.py      who we trade with, and how each one misbehaves
