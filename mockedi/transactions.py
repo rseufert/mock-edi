@@ -15,13 +15,29 @@ position it arrived in".
 
 Writers are not forgiving: they emit one profile, documented in the README, so
 that what comes out is stable enough to assert on.
+
+Six documents each way:
+
+| Read                   | Write                   | X12 | EDIFACT |
+| ---------------------- | ----------------------- | --- | ------- |
+| `read_order`           |                         | 850 | ORDERS  |
+| `read_change`          |                         | 860 | ORDCHG  |
+| `read_response`        | `write_response`        | 855 | ORDRSP  |
+| `read_despatch`        | `write_despatch`        | 856 | DESADV  |
+| `read_invoice`         | `write_invoice`         | 810 | INVOIC  |
+| `read_change_response` | `write_change_response` | 865 | ORDRSP  |
+
+The mock is the seller, so it reads the first two and writes the last four.
+The readers on the right-hand rows are the other direction of each: nothing
+here calls them, and a buyer needs every one. They are held to the writers by
+`ReadersInvertTheWriters` and to everybody else by `tests/test_readers.py`.
 """
 from __future__ import annotations
 
 import datetime
 from dataclasses import dataclass, field
 from decimal import Decimal, InvalidOperation
-from typing import Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from . import schema
 from .envelope import Message, Seg, seg, parse_date
@@ -78,6 +94,16 @@ CHANGE_TO_EDIFACT_ACTION = {ADD: "1", DELETE: "2", CHANGE_LINE: "3",
                             NO_CHANGE: "4", PRICE_CHANGE: "3",
                             QUANTITY_DOWN: "3", QUANTITY_UP: "3"}
 
+# The line-level verdict a seller gives, in ACK01's vocabulary (X12 element
+# 668). EDIFACT has no equivalent element: an ORDRSP says the same thing by
+# how much it confirms, so the reader works these out from the quantities -
+# which is `acknowledgment_type` run backwards.
+ACCEPTED = "IA"
+REJECTED = "IR"
+SHORT = "IQ"
+BACKORDERED = "IB"
+RESCHEDULED = "DR"
+
 # BEG01 / BGM 1225 values that mean "cancel the whole thing".
 CANCEL_PURPOSES = ("01", "03")
 # BEG01 values that mean an 850 is restating an order rather than placing one.
@@ -127,6 +153,128 @@ class Order:
 
     @property
     def total(self) -> Decimal:
+        return sum((line.amount for line in self.lines), Decimal("0.00"))
+
+
+
+@dataclass
+class ResponseLine(Line):
+    """One line of a seller's answer: what was ordered, and what was promised."""
+    confirmed: Decimal = Decimal("0")
+    status: str = ACCEPTED
+    scheduled_on: Optional[datetime.date] = None
+    reason: str = ""
+    action: str = ""        # only an 865, or an ORDRSP answering an ORDCHG
+
+    @property
+    def short_by(self) -> Decimal:
+        """How much of this line the seller did not commit to."""
+        return self.quantity - self.confirmed
+
+
+@dataclass
+class Response:
+    """A seller's answer to an order: an 855, or an ORDRSP."""
+    po_number: str = ""
+    seller_order: str = ""
+    verdict: str = ""       # BAK02, or BGM's 4343
+    responded_on: Optional[datetime.date] = None
+    ordered_on: Optional[datetime.date] = None
+    currency: str = ""
+    sequence: str = ""      # the change this answers, for an 865
+    lines: List[ResponseLine] = field(default_factory=list)
+
+    @property
+    def confirmed_total(self) -> Decimal:
+        return sum((line.confirmed * line.price for line in self.lines),
+                   Decimal("0.00"))
+
+    @property
+    def rejected(self) -> List[ResponseLine]:
+        return [line for line in self.lines if line.status == REJECTED]
+
+    @property
+    def short(self) -> List[ResponseLine]:
+        return [line for line in self.lines
+                if line.status != REJECTED and line.short_by > 0]
+
+
+@dataclass
+class DespatchItem:
+    """One item in a consignment."""
+    line: str = ""
+    sku: str = ""
+    upc: str = ""
+    quantity: Decimal = Decimal("0")
+    uom: str = "EA"
+    ordered: Decimal = Decimal("0")
+
+
+@dataclass
+class Despatch:
+    """What a seller says it has shipped: an 856, or a DESADV."""
+    shipment_id: str = ""
+    shipped_on: Optional[datetime.date] = None
+    po_number: str = ""
+    ordered_on: Optional[datetime.date] = None
+    carrier: str = ""
+    scac: str = ""
+    tracking: str = ""
+    bol: str = ""
+    cartons: int = 0
+    weight: Decimal = Decimal("0")
+    items: List[DespatchItem] = field(default_factory=list)
+
+    @property
+    def total_quantity(self) -> Decimal:
+        return sum((item.quantity for item in self.items), Decimal("0"))
+
+
+@dataclass
+class InvoiceLine(Line):
+    """One billed line. `quantity` is what was invoiced, not what was ordered."""
+    amount_stated: Optional[Decimal] = None
+
+    @property
+    def amount(self) -> Decimal:
+        """What the line comes to - as stated, when the sender stated it.
+
+        EDIFACT names the line amount in MOA+203; X12 leaves it to be worked
+        out from the quantity and the price. A reader that always multiplied
+        would hide a supplier whose arithmetic disagrees with its own prices,
+        which is one of the things a three-way match is looking for.
+        """
+        if self.amount_stated is not None:
+            return self.amount_stated
+        return (self.quantity * self.price).quantize(Decimal("0.01"))
+
+
+@dataclass
+class Invoice:
+    """A seller's bill: an 810, or an INVOIC."""
+    invoice_number: str = ""
+    invoiced_on: Optional[datetime.date] = None
+    po_number: str = ""
+    ordered_on: Optional[datetime.date] = None
+    shipment_id: str = ""
+    bol: str = ""
+    seller_order: str = ""
+    currency: str = ""
+    subtotal: Optional[Decimal] = None
+    tax: Decimal = Decimal("0.00")
+    total: Decimal = Decimal("0.00")
+    terms_days: int = 0
+    discount_pct: Decimal = Decimal("0")
+    discount_days: int = 0
+    lines: List[InvoiceLine] = field(default_factory=list)
+
+    @property
+    def line_total(self) -> Decimal:
+        """What the lines add up to, whatever the stated total says.
+
+        These disagreeing is a finding rather than an error: it is the most
+        common thing wrong with a real invoice.
+        """
         return sum((line.amount for line in self.lines), Decimal("0.00"))
 
 
@@ -363,13 +511,6 @@ def _line_edifact(block: Sequence[Seg], fallback: int) -> Line:
 # allows several ways of saying something - and EDIFACT nearly always does -
 # the choice is noted where it is made.
 # ---------------------------------------------------------------------------
-
-ACCEPTED = "IA"
-REJECTED = "IR"
-SHORT = "IQ"
-BACKORDERED = "IB"
-RESCHEDULED = "DR"
-
 
 def _iso(value: str) -> str:
     """An ISO date from the database as CCYYMMDD."""
@@ -869,3 +1010,612 @@ def _edifact_ordrsp_change(us: Party, partner: Dict, order: Dict,
         if item.tag == "LIN" and item.get(1) in actions:
             item.elements[1] = actions[item.get(1)]
     return body
+
+
+# ---------------------------------------------------------------------------
+# Reading the answers
+#
+# The other direction of every writer above.  Nothing in the mock calls these
+# yet - it is the seller, and these read what a seller sends - but a buyer
+# needs them, and they are testable on their own: the strongest test of a
+# reader is that it gets back what the writer beside it was given.
+#
+# Forgiving in the same way `read_order` is.  A supplier's translator will put
+# the item number under a qualifier this module does not list, leave out every
+# optional segment, number its lines from nothing, and state an amount that
+# disagrees with its own price - and a reader that refused any of that would
+# be no use for finding out.
+# ---------------------------------------------------------------------------
+
+def read_response(message: Message, dialect: str) -> Response:
+    """An 855 or an ORDRSP: what the seller committed to."""
+    return (_read_response_x12(message) if dialect == "X12"
+            else _read_response_edifact(message))
+
+
+def read_change_response(message: Message, dialect: str) -> Response:
+    """An 865, or an ORDRSP answering an ORDCHG.
+
+    The same shape as a response, plus which change it answers and what the
+    seller did with each requested action.
+    """
+    return (_read_change_response_x12(message) if dialect == "X12"
+            else _read_response_edifact(message))
+
+
+def read_despatch(message: Message, dialect: str) -> Despatch:
+    """An 856 or a DESADV: what is on its way."""
+    return (_read_despatch_x12(message) if dialect == "X12"
+            else _read_despatch_edifact(message))
+
+
+def read_invoice(message: Message, dialect: str) -> Invoice:
+    """An 810 or an INVOIC: what is being billed."""
+    return (_read_invoice_x12(message) if dialect == "X12"
+            else _read_invoice_edifact(message))
+
+
+# -- X12
+
+def _header_x12(message: Message, trigger: str) -> List[Seg]:
+    """Everything before the first detail segment."""
+    out = []
+    for item in message.body:
+        if item.tag == trigger:
+            break
+        out.append(item)
+    return out
+
+
+def _ack_x12(block: Sequence[Seg], ordered: Decimal, uom: str):
+    """The ACK segment of a PO1 or POC loop, as a verdict and a quantity.
+
+    A rejected line is written with no date and no quantity worth having, so
+    its confirmed quantity is zero however the sender spelled it.
+    """
+    for item in block[1:]:
+        if item.tag != "ACK":
+            continue
+        status = item.get(1) or ACCEPTED
+        if status == REJECTED:
+            return status, Decimal("0"), None
+        scheduled = None
+        # ACK04 is the date qualifier and ACK05 the date; some senders send
+        # the date alone, so a date in either position is read.
+        for position in (5, 4):
+            scheduled = parse_date(item.get(position))
+            if scheduled:
+                break
+        return status, number(item.get(2)), scheduled
+    # No ACK at all: the line is confirmed as ordered, which is what a
+    # sender leaving it out means.
+    return ACCEPTED, ordered, None
+
+
+def _reason_x12(block: Sequence[Seg]) -> str:
+    for item in block[1:]:
+        if item.tag == "REF" and item.get(1) == "ZZ":
+            return item.get(3) or item.get(2)
+    return ""
+
+
+def _description_x12(block: Sequence[Seg]) -> str:
+    for item in block[1:]:
+        if item.tag == "PID" and item.get(5):
+            return item.get(5)
+    return ""
+
+
+def _response_line_x12(block: Sequence[Seg], fallback: int,
+                       ids_from: int) -> ResponseLine:
+    head = block[0]
+    ids = _ids(head, ids_from)
+    quantity_at, uom_at, price_at = ((3, 5, 6) if head.tag == "POC"
+                                     else (2, 3, 4))
+    ordered = number(head.get(quantity_at))
+    uom = head.get(uom_at) or "EA"
+    status, confirmed, scheduled = _ack_x12(block, ordered, uom)
+    line = ResponseLine(
+        number=head.get(1) or str(fallback),
+        sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+        upc=_pick(ids, UPC_QUALIFIERS),
+        description=_description_x12(block),
+        quantity=ordered,
+        uom=uom,
+        price=number(head.get(price_at), "0.00"),
+        confirmed=confirmed,
+        status=status,
+        scheduled_on=scheduled,
+        reason=_reason_x12(block),
+    )
+    if head.tag == "POC":
+        line.action = head.get(2) or CHANGE_LINE
+    return line
+
+
+def _read_response_x12(message: Message) -> Response:
+    response = Response()
+    bak = message.find("BAK")
+    if bak is not None:
+        response.verdict = bak.get(2)
+        response.po_number = bak.get(3)
+        response.ordered_on = parse_date(bak.get(4))
+        response.seller_order = bak.get(8)
+        response.responded_on = parse_date(bak.get(9))
+    _finish_response_x12(message, response, "PO1", 6)
+    return response
+
+
+def _read_change_response_x12(message: Message) -> Response:
+    response = Response()
+    bca = message.find("BCA")
+    if bca is not None:
+        response.verdict = bca.get(2)
+        response.po_number = bca.get(3)
+        response.sequence = bca.get(5)
+        response.responded_on = parse_date(bca.get(6))
+        response.ordered_on = parse_date(bca.get(10))
+    _finish_response_x12(message, response, "POC", 8)
+    return response
+
+
+def _finish_response_x12(message: Message, response: Response, trigger: str,
+                         ids_from: int) -> None:
+    """The parts an 855 and an 865 read the same way."""
+    cur = message.find("CUR")
+    if cur is not None and cur.get(2):
+        response.currency = cur.get(2)
+    header = _header_x12(message, trigger)
+    if not response.seller_order:
+        for item in header:
+            if item.tag == "REF" and item.get(1) == "VN":
+                response.seller_order = item.get(2)
+                break
+    if response.responded_on is None:
+        for item in header:
+            if item.tag == "DTM" and item.get(1) == "137":
+                response.responded_on = parse_date(item.get(2))
+                break
+    detail = message.body[len(header):]
+    for index, block in enumerate(
+            group_by(detail, trigger, stop=("CTT", "SE")), start=1):
+        response.lines.append(_response_line_x12(block, index, ids_from))
+
+
+def _from_implied(value: str) -> Decimal:
+    """The inverse of `implied_decimal`: `12500` is 125.00.
+
+    Reading TDS01 as a plain number is the invoice a hundred times too large
+    that every EDI integration meets once.
+    """
+    return (number(value) / Decimal("100")).quantize(Decimal("0.01"))
+
+
+def _spare_sku(ids: Dict[str, str]) -> str:
+    """Any identifier that is not a UPC, for a qualifier we do not list."""
+    spare = [value for qualifier, value in sorted(ids.items())
+             if qualifier not in UPC_QUALIFIERS]
+    return spare[0] if spare else ""
+
+
+def _read_despatch_x12(message: Message) -> Despatch:
+    despatch = Despatch()
+    bsn = message.find("BSN")
+    if bsn is not None:
+        despatch.shipment_id = bsn.get(2)
+        despatch.shipped_on = parse_date(bsn.get(3))
+
+    # The HL tree, by parent pointer rather than by position: a real 856 puts
+    # pack and tare levels between the order and the item, and a reader that
+    # assumed shipment/order/item in that order would lose the items under
+    # them.
+    nodes = _hl_nodes(message)
+    for node in nodes.values():
+        if node["level"] == "S":
+            _despatch_shipment_x12(node["segments"], despatch)
+        elif node["level"] == "O":
+            _despatch_order_x12(node["segments"], despatch)
+
+    for node in nodes.values():
+        if node["level"] != "I" or not _under(nodes, node, "O"):
+            continue
+        item = _despatch_item_x12(node["segments"])
+        if item is not None:
+            despatch.items.append(item)
+    return despatch
+
+
+def _hl_nodes(message: Message) -> Dict[str, Dict[str, Any]]:
+    """The HL hierarchy: each node's level, parent, and the segments under it."""
+    nodes: Dict[str, Dict[str, Any]] = {}
+    current = None
+    for item in message.body:
+        if item.tag == "HL":
+            current = {"id": item.get(1), "parent": item.get(2),
+                       "level": item.get(3), "segments": []}
+            nodes[item.get(1)] = current
+        elif current is not None:
+            current["segments"].append(item)
+    return nodes
+
+
+def _under(nodes: Dict[str, Dict[str, Any]], node: Dict[str, Any],
+           level: str) -> bool:
+    """Whether any ancestor of this node is at `level`."""
+    seen = set()
+    parent = nodes.get(node["parent"])
+    while parent is not None and parent["id"] not in seen:
+        if parent["level"] == level:
+            return True
+        seen.add(parent["id"])
+        parent = nodes.get(parent["parent"])
+    return False
+
+
+def _despatch_shipment_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
+    for item in segments:
+        if item.tag == "TD1":
+            # TD102 is the lading quantity and TD107 the weight; TD108 is the
+            # unit it is in, which the model does not keep because every
+            # sender the mock has met sends pounds or kilos and says so there.
+            despatch.cartons = int(number(item.get(2)))
+            despatch.weight = number(item.get(7))
+        elif item.tag == "TD5":
+            despatch.scac = item.get(3)
+            despatch.carrier = item.get(5)
+        elif item.tag == "REF" and item.get(1) == "BM":
+            despatch.bol = item.get(2)
+        elif item.tag == "REF" and item.get(1) == "CN":
+            despatch.tracking = item.get(2)
+        elif item.tag == "DTM" and item.get(1) in ("011", "017"):
+            despatch.shipped_on = parse_date(item.get(2)) or despatch.shipped_on
+
+
+def _despatch_order_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
+    for item in segments:
+        if item.tag == "PRF":
+            despatch.po_number = item.get(1) or despatch.po_number
+            despatch.ordered_on = parse_date(item.get(4)) or despatch.ordered_on
+
+
+def _despatch_item_x12(segments: Sequence[Seg]) -> Optional[DespatchItem]:
+    lin = next((item for item in segments if item.tag == "LIN"), None)
+    sn1 = next((item for item in segments if item.tag == "SN1"), None)
+    if lin is None and sn1 is None:
+        return None
+    ids = _ids(lin, 2) if lin is not None else {}
+    item = DespatchItem(
+        line=(lin.get(1) if lin is not None else "") or
+             (sn1.get(1) if sn1 is not None else ""),
+        sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+        upc=_pick(ids, UPC_QUALIFIERS),
+    )
+    if sn1 is not None:
+        item.quantity = number(sn1.get(2))
+        item.uom = sn1.get(3) or "EA"
+        item.ordered = number(sn1.get(5))
+    return item
+
+
+def _read_invoice_x12(message: Message) -> Invoice:
+    invoice = Invoice()
+    big = message.find("BIG")
+    if big is not None:
+        invoice.invoiced_on = parse_date(big.get(1))
+        invoice.invoice_number = big.get(2)
+        invoice.ordered_on = parse_date(big.get(3))
+        invoice.po_number = big.get(4)
+    cur = message.find("CUR")
+    if cur is not None and cur.get(2):
+        invoice.currency = cur.get(2)
+
+    header = _header_x12(message, "IT1")
+    for item in header:
+        if item.tag == "REF" and item.get(1) == "VN":
+            invoice.seller_order = invoice.seller_order or item.get(2)
+        elif item.tag == "REF" and item.get(1) == "BM":
+            invoice.bol = invoice.bol or item.get(2)
+        elif item.tag == "REF" and item.get(1) == "SI":
+            invoice.shipment_id = invoice.shipment_id or item.get(2)
+        elif item.tag == "ITD":
+            invoice.terms_days = int(number(item.get(7)))
+            invoice.discount_pct = number(item.get(3))
+            invoice.discount_days = int(number(item.get(5)))
+
+    detail = message.body[len(header):]
+    for index, block in enumerate(
+            group_by(detail, "IT1", stop=("TDS", "CTT", "SE")), start=1):
+        head = block[0]
+        ids = _ids(head, 6)
+        invoice.lines.append(InvoiceLine(
+            number=head.get(1) or str(index),
+            sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+            upc=_pick(ids, UPC_QUALIFIERS),
+            description=_description_x12(block),
+            quantity=number(head.get(2)),
+            uom=head.get(3) or "EA",
+            price=number(head.get(4), "0.00"),
+        ))
+
+    tds = message.find("TDS")
+    if tds is not None:
+        # TDS carries an integer with two implied decimals. Reading it as a
+        # plain number is the invoice a hundred times too large that every
+        # integration meets once.
+        invoice.total = _from_implied(tds.get(1))
+        if tds.get(2):
+            invoice.subtotal = _from_implied(tds.get(2))
+    for item in message.body:
+        if item.tag == "TXI" and item.get(2):
+            invoice.tax += number(item.get(2), "0.00")
+    return invoice
+
+
+# -- EDIFACT
+
+def _edifact_qty(block: Sequence[Seg], code: str) -> Optional[Decimal]:
+    for item in block:
+        if item.tag == "QTY" and item.comp(1, 1) == code:
+            return number(item.comp(1, 2))
+    return None
+
+
+def _edifact_moa(segments: Sequence[Seg], code: str) -> Optional[Decimal]:
+    for item in segments:
+        if item.tag == "MOA" and item.comp(1, 1) == code:
+            return number(item.comp(1, 2), "0.00")
+    return None
+
+
+def _edifact_rff(segments: Sequence[Seg], code: str) -> Seg:
+    for item in segments:
+        if item.tag == "RFF" and item.comp(1, 1) == code:
+            return item
+    return None
+
+
+def _edifact_dtm(segments: Sequence[Seg], codes: Sequence[str]):
+    for code in codes:
+        for item in segments:
+            if item.tag == "DTM" and item.comp(1, 1) == code:
+                found = parse_date(item.comp(1, 2))
+                if found:
+                    return found
+    return None
+
+
+def _edifact_ids(block: Sequence[Seg]) -> Dict[str, str]:
+    """Every item number in a LIN loop: LIN's own C212, and every PIA's."""
+    ids: Dict[str, str] = {}
+    head = block[0]
+    if head.comp(3, 1):
+        ids.setdefault(head.comp(3, 2) or "VP", head.comp(3, 1))
+    for item in block[1:]:
+        if item.tag != "PIA":
+            continue
+        for position in range(2, 7):
+            value, qualifier = item.comp(position, 1), item.comp(position, 2)
+            if value:
+                ids.setdefault(qualifier or "VP", value)
+    return ids
+
+
+def _edifact_description(block: Sequence[Seg]) -> str:
+    for item in block[1:]:
+        if item.tag == "IMD" and item.comp(3, 4):
+            return item.comp(3, 4)
+    return ""
+
+
+def _edifact_unit_back(code: str) -> str:
+    """An X12 unit from the UN/ECE code an EDIFACT document carries.
+
+    `schema.UOM_FROM_EDIFACT` rather than a reverse search of the map going
+    the other way: that one is many-to-one - both CA and CS are CT - so
+    searching it backwards would give whichever came first. A code the mock
+    does not know is passed through, because a unit it cannot translate is
+    still what the sender said.
+    """
+    return schema.UOM_FROM_EDIFACT.get(code, code or "EA")
+
+
+def _read_response_edifact(message: Message) -> Response:
+    response = Response()
+    body = message.body
+    bgm = message.find("BGM")
+    if bgm is not None:
+        response.seller_order = bgm.comp(2, 1)
+        response.verdict = bgm.get(4)
+    header = _edifact_header(body)
+    order_reference = _edifact_rff(header, "ON")
+    if order_reference is not None:
+        response.po_number = order_reference.comp(1, 2)
+    change_reference = _edifact_rff(header, "CR")
+    if change_reference is not None:
+        response.sequence = change_reference.comp(1, 2)
+    response.responded_on = _edifact_dtm(header, ("137",))
+    response.ordered_on = _edifact_dtm(header, ("4", "171"))
+    cux = message.find("CUX")
+    if cux is not None:
+        response.currency = cux.comp(1, 2)
+
+    for index, block in enumerate(
+            group_by(body[len(header):], "LIN", stop=("UNS", "CNT", "UNT")),
+            start=1):
+        head = block[0]
+        ids = _edifact_ids(block)
+        ordered = _edifact_qty(block, "21")
+        confirmed = _edifact_qty(block, "113")
+        if confirmed is None:
+            confirmed = _edifact_qty(block, "12")
+        if ordered is None:
+            ordered = confirmed if confirmed is not None else Decimal("0")
+        if confirmed is None:
+            confirmed = ordered
+        unit = ""
+        for item in block:
+            if item.tag == "QTY" and item.comp(1, 3):
+                unit = item.comp(1, 3)
+                break
+        price = Decimal("0.00")
+        for item in block[1:]:
+            if item.tag == "PRI" and item.comp(1, 2):
+                price = number(item.comp(1, 2), "0.00")
+                break
+        reason = ""
+        for item in block[1:]:
+            if item.tag == "FTX" and item.get(1) == "AAO":
+                reason = item.comp(4, 1) or ""
+                break
+        line = ResponseLine(
+            number=head.get(1) or str(index),
+            sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+            upc=_pick(ids, UPC_QUALIFIERS),
+            description=_edifact_description(block),
+            quantity=ordered,
+            uom=_edifact_unit_back(unit),
+            price=price,
+            confirmed=confirmed,
+            # No element carries the verdict: an ORDRSP says it by how much it
+            # confirms, so this is `acknowledgment_type` run backwards.
+            status=_verdict(ordered, confirmed),
+            scheduled_on=_edifact_dtm(block[1:], ("2", "67")),
+            reason=reason,
+            action=EDIFACT_ACTION_TO_CHANGE.get(head.get(2), "")
+                   if head.get(2) else "",
+        )
+        response.lines.append(line)
+    return response
+
+
+def _verdict(ordered: Decimal, confirmed: Decimal) -> str:
+    if confirmed <= 0:
+        return REJECTED
+    if confirmed < ordered:
+        return SHORT
+    return ACCEPTED
+
+
+def _edifact_header(body: Sequence[Seg]) -> List[Seg]:
+    out = []
+    for item in body:
+        if item.tag == "LIN":
+            break
+        out.append(item)
+    return out
+
+
+def _read_despatch_edifact(message: Message) -> Despatch:
+    despatch = Despatch()
+    body = message.body
+    bgm = message.find("BGM")
+    if bgm is not None:
+        despatch.shipment_id = bgm.comp(2, 1)
+    header = _edifact_header(body)
+    despatch.shipped_on = _edifact_dtm(header, ("11", "17", "137"))
+    order_reference = _edifact_rff(header, "ON")
+    if order_reference is not None:
+        despatch.po_number = order_reference.comp(1, 2)
+    tracking = _edifact_rff(header, "CN")
+    if tracking is not None:
+        despatch.tracking = tracking.comp(1, 2)
+    for item in header:
+        if item.tag == "TDT":
+            despatch.bol = item.get(2)
+            despatch.scac = item.comp(5, 1)
+            despatch.carrier = item.comp(5, 4)
+        elif item.tag == "PAC" and item.get(1):
+            despatch.cartons = int(number(item.get(1)))
+
+    for index, block in enumerate(
+            group_by(body[len(header):], "LIN", stop=("UNS", "CNT", "UNT")),
+            start=1):
+        head = block[0]
+        ids = _edifact_ids(block)
+        shipped = _edifact_qty(block, "12")
+        if shipped is None:
+            shipped = _edifact_qty(block, "113") or Decimal("0")
+        unit = ""
+        for item in block:
+            if item.tag == "QTY" and item.comp(1, 3):
+                unit = item.comp(1, 3)
+                break
+        line = head.get(1) or str(index)
+        reference = _edifact_rff(block[1:], "ON")
+        if reference is not None and reference.comp(1, 3):
+            # RFF+ON carries the order line in 1156, which is the buyer's own
+            # line number and better than the position in the despatch.
+            line = reference.comp(1, 3)
+        despatch.items.append(DespatchItem(
+            line=line,
+            sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+            upc=_pick(ids, UPC_QUALIFIERS),
+            quantity=shipped,
+            uom=_edifact_unit_back(unit),
+        ))
+    return despatch
+
+
+def _read_invoice_edifact(message: Message) -> Invoice:
+    invoice = Invoice()
+    body = message.body
+    bgm = message.find("BGM")
+    if bgm is not None:
+        invoice.invoice_number = bgm.comp(2, 1)
+    header = _edifact_header(body)
+    invoice.invoiced_on = _edifact_dtm(header, ("137", "3"))
+    order_reference = _edifact_rff(header, "ON")
+    if order_reference is not None:
+        invoice.po_number = order_reference.comp(1, 2)
+    despatch_reference = _edifact_rff(header, "AAK")
+    if despatch_reference is not None:
+        invoice.shipment_id = despatch_reference.comp(1, 2)
+    cux = message.find("CUX")
+    if cux is not None:
+        invoice.currency = cux.comp(1, 2)
+    for item in header:
+        if item.tag == "PAT" and item.comp(3, 4):
+            invoice.terms_days = int(number(item.comp(3, 4)))
+
+    for index, block in enumerate(
+            group_by(body[len(header):], "LIN", stop=("UNS", "CNT", "UNT")),
+            start=1):
+        head = block[0]
+        ids = _edifact_ids(block)
+        billed = _edifact_qty(block, "47")
+        if billed is None:
+            billed = _edifact_qty(block, "12") or Decimal("0")
+        unit = ""
+        for item in block:
+            if item.tag == "QTY" and item.comp(1, 3):
+                unit = item.comp(1, 3)
+                break
+        price = Decimal("0.00")
+        for item in block[1:]:
+            if item.tag == "PRI" and item.comp(1, 2):
+                price = number(item.comp(1, 2), "0.00")
+                break
+        invoice.lines.append(InvoiceLine(
+            number=head.get(1) or str(index),
+            sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
+            upc=_pick(ids, UPC_QUALIFIERS),
+            description=_edifact_description(block),
+            quantity=billed,
+            uom=_edifact_unit_back(unit),
+            price=price,
+            amount_stated=_edifact_moa(block[1:], "203"),
+        ))
+
+    summary = body[len(header):]
+    # The totals are in the summary section, after UNS. Named, unlike X12's.
+    tail = []
+    seen_uns = False
+    for item in summary:
+        if item.tag == "UNS":
+            seen_uns = True
+        elif seen_uns:
+            tail.append(item)
+    invoice.subtotal = _edifact_moa(tail, "79")
+    invoice.tax = _edifact_moa(tail, "124") or Decimal("0.00")
+    invoice.total = _edifact_moa(tail, "139") or Decimal("0.00")
+    return invoice

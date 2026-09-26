@@ -15,8 +15,13 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
+from decimal import Decimal
+
 from mockedi import ack, edifact, schema, validate, x12
-from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order, parse
+from mockedi.testing import Document, Mock
+from support import (ACME, EURODIS, GLOBEX, INITECH, MockServerCase,
+                     edifact_change, edifact_order, parse, x12_change,
+                     x12_order)
 
 
 class TheModel(unittest.TestCase):
@@ -389,6 +394,134 @@ class ValidateOnly(MockServerCase):
                                  x12_order("PO-ANON", sender="STRANGER"))
         self.assertTrue(data["parsed"])
         self.assertEqual(data["sender"], "STRANGER")
+
+
+
+class ReadersInvertTheWriters(unittest.TestCase):
+    """What the writers were given, read back out of what they wrote.
+
+    `GeneratedDocumentsAreValid`'s sibling: that one asks whether the mock's
+    output satisfies its own dictionary, and this asks whether the values
+    survive the trip. Between them a writer cannot go wrong quietly - a
+    segment in the wrong position passes validation and comes back as the
+    wrong number here.
+
+    Each document is compared on what it actually carries, and no more. A
+    DESADV has no ordered quantity in it and no order date, so asserting
+    either would be testing the reader against the wrong standard rather than
+    against the wire.
+    """
+
+    @classmethod
+    def setUpClass(cls):
+        cls.mock = Mock.start(despatch_delay_ms=0, invoice_delay_ms=0)
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.mock.close()
+
+    def setUp(self):
+        self.mock.reset()
+
+    def documents(self, partner, payload):
+        self.mock.send(payload)
+        return {row["kind"]: Document(row["payload"])
+                for row in self.mock.mailbox(partner=partner, leave=False)}
+
+    def check(self, partner, payload, po_number, currency):
+        found = self.documents(partner, payload)
+        state = self.mock.order(po_number)
+        lines = {row["line"]: row for row in state["lines"]}
+
+        response = found["response"].as_response()
+        self.assertEqual(response.po_number, po_number)
+        self.assertEqual(response.currency, currency)
+        self.assertEqual(len(response.lines), len(lines))
+        for line in response.lines:
+            row = lines[line.number]
+            self.assertEqual(line.sku, row["sku"])
+            self.assertEqual(line.quantity, Decimal(str(row["quantity"])))
+            self.assertEqual(line.confirmed, Decimal(str(row["confirmed"])))
+            self.assertEqual(line.status, row["status"])
+            self.assertEqual(line.price, Decimal(str(row["price"])))
+
+        despatch = found["despatch"].as_despatch()
+        shipment = state["shipments"][0]
+        self.assertEqual(despatch.shipment_id, shipment["shipment_id"])
+        self.assertEqual(despatch.po_number, po_number)
+        self.assertEqual(despatch.carrier, shipment["carrier"])
+        self.assertEqual(despatch.tracking, shipment["tracking"])
+        self.assertEqual(despatch.cartons, shipment["cartons"])
+        for item in despatch.items:
+            self.assertEqual(item.quantity,
+                             Decimal(str(lines[item.line]["shipped"])))
+
+        invoice = found["invoice"].as_invoice()
+        billed = state["invoices"][0]
+        self.assertEqual(invoice.invoice_number, billed["invoice_number"])
+        self.assertEqual(invoice.po_number, po_number)
+        self.assertEqual(invoice.currency, currency)
+        self.assertEqual(invoice.total, Decimal(str(billed["total"])))
+        self.assertEqual(invoice.line_total, invoice.total)
+        self.assertEqual(invoice.terms_days, billed["terms_days"])
+
+    def test_x12_round_trips(self):
+        self.check(ACME, x12_order("RT-X12"), "RT-X12", "USD")
+
+    def test_edifact_round_trips(self):
+        self.check(EURODIS, edifact_order("RT-EDI"), "RT-EDI", "EUR")
+
+    def test_every_partner_and_every_behaviour_round_trips(self):
+        """The behaviours that produce all three documents, for every partner.
+
+        The interesting ones are `short-ship` and `reject-line`: a confirmed
+        quantity that differs from the ordered one is exactly where a reader
+        that took the wrong element would pass a happy-path test and fail
+        here.
+        """
+        builders = {ACME: (x12_order, "USD"), GLOBEX: (x12_order, "USD"),
+                    INITECH: (x12_order, "USD"),
+                    EURODIS: (edifact_order, "EUR")}
+        for partner, (builder, currency) in builders.items():
+            for behaviour in ("accept", "short-ship", "reject-line"):
+                with self.subTest(partner=partner, behaviour=behaviour):
+                    self.mock.reset()
+                    self.mock.behaviour(partner, behaviour)
+                    po_number = "RT-%s-%s" % (partner[:4], behaviour[:5])
+                    self.check(partner, builder(po_number, sender=partner),
+                               po_number, currency)
+
+    def test_a_change_response_round_trips(self):
+        with Mock.start(despatch_delay_ms=3600000,
+                        invoice_delay_ms=3600000) as mock:
+            mock.send(x12_order("RT-CHANGE"))
+            mock.send(x12_change("RT-CHANGE", [("1", "QD", 60, "12.50")]))
+            rows = [row for row in mock.mailbox(partner=ACME)
+                    if row["code"] == "865"]
+            self.assertEqual(len(rows), 1)
+            answer = Document(rows[0]["payload"]).as_change_response()
+            self.assertEqual(answer.po_number, "RT-CHANGE")
+            self.assertEqual(answer.sequence, "1")
+            self.assertEqual(answer.lines[0].action, "QD")
+            self.assertEqual(answer.lines[0].confirmed, Decimal("60"))
+
+    def test_an_edifact_change_response_carries_its_action_per_line(self):
+        # EDIFACT has no change acknowledgment message and no change
+        # reference in the mock's profile, so `sequence` is empty and the
+        # action on the line is what says which change was taken. The action
+        # comes back as CA whatever it went out as, because 1229 has one code
+        # for every kind of change.
+        with Mock.start(despatch_delay_ms=3600000,
+                        invoice_delay_ms=3600000) as mock:
+            mock.send(edifact_order("RT-CHANGE-E"))
+            mock.send(edifact_change("RT-CHANGE-E", [("1", "QD", 60, "12.50")]))
+            rows = [row for row in mock.mailbox(partner=EURODIS)
+                    if row["code"] == "ORDRSP"]
+            answer = Document(rows[-1]["payload"]).as_change_response()
+            self.assertEqual(answer.po_number, "RT-CHANGE-E")
+            self.assertEqual(answer.sequence, "")
+            self.assertEqual(answer.lines[0].action, "CA")
+            self.assertEqual(answer.lines[0].confirmed, Decimal("60"))
 
 
 if __name__ == "__main__":
