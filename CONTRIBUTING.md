@@ -66,6 +66,7 @@ nothing to compile.
 | A code value | `mockedi/schema.py` | The code lists are what make validation mean something - a list that accepts everything acknowledges everything |
 | A difference between versions | `mockedi/schema.py` `REVISIONS` | Declare the segment as the later version has it and list it under that version; sets are declared once, at the first version, and derived for the others |
 | A transaction set | `mockedi/schema.py`, then `transactions.py` | The definition first, then a reader or a writer, then a row in `SET_FOR_KIND` |
+| A kind of guide narrowing | `mockedi/profiles.py` (`check` and `_narrow_children`) | It must only narrow: `check` refuses anything that would let through what the dictionary refuses |
 | A partner behaviour | `mockedi/documents.py` (`decide`) and `db.BEHAVIOURS` | Keep the precedence rules in the docstring true |
 | A validation check | `mockedi/validate.py` | Produce a finding, not a sentence: it has to render as both a 997 and a CONTRL |
 | An endpoint | `mockedi/server.py` | Add it to the index page and the README table too |

@@ -8,7 +8,18 @@ says so where it does.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **A partner's implementation guide** ([#115]). `PUT
+  /_mock/partners/<id>/profile` gives a partner a profile: a declarative
+  narrowing of the dictionary - segments and loops required or forbidden,
+  uses and repeats lowered, code lists cut down, elements shortened or made
+  mandatory - addressed by where a segment is used (`REF`, `PO1/REF`). A
+  document that satisfies the standard but not the guide is rejected, with
+  the standard's codes and a finding that names the rule and whose guide it
+  is. A profile that would widen the dictionary is refused when it is loaded,
+  with every reason. It is kept with the partner (schema version 7), and
+  `/_mock/dictionary/...?partner=` and `/_mock/validate?partner=` apply it.
 
 ## [0.3.1] - 2026-09-26
 
@@ -812,6 +823,7 @@ documents a real one sends.
   validates every document the mock *writes* against the dictionary it uses to
   check what it reads; it found six real bugs the first time it ran.
 
+[#115]: https://github.com/rseufert/mock-edi/issues/115
 [#1]: https://github.com/rseufert/mock-edi/issues/1
 [#36]: https://github.com/rseufert/mock-edi/issues/36
 [#39]: https://github.com/rseufert/mock-edi/issues/39

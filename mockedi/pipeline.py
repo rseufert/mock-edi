@@ -26,7 +26,7 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import (ack, charsets, db, documents, edifact, partners, reconcile, schema,
+from . import (ack, charsets, db, documents, edifact, partners, profiles, reconcile, schema,
                transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
@@ -201,7 +201,8 @@ class Pipeline:
             raw, charset)
 
         report = validate(interchange, strict=partner["behaviour"] == "strict",
-                          envelope_faults=faults)
+                          envelope_faults=faults,
+                          profile=profiles.load(self.conn, partner["id"]))
         if partner["behaviour"] == "reject-ack":
             # A translator misconfigured into refusing everything: every set
             # is rejected in the acknowledgment, and none is acted on. Its

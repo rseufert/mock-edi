@@ -256,6 +256,8 @@ def delete(conn: sqlite3.Connection, identifier: str) -> Dict[str, Any]:
         " AND done_at = ''",
         (db.now(), "partner deleted", identifier)).rowcount
     conn.execute("DELETE FROM partner WHERE id = ?", (identifier,))
+    # Its guide goes with it: a new partner by the same id is somebody else.
+    conn.execute("DELETE FROM partner_profile WHERE partner = ?", (identifier,))
     conn.commit()
     return {"deleted": True, "cancelled": int(cancelled),
             "unscheduled": int(unscheduled)}

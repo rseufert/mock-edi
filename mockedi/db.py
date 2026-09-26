@@ -46,6 +46,14 @@ CREATE TABLE IF NOT EXISTS partner (
     test         INTEGER NOT NULL DEFAULT 0
 );
 
+-- A partner's implementation guide, as a narrowing of the dictionary: the
+-- JSON profiles.check accepted. One per partner.
+CREATE TABLE IF NOT EXISTS partner_profile (
+    partner      TEXT PRIMARY KEY,
+    profile      TEXT NOT NULL,
+    at           TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS catalog (
     sku          TEXT PRIMARY KEY,
     description  TEXT NOT NULL,
@@ -340,7 +348,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 6
+SCHEMA_VERSION = 7
 
 
 class DatabaseError(Exception):
