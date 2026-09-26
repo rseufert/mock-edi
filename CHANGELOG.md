@@ -8,6 +8,19 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.4.0] - 2026-09-26
+
+A minor release, because the seller now refuses documents it used to accept.
+An 855, 856, 810 or 865 (ORDRSP, DESADV or INVOIC) sent *to* the mock is
+rejected as a real translator would reject it. Before this release, a
+supplier-side integration pointed here by mistake got a clean 997. Also new:
+a partner's implementation guide as a profile the mock validates against,
+readers for the four documents the mock sends, `mockedi.testing` as a
+shipped client, and one endpoint for an order's whole timeline. A file
+database is upgraded in place to schema version 7.
+
 ### Added
 
 - **A partner's implementation guide** ([#115]). `PUT
@@ -940,7 +953,8 @@ documents a real one sends.
 [#43]: https://github.com/rseufert/mock-edi/issues/43
 [#117]: https://github.com/rseufert/mock-edi/issues/117
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rseufert/mock-edi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
