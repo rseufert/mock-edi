@@ -28,9 +28,7 @@ says so where it does.
   stored payloads at an internal address. `--deliver-to HOST[,HOST]` is an
   allowlist of hosts it may post to, empty by default; a
   `Receipt-Delivery-Option` outside it is refused with a `failed/Failure` MDN
-  returned to the sender, and the interchange is not read. A partner
-  `as2_url` outside it is refused by `POST` and `PATCH /_mock/partners` with
-  a `400`, rather than accepted and then failed at every delivery.
+  returned to the sender, and the interchange is not read.
 
 - **`--keep-requests` and `--retention-days`, for a mock left running**
   ([#48]). The request log gained a row per request and every interchange
@@ -83,6 +81,12 @@ says so where it does.
   `kind=interchange-acknowledgment`.
 
 ### Changed
+
+- **A partner `as2_url` outside `--deliver-to` is refused when it is set**
+  ([#29]). `POST` and `PATCH /_mock/partners` accepted such a URL with a
+  `200`, and every delivery to that partner then failed; it is now a `400`
+  naming the URL and the flag. The courier still refuses one that got in
+  another way - a row from an older file, or from before the flag was set.
 
 - **Every control-plane timestamp is UTC, to the second, with a `Z`**
   ([#21]). They were naive local-time strings of inconsistent precision -
