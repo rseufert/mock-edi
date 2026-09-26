@@ -1200,7 +1200,11 @@ RFF = Segment("RFF", "Reference", (
     _c("C506", "Reference", (
         _e("1153", "Reference code qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_REFERENCE_QUALIFIERS),
-        _e("1154", "Reference identifier", "AN", 1, 70),
+        # an..35 in D.96A, which is the directory these messages declare.
+        # 70 is D01B's, and accepting a 40-character reference here means a
+        # translator that only knows D.96A rejects what the mock waved
+        # through - the lie discovered in production.
+        _e("1154", "Reference identifier", "AN", 1, 35),
         _e("1156", "Document line identifier", "AN", 1, 6),
         _e("4000", "Reference version identifier", "AN", 1, 35),
         _e("1060", "Revision identifier", "AN", 1, 6),

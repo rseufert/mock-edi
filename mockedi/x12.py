@@ -18,6 +18,8 @@ Structure read and written:
 """
 from __future__ import annotations
 
+import dataclasses
+
 import datetime
 from typing import List, Optional, Sequence
 
@@ -57,7 +59,12 @@ def read_delimiters(payload: str) -> Delimiters:
     # ISA11 carries the repetition separator from 00501 onward; in 00401 it is
     # the standards identifier, always "U", and repetition is not used.
     version = parts[12]
-    repetition = parts[11] if version >= "00501" and parts[11] not in ("", "U") else "^"
+    # From 00501 ISA11 is the repetition separator; before that it is the
+    # standards identifier and the version has no repetition at all. Carrying
+    # `^` anyway made it a delimiter, and a delimiter is stripped out of data.
+    repetition = ""
+    if version >= "00501":
+        repetition = parts[11] if parts[11] not in ("", "U") else "^"
     return Delimiters(segment=segment, element=element, component=component,
                       repetition=repetition, release="", decimal=".")
 
@@ -182,6 +189,23 @@ def wrap(messages: Sequence[Message], sender: str, receiver: str,
         delimiters=delimiters or X12_DEFAULTS, groups=[group])
 
 
+def delimiters_for(interchange: Interchange) -> Delimiters:
+    """The punctuation this interchange actually uses.
+
+    00401 has no repetition separator; from 00501 ISA11 is one. Which it is
+    decides what has to be escaped out of data, and an interchange built in
+    memory carries the defaults, which cannot know the version before it is
+    set. So it is settled here, from the version, rather than left to whoever
+    built the object.
+    """
+    delims = interchange.delimiters
+    if interchange.version >= "00501":
+        return (delims if delims.repetition
+                else dataclasses.replace(delims, repetition="^"))
+    return (dataclasses.replace(delims, repetition="") if delims.repetition
+            else delims)
+
+
 def render(interchange: Interchange, newline: bool = False,
            preamble: Sequence[Seg] = ()) -> str:
     """The interchange as it goes on the wire.
@@ -193,7 +217,7 @@ def render(interchange: Interchange, newline: bool = False,
     `preamble` is written between ISA and the first GS, which is where a TA1
     goes: it answers for an envelope, so it sits in one and not in a group.
     """
-    delims = interchange.delimiters
+    delims = delimiters_for(interchange)
     out: List[str] = []
     out.append(_render_isa(interchange))
     out.extend(render_segment(item, delims) for item in preamble)
@@ -230,7 +254,7 @@ def _render_isa(interchange: Interchange) -> str:
 
 def _isa(interchange: Interchange) -> Seg:
     """ISA's sixteen fixed-width elements."""
-    delims = interchange.delimiters
+    delims = delimiters_for(interchange)
     # 00401 puts the standards identifier "U" in ISA11; 00501 puts the
     # repetition separator there.
     eleventh = "U" if interchange.version < "00501" else delims.repetition
