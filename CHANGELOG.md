@@ -10,6 +10,21 @@ says so where it does.
 
 ### Added
 
+- **`mockedi.testing`** ([#114]), the client every adopter was copying out of
+  `examples/client.py`. `Mock.start(**config)` runs one on a port the OS picks
+  and stops it again; `Mock("http://host:9000")` talks to one already running.
+  Sending sniffs the dialect from the payload, `document()` comes back parsed
+  with `find` and `all` reaching through the groups, and `settle()` waits for
+  delivery without a sleep. A call that answers unexpectedly raises
+  `MockError` carrying what the mock said - which is where the mock explains
+  itself - while `get`/`post`/`patch` return the status for a test that is
+  about the refusal. Still no dependencies.
+
+  `tests/support.py` is written on top of it rather than beside it, which is
+  the only test of such a module that means anything: 766 tests went through
+  it unchanged. `examples/client.py` lost its forty lines of `urllib` and is
+  about EDI again.
+
 - **`GET /_mock/orders/<po>/timeline`** ([#113]), everything that happened to
   one order in the order it happened. Both directions, findings inline,
   whether each document was delivered and after how many attempts, the
@@ -836,6 +851,7 @@ documents a real one sends.
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#21]: https://github.com/rseufert/mock-edi/issues/21
 [#113]: https://github.com/rseufert/mock-edi/issues/113
+[#114]: https://github.com/rseufert/mock-edi/issues/114
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42

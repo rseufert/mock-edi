@@ -9,14 +9,19 @@ own summary of them.
     python3 examples/client.py
 
     BASE=http://host:9000 python3 examples/client.py
+
+The HTTP is `mockedi.testing.Mock`, which the package ships so that nobody
+has to write it: no urllib, no deciding whether the body is JSON, no
+remembering to close an HTTPError. What is left below is about EDI.
 """
 from __future__ import annotations
 
-import json
 import os
 import sys
-import urllib.error
-import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+from mockedi.testing import Mock                       # noqa: E402
 
 BASE = os.environ.get("BASE", "http://127.0.0.1:8080")
 
@@ -56,41 +61,21 @@ IEA*1*000000302~
 """
 
 
-def call(method, path, body=None, headers=None):
-    data = body.encode() if isinstance(body, str) else (
-        json.dumps(body).encode() if body is not None else None)
-    request = urllib.request.Request(BASE + path, data=data, method=method)
-    for key, value in (headers or {}).items():
-        request.add_header(key, value)
-    try:
-        with urllib.request.urlopen(request) as response:
-            payload = response.read().decode("utf-8", "replace")
-    except urllib.error.HTTPError as error:
-        with error:
-            payload = error.read().decode("utf-8", "replace")
-    try:
-        return json.loads(payload)
-    except ValueError:
-        return payload
-
-
 def heading(text):
     print("\n\033[1m%s\033[0m" % text)
 
 
 def main():
+    mock = Mock(BASE)
+
     heading("Send an 850")
-    summary = call("POST", "/edi", ORDER,
-                   {"Content-Type": "application/edi-x12"})
-    if not isinstance(summary, dict) or not summary.get("accepted"):
-        print("the mock did not accept the order:", summary)
-        return 1
+    summary = mock.send(ORDER)
     print("  accepted by %s, order %s" % (summary["partner"], summary["orders"][0]))
     print("  queued in reply: %s"
           % ", ".join(item["code"] for item in summary["queued"]))
 
     heading("Collect what it sent back")
-    documents = call("GET", "/_mock/mailbox?partner=ACME")
+    documents = mock.mailbox(partner="ACME", leave=False)
     for row in documents:
         print("  %-4s %-16s %s" % (row["code"], row["kind"], row["reference"]))
 
@@ -101,7 +86,7 @@ def main():
             print("  " + line)
 
     heading("What the seller now thinks the order is")
-    order = call("GET", "/_mock/orders/4500000701")
+    order = mock.order("4500000701")
     print("  status %s, total %s" % (order["status"], order["total"]))
     for line in order["lines"]:
         print("  line %s %-12s ordered %-5s confirmed %-5s %s"
@@ -109,7 +94,7 @@ def main():
                  line["confirmed"], line["status"]))
 
     heading("Now make the partner reject a line, and order again")
-    call("PATCH", "/_mock/partners/ACME", {"behaviour": "reject-line"})
+    mock.behaviour("ACME", "reject-line")
     # A second order is a second interchange, and carries its own control
     # number: the mock refuses a replay of one it has already taken in, the
     # way a real partner does. 301 appears in ISA13, GS06, GE02 and IEA02.
@@ -117,9 +102,8 @@ def main():
                   .replace("000000301", "000000303")
                   .replace("*1030*301*", "*1030*303*")
                   .replace("GE*1*301~", "GE*1*303~"))
-    call("POST", "/edi", again, {"Content-Type": "application/edi-x12"})
-    order = call("GET", "/_mock/orders/4500000702")
-    for line in order["lines"]:
+    mock.send(again)
+    for line in mock.order("4500000702")["lines"]:
         print("  line %s %-12s %s  %s"
               % (line["line"], line["sku"], line["status"], line["reason"]))
 
@@ -128,26 +112,28 @@ def main():
     # the control numbers out of the document the partner actually sent, which
     # is what a real translator does. Both are needed - ST02 is only unique
     # within its functional group.
-    sent = call("GET", "/_mock/documents?direction=out&code=855&limit=1")[0]
+    sent = mock.documents(direction="out", code="855", limit=1)[0]
     receipt = FUNCTIONAL_ACKNOWLEDGMENT % (sent["group_control"], sent["control"])
-    answer = call("POST", "/edi", receipt, {"Content-Type": "application/edi-x12"})
+    answer = mock.send(receipt)
     for entry in answer["acknowledged"]:
         print("  %s %s -> %s (matched %s)"
               % (entry["code"], entry["control"], entry["status"], entry["matched"]))
-    outstanding = call("GET", "/_mock/unacknowledged")
     print("  still unacknowledged: %s"
           % (", ".join("%s for %s" % (row["code"], row["reference"])
-                       for row in outstanding) or "nothing"))
+                       for row in mock.unacknowledged()) or "nothing"))
 
     heading("The invoice bills only what shipped")
-    invoices = call("GET", "/_mock/mailbox?partner=ACME&kind=invoice&leave")
-    for row in invoices:
+    for row in mock.mailbox(partner="ACME", kind="invoice"):
         for line in row["payload"].splitlines():
             if line.startswith(("IT1", "TDS")):
                 print("  %s  %s" % (row["reference"], line))
 
+    heading("Everything that happened to one order")
+    for event in mock.timeline("4500000701")["events"]:
+        print("  %s  %s" % (event["at"], event["summary"]))
+
     heading("Put it back")
-    call("POST", "/_mock/reset")
+    mock.reset()
     print("  reset")
     return 0
 
