@@ -46,7 +46,13 @@ class Delimiters:
     segment: str = "~"
     element: str = "*"
     component: str = ">"
-    repetition: str = "^"
+    # Empty unless the document actually has one. 004010 does not - ISA11 is
+    # the standards identifier there, always "U" - and EDIFACT syntax 3 does
+    # not either, where UNA position 5 is reserved and written as a space. A
+    # delimiter the document never declares still gets escaped or stripped out
+    # of ordinary data, which is how `^` was disappearing from 004010 and how
+    # an asterisk in a syntax 3 document came out as `?*`.
+    repetition: str = ""
     release: str = ""        # EDIFACT's escape character; X12 has none
     decimal: str = "."
 
@@ -58,7 +64,7 @@ class Delimiters:
 
 X12_DEFAULTS = Delimiters()
 EDIFACT_DEFAULTS = Delimiters(segment="'", element="+", component=":",
-                              repetition="*", release="?", decimal=".")
+                              release="?", decimal=".")
 
 
 @dataclass

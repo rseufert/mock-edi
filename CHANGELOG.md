@@ -165,6 +165,25 @@ says so where it does.
 
 ### Fixed
 
+- **Delimiters the document never declared were changing its data** ([#58]).
+  A delimiter is stripped out of a value in X12 and escaped in EDIFACT, so
+  carrying one that is not really there corrupts ordinary data. 004010 has no
+  repetition separator - ISA11 is the standards identifier, always `U` - and
+  `^` was being replaced with a space in every 004010 value. EDIFACT syntax 3
+  has none either, where UNA position 5 is reserved and written as a space,
+  and an asterisk in a value came out as `?*` beside a UNA that declared no
+  such thing. Both are now empty unless the document really has one, which
+  for X12 is settled from the envelope version: `^` is still escaped out of
+  005010 data, where it is a delimiter.
+
+- `RFF` 1154 was declared `an..70` ([#58]), which is D01B's length, inside
+  messages that declare D.96A - where it is `an..35`. The mock accepted a
+  40-character reference that a translator knowing only D.96A rejects, which
+  is the lie discovered in production that `CONTRIBUTING.md` warns about.
+  (`REF02` blending 004010 and 005010, the other half of that report, was
+  fixed by the version work: 004010 sets use the 30-character element and
+  005010 sets a 50-character one.)
+
 - Basic-auth credentials were compared with `==` ([#29]), which leaks how
   much of a credential was right through how long the comparison took. They
   go through `hmac.compare_digest` now. The stakes are low in a mock; the
@@ -773,6 +792,7 @@ documents a real one sends.
 [#51]: https://github.com/rseufert/mock-edi/issues/51
 [#53]: https://github.com/rseufert/mock-edi/issues/53
 [#56]: https://github.com/rseufert/mock-edi/issues/56
+[#58]: https://github.com/rseufert/mock-edi/issues/58
 [#57]: https://github.com/rseufert/mock-edi/issues/57
 [#62]: https://github.com/rseufert/mock-edi/issues/62
 [#48]: https://github.com/rseufert/mock-edi/issues/48

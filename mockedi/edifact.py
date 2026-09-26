@@ -48,8 +48,11 @@ def read_delimiters(payload: str) -> Delimiters:
     if len(text) < UNA_LENGTH:
         raise EdiSyntaxError("the UNA service string advice is truncated")
     component, element, decimal, release, _reserved, segment = text[3:UNA_LENGTH]
+    # Position 5 is reserved in syntax 3 and written as a space; it only
+    # becomes the repetition separator in syntax 4, which the mock does not
+    # speak. Reading a repetition separator that the UNA does not declare made
+    # the writer escape an ordinary asterisk as `?*`.
     return Delimiters(segment=segment, element=element, component=component,
-                      repetition=EDIFACT_DEFAULTS.repetition,
                       release=release, decimal=decimal)
 
 
