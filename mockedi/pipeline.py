@@ -200,8 +200,9 @@ class Pipeline:
             "in", interchange, partner["id"], text, transport, message_id, mic,
             raw, charset)
 
+        # Every partner is a buyer, so the mock receives as the seller.
         report = validate(interchange, strict=partner["behaviour"] == "strict",
-                          envelope_faults=faults,
+                          envelope_faults=faults, role=schema.SELLER,
                           profile=profiles.load(self.conn, partner["id"]))
         if partner["behaviour"] == "reject-ack":
             # A translator misconfigured into refusing everything: every set
@@ -291,7 +292,12 @@ class Pipeline:
     def _record(self, interchange_id: int, partner: Dict[str, Any], message,
                 message_report, dialect: str) -> str:
         """Log one inbound transaction set and what validation made of it."""
-        reference = _reference_of(message, dialect, message_report.kind)
+        # A set from the wrong direction is archived, as everything received
+        # is, but not under the PO number it names: it is not part of that
+        # order's story, and ?reference= would otherwise show a stranger's
+        # invoice beside it.
+        reference = ("" if message_report.misdirected
+                     else _reference_of(message, dialect, message_report.kind))
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
             " partner, code, kind, control, group_control, reference, accepted,"

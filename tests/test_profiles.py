@@ -141,6 +141,38 @@ class TheRulesAreServed(ProfileCase):
         self.assertIn("PO1/PO1", data["sets"]["850"]["segments"])
 
 
+class AGuideAndTheDirection(MockServerCase):
+    """#119 refuses a set the seller does not receive; a guide adds nothing."""
+
+    SENT_BY_THE_SELLER = {"name": "855 rules", "sets": {"855": {"require": ["REF"]}}}
+
+    def test_a_misdirected_set_is_refused_once_and_not_by_the_guide(self):
+        # An 855 arriving from a buyer is refused for being the wrong
+        # document. A guide for 855s must not pile findings on top of that.
+        status, _h, data = self.request("PUT", "/_mock/partners/ACME/profile",
+                                        self.SENT_BY_THE_SELLER)
+        self.assertEqual(status, 200, data)
+        body = [seg("BAK", "00", "AD", "PO-WRONG-WAY", "20260924"), seg("CTT", "0")]
+        control = _next_control(9)
+        summary = self.send(x12.render(x12.wrap(
+            [x12.message("855", "0001", body)], ACME, "MOCKEDI", control,
+            control.lstrip("0"), "PR")))
+        findings = summary["transactionSets"][0]["findings"]
+        self.assertFalse(any("855 rules" in f for f in findings), findings)
+        message = parse(self.mailbox(ACME, "acknowledgment")[-1]["payload"])
+        ak5 = message.groups[0].messages[0].find("AK5")
+        self.assertEqual(ak5.elements, ["R", "1"])
+
+    def test_validate_applies_a_guide_without_taking_a_side(self):
+        # /_mock/validate reads a document on its own, so it can check the
+        # mock's own output: with ?partner= it applies the guide, not a role.
+        self.request("PUT", "/_mock/partners/ACME/profile", GUIDE)
+        self.send(order("PO-OWN-855"))
+        own = self.mailbox(ACME, "response")[-1]["payload"]
+        _s, _h, data = self.post("/_mock/validate?partner=ACME", own)
+        self.assertTrue(data["clean"], data["explain"])
+
+
 class AProfileMayNotWiden(MockServerCase):
     def put(self, sets):
         return self.request("PUT", "/_mock/partners/ACME/profile",

@@ -129,6 +129,9 @@ class MessageReport:
     # Refused because the group or interchange around it was, not because of
     # anything in the set itself; its own findings may be clean.
     envelope_rejected: bool = False
+    # A set the mock knows, travelling the wrong way: an 855 sent to the
+    # seller. Refused whole, and not filed under the document it names.
+    misdirected: bool = False
     # Refused by the partner's translator for no reason in the document: the
     # `reject-ack` behaviour.
     refused: bool = False
@@ -213,7 +216,7 @@ class InterchangeReport:
 
 def validate(interchange: Interchange, strict: bool = False,
              envelope_faults: Sequence[EnvelopeFinding] = (),
-             profile=None) -> InterchangeReport:
+             role: str = "", profile=None) -> InterchangeReport:
     """Check every message in an interchange against the dictionary.
 
     `envelope_faults` are findings the *caller* knows and the document cannot
@@ -222,6 +225,12 @@ def validate(interchange: Interchange, strict: bool = False,
     is a question for the database rather than for the bytes in hand. They are
     merged before the verdict is passed down to the messages, so a refusal
     reaches them however it was arrived at.
+
+    `role` is the mock's side of the relationship when it is *receiving*
+    the interchange, which decides the sets it may be sent: a seller refuses
+    an 855, and a buyer would refuse an 850. Empty reads the document on its
+    own - checking what the mock itself wrote, or `/_mock/validate` - where
+    it has no direction to be wrong about.
     """
     report = InterchangeReport(dialect=interchange.dialect,
                                control=interchange.control,
@@ -229,7 +238,8 @@ def validate(interchange: Interchange, strict: bool = False,
                                receiver=interchange.receiver)
     groups = []
     for group, message in interchange.messages():
-        item = validate_message(message, interchange.dialect, strict, profile)
+        item = validate_message(message, interchange.dialect, strict,
+                                role=role, profile=profile)
         item.group_control = group.control
         item.group_id = group.functional_id
         item.group_version = group.version
@@ -253,7 +263,8 @@ def validate(interchange: Interchange, strict: bool = False,
 
 
 def validate_message(message: Message, dialect: str,
-                     strict: bool = False, profile=None) -> MessageReport:
+                     strict: bool = False, role: str = "",
+                     profile=None) -> MessageReport:
     # An X12 set is read against the version its group's GS08 names. EDIFACT
     # has one directory, and a UNH naming another is a finding of its own.
     definition = schema.lookup(dialect, message.code,
@@ -266,6 +277,18 @@ def validate_message(message: Message, dialect: str,
         report.accepted = False
         report.set_errors.append(
             ("1", "transaction set %s is not one this mock implements" % message.code))
+        return report
+    if role and report.kind not in schema.RECEIVED_BY[role]:
+        # Known, but from the wrong side: a real translator rejects a set its
+        # relationship with the partner does not process, in the same words
+        # as a set it has never heard of - 718 code 1, 0085 14 - and a
+        # supplier-side integration pointed here by mistake must not be told
+        # its ASN went through.
+        report.misdirected = True
+        report.accepted = False
+        report.set_errors.append(
+            ("1", "%s %s is a document the %s sends, not one it receives"
+             % (_article(message.code), message.code, role)))
         return report
 
     _check_trailer(message, dialect, report)
@@ -853,3 +876,8 @@ def _some(codes: Dict[str, str], limit: int = 6) -> str:
     keys = sorted(codes)
     shown = ", ".join(keys[:limit])
     return shown + ", ..." if len(keys) > limit else shown
+
+
+def _article(code: str) -> str:
+    """"an 855", "an 810", "a 997", "a DESADV" - said the way it is read aloud."""
+    return "an" if code[:1] in "8AEIO" or code[:2] in ("11", "18") else "a"

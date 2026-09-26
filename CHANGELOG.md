@@ -21,6 +21,48 @@ says so where it does.
   with every reason. It is kept with the partner (schema version 7), and
   `/_mock/dictionary/...?partner=` and `/_mock/validate?partner=` apply it.
 
+- **`mockedi.testing`** ([#114]), the client every adopter was copying out of
+  `examples/client.py`. `Mock.start(**config)` runs one on a port the OS picks
+  and stops it again; `Mock("http://host:9000")` talks to one already running.
+  Sending sniffs the dialect from the payload, `document()` comes back parsed
+  with `find` and `all` reaching through the groups, and `settle()` waits for
+  delivery without a sleep. A call that answers unexpectedly raises
+  `MockError` carrying what the mock said - which is where the mock explains
+  itself - while `get`/`post`/`patch` return the status for a test that is
+  about the refusal. Still no dependencies.
+
+  `tests/support.py` is written on top of it rather than beside it, which is
+  the only test of such a module that means anything: 766 tests went through
+  it unchanged. `examples/client.py` lost its forty lines of `urllib` and is
+  about EDI again.
+
+- **`GET /_mock/orders/<po>/timeline`** ([#113]), everything that happened to
+  one order in the order it happened. Both directions, findings inline,
+  whether each document was delivered and after how many attempts, the
+  receipts that came back, and what the seller promised but has not done yet -
+  each event with a line of prose beside its structured form.
+
+  Nothing new is recorded. These are the rows `/_mock/documents`,
+  `/_mock/outbox`, `/_mock/scheduled` and `/_mock/orders` already return,
+  sorted into a sequence - which is what anyone debugging a failed test was
+  assembling by hand from four endpoints. `?raw` adds the payloads, so one
+  call is enough to attach to a bug report.
+
+### Fixed
+
+- **The seller accepted an 855, 856, 810 or 865 from a buyer, clean**
+  ([#117]). Those are what the mock *sends*; one arriving from a partner is
+  a set its relationship with that partner does not process, but it came
+  back `accepted` with a 997 `AK5*A` and was archived under the PO number it
+  named. So a supplier-side integration pointed at the mock by mistake got a
+  clean 997 for its ASN and concluded the connection worked. It is now
+  rejected as a real translator rejects it - `AK5*R*1`, or a `UCM` with
+  0085 = 14 - with a finding that says why, and archived as rejected under
+  no reference. The same for ORDRSP, DESADV and INVOIC. The check is keyed
+  on the mock's role rather than on "the seller", so a partner the mock buys
+  from is a matter of changing the role. `/_mock/validate`, which reads a
+  document on its own, is unaffected.
+
 ## [0.3.1] - 2026-09-26
 
 One fix, for a race a test can see: a request was logged after its answer
@@ -833,6 +875,8 @@ documents a real one sends.
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#21]: https://github.com/rseufert/mock-edi/issues/21
+[#113]: https://github.com/rseufert/mock-edi/issues/113
+[#114]: https://github.com/rseufert/mock-edi/issues/114
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
@@ -874,6 +918,7 @@ documents a real one sends.
 [#25]: https://github.com/rseufert/mock-edi/issues/25
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
+[#117]: https://github.com/rseufert/mock-edi/issues/117
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1

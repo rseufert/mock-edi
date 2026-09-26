@@ -117,6 +117,37 @@ A guided tour of every endpoint, in curl:
 bash examples/demo.sh
 ```
 
+## Driving it from a test
+
+The control plane is plain HTTP and JSON so that any language can drive it.
+From Python, the package ships the client rather than leaving you to write it:
+
+```python
+from mockedi.testing import Mock
+
+with Mock.start(invoice_delay_ms=3600_000) as mock:   # own port, in this process
+    summary = mock.send(order)                        # dialect sniffed from the bytes
+    assert summary["accepted"]
+
+    response = mock.document(partner="ACME", kind="response")
+    assert response.find("ACK").get(1) == "IA"        # no splitting on ~
+
+    assert mock.order("4500000042")["status"] == "confirmed"
+    mock.settle()                                     # nothing left undelivered
+```
+
+`Mock("http://host:9000")` talks to one that is already running, wherever it
+is. `Mock.start(**config)` starts one on a port the OS picks and stops it
+again, and takes the same keywords as the command line.
+
+A call that comes back with an unexpected status raises `MockError` carrying
+what the mock said, because a refusal here names the field, the flag or the
+finding. `mock.get(...)` and friends return the status instead, for a test
+that is *about* the refusal.
+
+Still no dependencies. `tests/support.py` in this repository is written on top
+of it, which is the only test of such a thing that means anything.
+
 And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
 sends SAP purchase orders as 850s and posts the 855s back into SAP, and
 [`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
@@ -228,6 +259,36 @@ The dates **on the wire** are the opposite case and stay as they are. ISA09/10,
 GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
 them.
+
+## One order, one conversation
+
+When a test fails, the question is always the same: what actually happened to
+this order?
+
+```bash
+curl -s http://127.0.0.1:8080/_mock/orders/4500000042/timeline
+```
+
+```
+received 850 0001 (order)
+order recorded: 2 line(s), 1416.00 USD
+despatch promised, due 2026-09-26T21:14:19Z
+invoice promised, due 2026-09-26T22:14:19Z (not done yet)
+packed SHP8000002: 2 line(s), 6 carton(s), United Parcel Service
+sent 997 0001 (acknowledgment); delivery delivered
+sent 855 0002 (response); delivery delivered after 2 attempts
+the partner's receipt accepted our 855 0002
+```
+
+Both directions, in order, with findings inline, whether each document was
+delivered and how many attempts it took, and what the seller promised but has
+not done yet. Every event carries the structured form beside that prose, so a
+test can assert on it. `?raw` adds the payloads, which makes one call enough
+to attach to a bug report.
+
+Nothing new is recorded — this is the same rows `/_mock/documents`,
+`/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
+happened in.
 
 ## Partner behaviours
 
@@ -576,8 +637,17 @@ with EDIFACT ones. The CONTRL uses 0085's own word where it has one: 39 and
 the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
 14 for a message type the mock does not know, with the service segment
 named. `UCI` says 4 only when the interchange itself is at fault; a sound one
-carrying a refused message is 7, with the 4 on that message's `UCM`. Ask for
-the findings as prose instead:
+carrying a refused message is 7, with the 4 on that message's `UCM`.
+
+The mock sells, so it refuses what a seller sends. An 855, 856, 810 or 865 -
+or an ORDRSP, DESADV or INVOIC - arriving from a partner is rejected the way a
+real translator rejects a set its relationship with that partner does not
+process: `AK5*R*1` or `UCM` 0085 = 14, *not supported*, with the reason in the
+findings. It is archived, rejected, and not filed under the PO number it
+names. A supplier-side integration pointed here by mistake is told so rather
+than handed a clean 997 for its ASN.
+
+Ask for the findings as prose instead:
 
 ```bash
 curl -X POST --data-binary @broken.edi http://127.0.0.1:8080/_mock/validate
@@ -728,6 +798,8 @@ mockedi/charsets.py      which character set a document is in, bytes and back
 mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
+mockedi/timeline.py      one order's whole conversation, in order
+mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out
 mockedi/documents.py     what the seller decides, and the shipment and invoice
 mockedi/partners.py      who we trade with, and how each one misbehaves

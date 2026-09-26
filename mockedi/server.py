@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import (as2, charsets, db, delivery, documents, drop, partners, pipeline,
-               profiles, reconcile, schema, transactions, validate)
+               profiles, reconcile, schema, timeline, transactions, validate)
 from .envelope import EdiSyntaxError
 
 JSON = "application/json; charset=utf-8"
@@ -583,6 +583,15 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, db.rows(conn, "SELECT * FROM catalog ORDER BY sku"))
 
         if head == "orders":
+            if len(rest) == 2 and rest[1] == "timeline":
+                # Everything that happened to this order, in order. Four
+                # endpoints' worth of rows, sorted, which is what anyone
+                # debugging one was assembling by hand.
+                found = timeline.timeline(conn, rest[0], raw=_flag(query, "raw"))
+                if found is None:
+                    return self._json(404, {"error": "no purchase order %r"
+                                                     % rest[0]})
+                return self._json(200, found)
             if rest:
                 order = documents.order_row(conn, rest[0])
                 if order is None:
@@ -1398,6 +1407,7 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
         ("GET", "/_mock/interchanges", "Raw payloads. Add <code>?raw</code> for one."),
         ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),
+        ("GET", "/_mock/orders/{po}/timeline", "Everything that happened to one order, in order."),
         ("GET", "/_mock/outbox", "Documents produced, and what became of them."),
         ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice."),
         ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
