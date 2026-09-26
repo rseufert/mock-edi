@@ -1623,6 +1623,18 @@ INTERCHANGE_ACKNOWLEDGMENT = "interchange-acknowledgment"
 KINDS = (ORDER, CHANGE, CHANGE_RESPONSE, RESPONSE, DESPATCH, INVOICE,
          ACKNOWLEDGMENT)
 
+# Which way each kind travels. A buyer sends orders and changes and receives
+# the answers; a seller the reverse. Acknowledgments go both ways. The mock
+# sells today, but the table is keyed on the role, not on "the seller", so a
+# partner the mock buys from is a change to the role rather than to this.
+SELLER = "seller"
+BUYER = "buyer"
+RECEIVED_BY = {
+    SELLER: frozenset({ORDER, CHANGE, ACKNOWLEDGMENT}),
+    BUYER: frozenset({RESPONSE, CHANGE_RESPONSE, DESPATCH, INVOICE,
+                      ACKNOWLEDGMENT}),
+}
+
 X12_SETS = {s.code: s for s in (X12_850, X12_855, X12_856, X12_810, X12_860,
                                 X12_865, X12_997)}
 EDIFACT_SETS = {s.code: s for s in (EDIFACT_ORDERS, EDIFACT_ORDRSP,

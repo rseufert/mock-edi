@@ -637,8 +637,17 @@ with EDIFACT ones. The CONTRL uses 0085's own word where it has one: 39 and
 the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
 14 for a message type the mock does not know, with the service segment
 named. `UCI` says 4 only when the interchange itself is at fault; a sound one
-carrying a refused message is 7, with the 4 on that message's `UCM`. Ask for
-the findings as prose instead:
+carrying a refused message is 7, with the 4 on that message's `UCM`.
+
+The mock sells, so it refuses what a seller sends. An 855, 856, 810 or 865 -
+or an ORDRSP, DESADV or INVOIC - arriving from a partner is rejected the way a
+real translator rejects a set its relationship with that partner does not
+process: `AK5*R*1` or `UCM` 0085 = 14, *not supported*, with the reason in the
+findings. It is archived, rejected, and not filed under the PO number it
+names. A supplier-side integration pointed here by mistake is told so rather
+than handed a clean 997 for its ASN.
+
+Ask for the findings as prose instead:
 
 ```bash
 curl -X POST --data-binary @broken.edi http://127.0.0.1:8080/_mock/validate
