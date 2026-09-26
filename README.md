@@ -189,7 +189,7 @@ Both are walked through, test by test, in
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice, or send one unprompted |
-| Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>` |
+| Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
@@ -709,6 +709,47 @@ checked but loop *sequence* is not, and conditional requirements ("if PO104 is
 present then PO103 must be") are not modelled. Both would need a rule language
 to express, and the mock would rather leave them out than pretend.
 
+## A partner's implementation guide
+
+The standard allows more than any one partner accepts. Their guide makes
+`REF*IA` mandatory, never uses `PO4`, allows `EA` and `CS` and nothing else,
+gives `REF02` fifteen characters — and a document that satisfies 004010 but
+not the guide is the one that bounces in a real onboarding. Give a partner a
+**profile** and the mock bounces it too:
+
+```bash
+curl -X PUT -H 'Content-Type: application/json' \
+     http://127.0.0.1:8080/_mock/partners/ACME/profile -d '{
+  "name": "Acme 850 guide v2",
+  "sets": {"850": {
+    "require": ["REF"],
+    "forbid": ["PO1/PO4"],
+    "segments": {
+      "REF": {"elements": {"1": {"codes": ["IA"]}, "2": {"maxLength": 15}}},
+      "PO1": {"elements": {"3": {"codes": ["EA", "CS"]}}}},
+    "loops": {"PO1": {"repeat": 100}}}}}'
+```
+
+A profile is a **narrowing** of the dictionary and nothing else: a segment or
+loop required or forbidden, a segment's uses or a loop's repeats lowered, a
+code list cut down, an element shortened or made mandatory. A segment is named
+by *where* it is — `REF` is the header's, `PO1/REF` the one on each line —
+because a guide that requires the header's `REF*IA` says nothing about a line's
+`REF*VN`. One that would *widen* the dictionary — a code it does not have, a
+longer maximum, a mandatory segment forbidden — is refused when it is loaded,
+with every reason at once; accepting more than 004010 does is another version.
+
+What the guide rejects, the 997 rejects: the set is refused, with the
+standard's codes (`AK304 = 3` for the missing `REF`, `2` for the `PO4`,
+`AK403 = 7` for the `DZ`), and the finding says whose rule it broke —
+`ACME's guide 'Acme 850 guide v2': REF01 ...`. 005010 has implementation codes
+of its own for these; the mock uses the standard codes, and the words. The
+profile is kept with the partner, so it survives a restart on `--db`; a file
+loads the same way (`curl -T guide.json`). `GET
+/_mock/dictionary/X12/850?partner=ACME` serves the rules as the guide narrows
+them, and `POST /_mock/validate?partner=ACME` checks a document against them
+before you send it.
+
 ## Configuration
 
 Everything is a command-line flag; `mock-edi --help` prints the same list.
@@ -778,6 +819,7 @@ mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out
 mockedi/documents.py     what the seller decides, and the shipment and invoice
 mockedi/partners.py      who we trade with, and how each one misbehaves
+mockedi/profiles.py      a partner's implementation guide, as a narrowing of the dictionary
 mockedi/pipeline.py      the choreography: an order in, four documents back
 mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN

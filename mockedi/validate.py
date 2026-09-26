@@ -33,6 +33,7 @@ and the mock would rather leave them out than pretend.
 """
 from __future__ import annotations
 
+import dataclasses
 import re
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -215,7 +216,7 @@ class InterchangeReport:
 
 def validate(interchange: Interchange, strict: bool = False,
              envelope_faults: Sequence[EnvelopeFinding] = (),
-             role: str = "") -> InterchangeReport:
+             role: str = "", profile=None) -> InterchangeReport:
     """Check every message in an interchange against the dictionary.
 
     `envelope_faults` are findings the *caller* knows and the document cannot
@@ -237,7 +238,8 @@ def validate(interchange: Interchange, strict: bool = False,
                                receiver=interchange.receiver)
     groups = []
     for group, message in interchange.messages():
-        item = validate_message(message, interchange.dialect, strict, role)
+        item = validate_message(message, interchange.dialect, strict,
+                                role=role, profile=profile)
         item.group_control = group.control
         item.group_id = group.functional_id
         item.group_version = group.version
@@ -261,8 +263,8 @@ def validate(interchange: Interchange, strict: bool = False,
 
 
 def validate_message(message: Message, dialect: str,
-                     strict: bool = False,
-                     role: str = "") -> MessageReport:
+                     strict: bool = False, role: str = "",
+                     profile=None) -> MessageReport:
     # An X12 set is read against the version its group's GS08 names. EDIFACT
     # has one directory, and a UNH naming another is a finding of its own.
     definition = schema.lookup(dialect, message.code,
@@ -293,6 +295,8 @@ def validate_message(message: Message, dialect: str,
     _check_version(message, dialect, definition, report)
     _walk(message, definition, report)
     _check_line_numbers(message, definition, report)
+    if profile is not None:
+        _check_profile(message, definition, profile, report)
 
     fatal = report.count(FATAL) or any(code in ("1", "3", "4")
                                        for code, _ in report.set_errors)
@@ -555,6 +559,59 @@ def _check_line_numbers(message: Message, definition: schema.TransactionSet,
                      "the standard allows a repeat, but nearly every "
                      "implementation guide does not, and the mock stores "
                      "lines by number" % (number, tag, seen[number]))]))
+
+
+def _check_profile(message: Message, definition: schema.TransactionSet,
+                   profile, report: MessageReport) -> None:
+    """Walk again against the partner's guide, and keep what only it finds.
+
+    The guide is the dictionary narrowed, so anything the plain walk found
+    the narrowed one finds too; what is left over is the guide's. Those are
+    fatal, as they are to the partner, and say whose rule they are. Codes are
+    the standard's - a segment the guide forbids is unexpected (2), a code it
+    does not allow an invalid code (7) - and the note carries the rest.
+    """
+    narrowed = profile.narrow(definition)
+    if narrowed is None:
+        return
+    guide = MessageReport(code=report.code, control=report.control)
+    _walk(message, narrowed, guide)
+
+    seen_segments = {(f.tag, f.position, f.code) for f in report.segments
+                     if not f.elements}
+    seen_elements = {(f.tag, f.position, e.position, e.component, e.code)
+                     for f in report.segments for e in f.elements}
+    by_position = {(f.tag, f.position): f for f in report.segments}
+    declared = set(definition.known_tags())
+    for finding in guide.segments:
+        if not finding.elements:
+            if (finding.tag, finding.position, finding.code) in seen_segments:
+                continue
+            if finding.code == "1" and finding.tag in declared:
+                code, note = "2", "%s is not used" % finding.tag
+            else:
+                code, note = finding.code, finding.note
+            report.segments.append(SegmentFinding(
+                tag=finding.tag, position=finding.position, loop=finding.loop,
+                code=code, severity=FATAL,
+                note="%s: %s" % (profile.label, note)))
+            continue
+        fresh = [dataclasses.replace(e, severity=FATAL,
+                                     note="%s: %s" % (profile.label, e.note))
+                 for e in finding.elements
+                 if (finding.tag, finding.position, e.position, e.component,
+                     e.code) not in seen_elements]
+        if not fresh:
+            continue
+        existing = by_position.get((finding.tag, finding.position))
+        if existing is not None and existing.elements:
+            existing.elements.extend(fresh)
+            existing.severity = FATAL
+        else:
+            report.segments.append(SegmentFinding(
+                tag=finding.tag, position=finding.position, loop=finding.loop,
+                code="8", severity=FATAL, elements=fresh,
+                note="%s has data element errors" % finding.tag))
 
 
 # ---------------------------------------------------------------------------

@@ -34,7 +34,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import (as2, charsets, db, delivery, documents, drop, partners, pipeline,
-               reconcile, schema, timeline, transactions, validate)
+               profiles, reconcile, schema, timeline, transactions, validate)
 from .envelope import EdiSyntaxError
 
 JSON = "application/json; charset=utf-8"
@@ -215,7 +215,7 @@ class Mock:
             for table in ("interchange", "transaction_set", "purchase_order",
                           "order_line", "shipment", "shipment_line", "invoice",
                           "outbound", "scheduled", "mdn", "control_number",
-                          "request_log",
+                          "request_log", "partner_profile",
                           "partner", "catalog"):
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
@@ -567,7 +567,14 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, partners.BEHAVIOURS)
 
         if head == "dictionary":
-            return self._json(200, _dictionary(rest, _first(query, "version")))
+            profile = None
+            partner_id = _first(query, "partner")
+            if partner_id:
+                if partners.get(conn, partner_id) is None:
+                    return self._json(404, {"error": "no partner %r" % partner_id})
+                profile = profiles.load(conn, partner_id)
+            return self._json(200, _dictionary(rest, _first(query, "version"),
+                                               profile))
 
         if head == "partners":
             return self._partners(method, rest, query, body)
@@ -756,7 +763,7 @@ class Handler(BaseHTTPRequestHandler):
         if head == "validate":
             if method != "POST":
                 return self._text(405, "POST an interchange to validate it")
-            return self._validate_only(body)
+            return self._validate_only(body, _first(query, "partner"))
 
         if head == "reset":
             if method != "POST":
@@ -793,6 +800,8 @@ class Handler(BaseHTTPRequestHandler):
             return self._text(405, "GET or POST partners")
 
         identifier = rest[0]
+        if rest[1:] == ["profile"]:
+            return self._profile(method, identifier, body)
         if method == "GET":
             row = partners.get(conn, identifier)
             if row is None:
@@ -815,7 +824,37 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200 if outcome["deleted"] else 404, outcome)
         return self._text(405, "GET, PATCH or DELETE a partner")
 
-    def _validate_only(self, body: bytes) -> Tuple[int, int]:
+    def _profile(self, method: str, identifier: str, body: bytes):
+        """A partner's implementation guide: PUT one, GET it, DELETE it.
+
+        Held with the partner, so it survives a restart on a file database.
+        A file is loaded the same way: `curl -T guide.json`.
+        """
+        conn = self.mock.conn
+        partner = partners.get(conn, identifier)
+        if partner is None:
+            return self._json(404, {"error": "no partner %r" % identifier})
+        if method == "GET":
+            found = profiles.load(conn, identifier)
+            if found is None:
+                return self._json(404, {"error": "%s has no profile; the "
+                                                 "dictionary applies as it stands"
+                                                 % identifier})
+            return self._json(200, found.as_json())
+        if method in ("PUT", "POST"):
+            try:
+                found = profiles.check(partner, _json_body(body))
+            except profiles.Invalid as error:
+                return self._json(400, {"error": "profile refused",
+                                        "problems": error.problems})
+            profiles.save(conn, found)
+            return self._json(200, found.as_json())
+        if method == "DELETE":
+            removed = profiles.remove(conn, identifier)
+            return self._json(200 if removed else 404, {"deleted": removed})
+        return self._text(405, "GET, PUT or DELETE a partner's profile")
+
+    def _validate_only(self, body: bytes, partner_id: str = "") -> Tuple[int, int]:
         """Check an interchange and say what is wrong, changing nothing.
 
         The mock's validator, without the trading partner attached: useful
@@ -838,7 +877,10 @@ class Handler(BaseHTTPRequestHandler):
                             else edifact.parse(text) for text in texts]
         except EdiSyntaxError as error:
             return self._json(422, {"parsed": False, "error": str(error)})
-        reports = [validate.validate(item) for item in interchanges]
+        # `?partner=ACME` applies that partner's guide as well, which is the
+        # check worth running before sending it anything.
+        profile = profiles.load(self.mock.conn, partner_id) if partner_id else None
+        reports = [validate.validate(item, profile=profile) for item in interchanges]
         interchange, report = interchanges[0], reports[0]
         from . import ack
         return self._json(200, {
@@ -1244,7 +1286,7 @@ def _document_params(query: Dict[str, List[str]]) -> List[str]:
             if _first(query, name)]
 
 
-def _dictionary(rest: List[str], version: str = "") -> Any:
+def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
     """The dictionary, served as data.
 
     Everything the mock validates against is derived from `schema.py`, so
@@ -1252,7 +1294,8 @@ def _dictionary(rest: List[str], version: str = "") -> Any:
     themselves.  A mapping tool can read this instead of a PDF.
 
     `?version=005010` serves a set as that version has it; without it, the
-    set as declared.
+    set as declared. `?partner=ACME` serves it as that partner's guide
+    narrows it, and names the guide.
     """
     if not rest:
         return {
@@ -1279,10 +1322,14 @@ def _dictionary(rest: List[str], version: str = "") -> Any:
     definition = schema.lookup(dialect, rest[1].upper(), version)
     if definition is None:
         return {"error": "no transaction set %s/%s" % (dialect, rest[1])}
+    narrowed = profile.narrow(definition) if profile is not None else None
+    guide = profile.label if narrowed is not None else None
+    definition = narrowed or definition
     return {
         "dialect": definition.dialect, "code": definition.code,
         "name": definition.name, "purpose": definition.purpose,
         "group": definition.group, "version": definition.version,
+        "profile": guide,
         "segments": [
             {"tag": use.tag, "name": use.segment.name, "requirement": use.req,
              "maxUse": use.max_use, "loop": loop.id if loop else "",
