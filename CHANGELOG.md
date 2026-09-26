@@ -8,7 +8,16 @@ says so where it does.
 
 ## [Unreleased]
 
-Nothing yet.
+### Fixed
+
+- A request was logged after its answer had been sent, so a client that
+  asked `/_mock/requests` the moment the answer arrived could find it missing
+  - which is how `test_requests_are_logged` failed once on a slow CI runner.
+  Read straight from the database as each answer arrived, the row was not
+  there yet 291 times in 300. Every answer is now logged before its first
+  byte is written, whether it comes from a route, the authentication
+  challenge or an OPTIONS request; the log is still written under the mock's
+  lock and still cannot fail a request.
 
 ## [0.3.0] - 2026-09-26
 
