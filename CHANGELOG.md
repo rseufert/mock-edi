@@ -8,6 +8,25 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.3.0] - 2026-09-26
+
+An appraisal of the whole project, and the forty-odd issues it raised, worked
+through. The largest part is fidelity: the 855 and 865 put their dates where
+the standard puts them, the CONTRL names its own directory, envelope trailers
+are checked and answered with a `TA1` when asked, a file holding several
+interchanges is read in full, and a document arriving in ISO-8859-1 or with a
+comma decimal mark is read as it was written. The rest is what a mock left
+running on a shared network needs - a warning when it is exposed, an
+allowlist for where it will post, one UTC clock, a bounded database, and a
+way to try a failed delivery again - plus five more ways for a partner to
+misbehave, and a dictionary that knows which versions it speaks.
+
+Three things change on the wire or in the API, each said so in its entry:
+the 855 and 865 lay out `BAK` and `BCA` differently, every control-plane
+timestamp is now UTC with a `Z`, and `Pipeline.receive()` returns a list.
+
 ### Added
 
 - **Five more partner behaviours** ([#45]), the ones an order-to-cash
@@ -827,7 +846,8 @@ documents a real one sends.
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/rseufert/mock-edi/compare/v0.2.1...v0.3.0
 [0.2.1]: https://github.com/rseufert/mock-edi/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/rseufert/mock-edi/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/rseufert/mock-edi/releases/tag/v0.1.0
