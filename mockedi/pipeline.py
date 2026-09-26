@@ -33,6 +33,8 @@ from .transactions import Party
 from .validate import EnvelopeFinding, InterchangeReport, validate
 
 PENDING = "pending"
+# How much later the `late` partner answers than it otherwise would: an hour.
+LATE_MS = 60 * 60 * 1000
 READY = "ready"
 DELIVERED = "delivered"
 COLLECTED = "collected"
@@ -200,6 +202,13 @@ class Pipeline:
 
         report = validate(interchange, strict=partner["behaviour"] == "strict",
                           envelope_faults=faults)
+        if partner["behaviour"] == "reject-ack":
+            # A translator misconfigured into refusing everything: every set
+            # is rejected in the acknowledgment, and none is acted on. Its
+            # acknowledgments of what the mock sent are still read.
+            for item in report.messages:
+                if item.kind != schema.ACKNOWLEDGMENT:
+                    item.accepted, item.refused = False, True
         receipt = Receipt(interchange_id=interchange_id, partner=partner["id"],
                           dialect=dialect, control=interchange.control, report=report)
 
@@ -356,6 +365,14 @@ class Pipeline:
             order = documents.order_row(self.conn, po_number)
             if order is None:
                 continue
+            if behaviour == "out-of-order" and any(
+                    transactions.number(row["confirmed"]) > 0
+                    for row in documents.order_lines(self.conn, po_number)):
+                # The response waits until the goods have shipped; see
+                # _fulfil. An order with nothing to ship has no despatch to
+                # wait for, and is answered now.
+                self._schedule_fulfilment(partner, po_number, moment)
+                continue
             self._queue_response(partner, order, receipt, moment)
             if behaviour == "reject-all":
                 continue
@@ -430,8 +447,17 @@ class Pipeline:
         are kept before the request returns, so nothing about the simple case
         changes.
         """
-        for kind, delay in ((schema.DESPATCH, self.config.despatch_delay_ms),
-                            (schema.INVOICE, self.config.invoice_delay_ms)):
+        work = [(schema.DESPATCH, self.config.despatch_delay_ms),
+                (schema.INVOICE, self.config.invoice_delay_ms)]
+        if partner["behaviour"] == "no-invoice":
+            work = work[:1]
+        elif partner["behaviour"] == "out-of-order":
+            # The invoice first, due with the despatch: whichever runs first
+            # packs, so the 810 goes out before the 856 advises the same
+            # consignment.
+            work = [(schema.INVOICE, self.config.despatch_delay_ms),
+                    (schema.DESPATCH, self.config.despatch_delay_ms)]
+        for kind, delay in work:
             if kind in skip:
                 continue
             due = moment + datetime.timedelta(milliseconds=delay)
@@ -463,6 +489,9 @@ class Pipeline:
                 partner["dialect"], self.us, partner, order, lines, shipment,
                 moment)
             self._send(partner, schema.DESPATCH, body, po_number, receipt, moment)
+            if partner["behaviour"] == "out-of-order" and not self._sent(
+                    partner["id"], schema.RESPONSE, po_number):
+                self._queue_response(partner, order, receipt, moment)
             return
 
         # Anything confirmed and not yet packed is packed now, the way a
@@ -530,6 +559,7 @@ class Pipeline:
               moment: datetime.datetime, delay_ms: int = 0,
               dialect: str = "", note: str = "") -> Queued:
         """Envelope a document, number it, and put it in the queue."""
+        delay_ms += self._lateness(partner)
         dialect = dialect or partner["dialect"]
         code = schema.set_code(dialect, kind)
         definition = schema.lookup(dialect, code)
@@ -548,6 +578,7 @@ class Pipeline:
             version = self._x12_version(partner)
             set_control = control.rjust(4, "0")
             message = x12.message(code, set_control, body, version)
+            self._corrupt(partner, kind, message)
             interchange = x12.wrap(
                 [message], self.config.as2_id, partner_id, interchange_control,
                 group_control, definition.group,
@@ -564,6 +595,7 @@ class Pipeline:
             else:
                 version = partner["version"] if ":" in partner["version"] else "D:96A:UN"
             message = edifact.message(code, control, body, version)
+            self._corrupt(partner, kind, message)
             interchange = edifact.wrap(
                 [message], self.config.as2_id, partner_id, interchange_control,
                 sender_qualifier=self.config.qualifier,
@@ -574,6 +606,33 @@ class Pipeline:
         return self._enqueue(partner_id, dialect, code, kind, reference, payload,
                              interchange_control, group_control, set_control,
                              receipt, moment, delay_ms, note)
+
+    @staticmethod
+    def _lateness(partner) -> int:
+        """What `late` adds to every delay: an hour, past any chase-up window
+        worth the name, and on top of whatever the mock is configured with."""
+        return LATE_MS if partner["behaviour"] == "late" else 0
+
+    @staticmethod
+    def _corrupt(partner, kind: str, message) -> None:
+        """`corrupt`: a business document whose trailer miscounts by one.
+
+        The one fault chosen, so a test knows what to expect: SE01 or UNT's
+        count, which the receiving translator checks first and rejects the
+        set for. The mock's acknowledgments are left intact - a corrupt 997
+        would test something else entirely.
+        """
+        if partner["behaviour"] != "corrupt" or kind in (
+                schema.ACKNOWLEDGMENT, schema.INTERCHANGE_ACKNOWLEDGMENT):
+            return
+        trailer = message.segments[-1]
+        trailer.elements[0] = str(int(trailer.elements[0]) + 1)
+
+    def _sent(self, partner_id: str, kind: str, reference: str) -> bool:
+        return db.one(self.conn,
+                      "SELECT id FROM outbound WHERE partner = ? AND kind = ?"
+                      " AND reference = ? LIMIT 1",
+                      (partner_id, kind, reference)) is not None
 
     @staticmethod
     def _x12_version(partner) -> str:
@@ -589,6 +648,7 @@ class Pipeline:
                                          moment: datetime.datetime,
                                          delay_ms: int = 0) -> Queued:
         """A TA1, in an interchange of its own with no functional group."""
+        delay_ms += self._lateness(partner)
         partner_id = partner["id"]
         control = str(db.next_number(self.conn, "interchange", partner_id))
         version = interchange.version if interchange.version in ("00401", "00501") \

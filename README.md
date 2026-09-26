@@ -258,6 +258,11 @@ because an id also becomes a pickup filename and part of a URL, and one with a
 | `no-ack` | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
 | `duplicate-invoice` | Sends the invoice twice with the same invoice number, as a partner with a retry bug does. |
 | `strict` | Rejects a transaction set for any finding, not only a fatal one. |
+| `out-of-order` | Sends the invoice before the despatch advice and the order response after both — 997, 810, 856, 855 — which is where a buyer's matching usually breaks. The documents still describe one consignment. |
+| `late` | Answers everything an hour late, on top of any configured delay: after the chase-up window rather than never. `POST /_mock/advance?seconds=3601` brings it in. |
+| `corrupt` | Sends every business document with its trailer count (`SE01` or `UNT`) one out, so your translator's own 997 or CONTRL has something to reject. That one fault and no other; its acknowledgments are sound. |
+| `reject-ack` | Rejects every transaction set in its 997 or CONTRL (`AK5*R` with no reason, `UCM` action 4), however clean, and acts on none of them — a partner whose translator is misconfigured. |
+| `no-invoice` | Ships and never invoices, so a three-way match has to give up waiting. |
 
 Some rules apply whatever the behaviour says, because they are what real
 sellers actually do. The first that fires wins:

@@ -288,6 +288,14 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
         self.assertTrue(rows, "nothing was produced")
         for row in rows:
             report = validate.validate(parse(row["payload"]))
+            if behaviour == "corrupt" and row["kind"] != "acknowledgment":
+                # Corrupt on purpose, and in exactly one way: the trailer
+                # miscounts (718 code 4), and nothing else is wrong.
+                self.assertEqual([code for m in report.messages
+                                  for code, _note in m.set_errors], ["4"],
+                                 row["code"])
+                self.assertEqual([m.segments for m in report.messages], [[]])
+                continue
             self.assertTrue(
                 report.clean,
                 "the %s does not validate:\n%s\n%s"
