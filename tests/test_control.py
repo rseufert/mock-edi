@@ -1,5 +1,6 @@
 """The control plane: reading what happened and changing what happens next."""
 import os
+import sqlite3
 import sys
 import unittest
 
@@ -7,7 +8,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import ACME, EURODIS, MockServerCase, x12_order
+from support import ACME, EURODIS, FileDatabaseCase, MockServerCase, x12_order
 
 
 class Health(MockServerCase):
@@ -252,6 +253,69 @@ class Archive(MockServerCase):
     def test_requests_are_logged(self):
         _s, _h, rows = self.get("/_mock/requests")
         self.assertTrue(any(row["path"] == "/edi" for row in rows))
+
+
+class LoggedBeforeItIsAnswered(FileDatabaseCase):
+    """The request log holds a request by the time its answer arrives.
+
+    The row used to be written after the response, so a client asking
+    `/_mock/requests` the moment its answer came back could miss it - which
+    is what `Archive.test_requests_are_logged` did on a slow CI runner. Asked
+    that way, a second request has to be scheduled first and nearly always
+    loses the race. So these read the file directly, on a connection of
+    their own, the instant each answer arrives: there, the old order missed
+    the row 291 times in 300.
+    """
+
+    def setUp(self):
+        super().setUp()
+        # Opened once: opening it per check takes long enough to hide the
+        # race this is here to catch.
+        self.reader = sqlite3.connect(self.db_path)
+        self.addCleanup(self.reader.close)
+
+    def logged(self, path):
+        return self.reader.execute(
+            "SELECT method, status, bytes_in, bytes_out FROM request_log"
+            " WHERE path = ?", (path,)).fetchall()
+
+    def test_every_answer_is_logged_before_it_arrives(self):
+        for index in range(100):
+            path = "/nowhere-%d" % index
+            status, headers, _data = self.get(path)
+            self.assertEqual(status, 404)
+            self.assertEqual(self.logged(path),
+                             [("GET", 404, 0, int(headers["Content-Length"]))], path)
+
+    def test_a_post_is_logged_with_what_came_in_and_went_out(self):
+        order = x12_order("PO-LOGGED").encode()
+        status, headers, _data = self.post("/edi", order,
+                                           headers={"Content-Type": "application/edi-x12"})
+        self.assertEqual(status, 200)
+        self.assertEqual(self.logged("/edi"),
+                         [("POST", 200, len(order), int(headers["Content-Length"]))])
+
+    def test_an_options_request_is_logged_before_it_is_answered(self):
+        for index in range(20):
+            path = "/edi/%d" % index
+            status, _h, _data = self.request("OPTIONS", path)
+            self.assertEqual(status, 204)
+            self.assertEqual(self.logged(path), [("OPTIONS", 204, 0, 0)], path)
+
+
+class LoggedBeforeTheChallenge(FileDatabaseCase):
+    config_kwargs = {"basic_auth": "tester:secret"}
+
+    def test_a_401_is_logged_before_it_is_answered(self):
+        reader = sqlite3.connect(self.db_path)
+        self.addCleanup(reader.close)
+        for index in range(20):
+            path = "/_mock/state/%d" % index
+            status, _h, _data = self.get(path)
+            self.assertEqual(status, 401)
+            self.assertEqual(reader.execute(
+                "SELECT status FROM request_log WHERE path = ?", (path,)).fetchall(),
+                [(401,)], path)
 
 
 class Reset(MockServerCase):

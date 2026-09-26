@@ -294,20 +294,20 @@ class Handler(BaseHTTPRequestHandler):
         # Answered before authentication, as a CORS preflight never carries
         # credentials. The mock sends no CORS headers of its own.
         path, _query = _split(self.path)
+        self._begin_log("OPTIONS", path)
         try:
             # Read and discarded: on a kept-alive connection, a body left
             # unread would be taken for the next request.
-            self._read_body()
+            self._bytes_in = len(self._read_body())
         except BodyError:
             self.close_connection = True
+        self._log_before_answering(204, 0)
         self.send_response(204)
         self.send_header("Allow", ALLOWED_METHODS)
         self.send_header("Content-Length", "0")
         if self.close_connection:
             self.send_header("Connection", "close")
         self.end_headers()
-        if self.config.log_requests:
-            self._log_request_row("OPTIONS", path, 204, 0, 0)
 
     _head = False
 
@@ -315,17 +315,18 @@ class Handler(BaseHTTPRequestHandler):
         started = time.time()
         path, query = _split(self.path)
         self._head = method == "HEAD"
+        self._begin_log(method, path)
         route_method = "GET" if self._head else method
         status = 500
         written = 0
+        body = b""
         try:
             body = self._read_body()
         except BodyError as error:
             self.close_connection = True
             status, written = self._text(error.status, str(error))
-            if self.config.log_requests:
-                self._log_request_row(method, path, status, 0, written)
             return
+        self._bytes_in = len(body)
         try:
             if self.config.latency_ms:
                 time.sleep(self.config.latency_ms / 1000.0)
@@ -358,8 +359,10 @@ class Handler(BaseHTTPRequestHandler):
             status, written = self._json(500, {"error": str(error),
                                                "type": type(error).__name__})
         finally:
-            if self.config.log_requests:
-                self._log_request_row(method, path, status, len(body or b""), written)
+            # Only a request that was never answered - the client hung up
+            # first - reaches here unlogged; every answer is logged as it is
+            # sent. See _log_before_answering.
+            self._log_before_answering(status, written)
 
     def _route(self, method: str, path: str, query: Dict[str, List[str]],
                body: bytes) -> Tuple[int, int]:
@@ -925,6 +928,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _raw(self, status: int, payload: bytes,
              headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
+        self._log_before_answering(status, 0 if self._head else len(payload))
         self.send_response(status)
         for key, value in (headers or {}).items():
             self.send_header(key, value)
@@ -984,6 +988,7 @@ class Handler(BaseHTTPRequestHandler):
         return hmac.compare_digest(decoded, self.config.basic_auth)
 
     def _challenge(self) -> Tuple[int, int]:
+        self._log_before_answering(401, 0)
         self.send_response(401)
         self.send_header("WWW-Authenticate", 'Basic realm="mock-edi"')
         self.send_header("Content-Type", TEXT)
@@ -994,6 +999,39 @@ class Handler(BaseHTTPRequestHandler):
     def _base(self) -> str:
         host = self.headers.get("Host") or "%s:%d" % (self.config.host, self.config.port)
         return "http://%s" % host
+
+    # One request's log row, in the making. A handler object serves every
+    # request on a kept-alive connection, so these are reset for each.
+    _log_method = ""
+    _log_path = ""
+    _bytes_in = 0
+    _logged = True
+
+    def _begin_log(self, method: str, path: str) -> None:
+        self._log_method, self._log_path = method, path
+        self._bytes_in, self._logged = 0, False
+
+    def _log_before_answering(self, status: int, bytes_out: int) -> None:
+        """Log the request now, before the client can see the answer.
+
+        Written after the response, the row was not there yet for a client
+        that asked `/_mock/requests` the moment its answer arrived - which is
+        exactly what a test does, and on a slow runner it lost. Every answer
+        goes out through `_raw`, `_challenge` or the OPTIONS handler, and
+        each calls this before `send_response`; the socket writer is not
+        buffered, so the header block is what a client first sees. Once per
+        request.
+
+        Nothing is left for a later commit to take with it: every route
+        returns its answer as its last act, after its own work is committed,
+        and a failed one has been rolled back before its 500 is written.
+        """
+        if self._logged:
+            return
+        self._logged = True
+        if self.config.log_requests:
+            self._log_request_row(self._log_method, self._log_path, status,
+                                  self._bytes_in, bytes_out)
 
     def _log_request_row(self, method: str, path: str, status: int,
                          bytes_in: int, bytes_out: int) -> None:
