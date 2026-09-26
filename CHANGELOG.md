@@ -10,6 +10,25 @@ says so where it does.
 
 ### Added
 
+- **Readers for the 855, 856, 810 and 865, in both dialects** ([#122]).
+  `transactions.py` read two documents and wrote four; a buyer needs the other
+  direction of each, and nothing turned a supplier's response, despatch advice
+  or invoice into a model. `read_response`, `read_despatch`, `read_invoice` and
+  `read_change_response` do, and `mockedi.testing` offers them as
+  `Document.as_response()` and friends - so an assertion can be
+  `response.short[0].short_by == 40` instead of `find("ACK").get(2)`.
+
+  Forgiving in the way `read_order` already is, because a supplier's
+  translator is not this mock: an item number under a qualifier the module
+  does not list, a line with no number or no `ACK` at all, an 856 with a pack
+  level between the order and the item, an `ORDRSP` that states only what it
+  will deliver. Two things are deliberately *not* smoothed over - a line
+  amount that disagrees with the line's own price is kept as the sender stated
+  it, and a missing mandatory segment is reported as absent rather than
+  raised, because calling a document malformed is `validate.py`'s job.
+
+  Nothing in the mock calls them yet. It is the seller.
+
 - **`mockedi.testing`** ([#114]), the client every adopter was copying out of
   `examples/client.py`. `Mock.start(**config)` runs one on a port the OS picks
   and stops it again; `Mock("http://host:9000")` talks to one already running.
@@ -865,6 +884,7 @@ documents a real one sends.
 [#21]: https://github.com/rseufert/mock-edi/issues/21
 [#113]: https://github.com/rseufert/mock-edi/issues/113
 [#114]: https://github.com/rseufert/mock-edi/issues/114
+[#122]: https://github.com/rseufert/mock-edi/issues/122
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
