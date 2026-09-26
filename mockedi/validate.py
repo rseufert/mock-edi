@@ -128,6 +128,9 @@ class MessageReport:
     # Refused because the group or interchange around it was, not because of
     # anything in the set itself; its own findings may be clean.
     envelope_rejected: bool = False
+    # Refused by the partner's translator for no reason in the document: the
+    # `reject-ack` behaviour.
+    refused: bool = False
 
     @property
     def findings(self) -> List[SegmentFinding]:

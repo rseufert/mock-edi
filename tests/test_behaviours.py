@@ -274,5 +274,123 @@ class StockLimits(MockServerCase):
         self.assertEqual(line["confirmed"], "60")
 
 
+
+class OutOfOrder(MockServerCase):
+    """997, 810, 856, 855: the answer to the order comes last."""
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "out-of-order")
+        self.summary = self.send(x12_order("PO-OOO"))
+
+    def test_the_invoice_comes_before_the_despatch_and_the_response_last(self):
+        self.assertEqual([r["code"] for r in self.mailbox(ACME)],
+                         ["997", "810", "856", "855"])
+        self.assertEqual([q["code"] for q in self.summary["queued"]],
+                         ["997", "810", "856", "855"])
+
+    def test_and_they_still_describe_one_consignment(self):
+        despatch = self.document(ACME, "despatch").groups[0].messages[0]
+        invoice = self.document(ACME, "invoice").groups[0].messages[0]
+        named = [r.get(2) for r in invoice.find_all("REF") if r.get(1) == "SI"][0]
+        self.assertEqual(named, despatch.find("BSN").get(2))
+
+
+class Late(MockServerCase):
+    """Everything is answered, an hour after it otherwise would be."""
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "late")
+        self.send(x12_order("PO-LATE"))
+
+    def test_nothing_arrives_inside_the_hour(self):
+        self.assertEqual(self.mailbox(ACME), [])
+        self.post("/_mock/advance?seconds=3500")
+        self.assertEqual(self.mailbox(ACME), [])
+
+    def test_everything_arrives_after_it(self):
+        self.post("/_mock/advance?seconds=3601")
+        self.assertEqual([r["code"] for r in self.mailbox(ACME)],
+                         ["997", "855", "856", "810"])
+
+
+class Corrupt(MockServerCase):
+    """Business documents whose trailer miscounts; the 997 itself is sound."""
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "corrupt")
+        self.send(x12_order("PO-CORRUPT"))
+
+    def test_se01_is_one_out(self):
+        message = self.document(ACME, "response").groups[0].messages[0]
+        self.assertEqual(int(message.find("SE").get(1)), len(message.segments) + 1)
+
+    def test_a_translator_would_reject_it_for_exactly_that(self):
+        from mockedi import validate
+        report = validate.validate(self.document(ACME, "invoice"))
+        self.assertEqual([code for m in report.messages for code, _n in m.set_errors],
+                         ["4"])
+        self.assertFalse(report.messages[0].accepted)
+
+    def test_the_997_is_not_corrupted(self):
+        from mockedi import validate
+        self.assertTrue(validate.validate(self.document(ACME, "acknowledgment")).clean)
+
+    def test_edifact_miscounts_in_unt(self):
+        self.behaviour(EURODIS, "corrupt")
+        self.send(edifact_order("PO-CORRUPT-E"),
+                  headers={"Content-Type": "application/edifact"})
+        message = self.document(EURODIS, "response").groups[0].messages[0]
+        self.assertEqual(int(message.find("UNT").get(1)), len(message.segments) + 1)
+
+
+class RejectAck(MockServerCase):
+    """A translator that rejects everything, clean or not."""
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "reject-ack")
+        self.summary = self.send(x12_order("PO-REJACK"))
+
+    def test_the_997_rejects_a_clean_set_and_gives_no_reason(self):
+        message = self.document(ACME, "acknowledgment").groups[0].messages[0]
+        self.assertEqual(message.find("AK5").elements, ["R"])
+        ak9 = message.find("AK9")
+        self.assertEqual((ak9.get(1), ak9.get(4)), ("R", "0"))
+        self.assertIsNone(message.find("AK3"))
+
+    def test_nothing_is_acted_on(self):
+        self.assertEqual([q["code"] for q in self.summary["queued"]], ["997"])
+        status, _h, _data = self.get("/_mock/orders/PO-REJACK")
+        self.assertEqual(status, 404)
+
+    def test_edifact_is_rejected_in_its_ucm(self):
+        self.behaviour(EURODIS, "reject-ack")
+        self.send(edifact_order("PO-REJACK-E"),
+                  headers={"Content-Type": "application/edifact"})
+        message = self.document(EURODIS, "acknowledgment").groups[0].messages[0]
+        self.assertEqual(message.find("UCI").get(4), "7")
+        self.assertEqual(message.find("UCM").get(3), "4")
+
+
+class NoInvoice(MockServerCase):
+    """The goods ship, and no bill ever follows."""
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "no-invoice")
+        self.send(x12_order("PO-NOBILL"))
+
+    def test_it_ships_and_never_bills(self):
+        self.post("/_mock/advance?all")
+        self.assertEqual([r["code"] for r in self.mailbox(ACME)],
+                         ["997", "855", "856"])
+        order = self.order("PO-NOBILL")
+        self.assertEqual(order["status"], "shipped")
+        self.assertEqual(order["invoices"], [])
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -6,12 +6,13 @@ still true, only whether a file exists that nobody documented, or a file is
 documented that no longer exists.  That catches the common failure - a module
 added without a line in the index - and leaves the judgement calls to review.
 
-Four checks:
+Five checks:
 
 1. every tracked file is named in docs/FILES.md
 2. every file named in docs/FILES.md exists
 3. every module of the package appears in the README's layout block
 4. every command-line flag is mentioned in the README
+5. every partner behaviour has a row in the README's behaviour table
 
 The fourth asks the real argument parser for its flags, so a flag added to
 `mockedi/__main__.py` without a word in the README fails the build - fourteen
@@ -66,6 +67,13 @@ def cli_flags():
     return sorted(flags - {"--help"})
 
 
+def behaviours():
+    """Every partner behaviour, from the table the mock itself uses."""
+    sys.path.insert(0, ROOT)
+    from mockedi.db import BEHAVIOURS
+    return sorted(BEHAVIOURS)
+
+
 def main():
     index = read(INDEX)
     readme = read(README)
@@ -111,6 +119,13 @@ def main():
                 "%s is a command-line flag the README never mentions - add it to "
                 "the Configuration section" % flag)
 
+    # 5. every behaviour a partner can be set to has a row in the README
+    for name in behaviours():
+        if not re.search(r"^\| `%s` \|" % re.escape(name), readme, re.M):
+            problems.append(
+                "the behaviour %r has no row in the README's behaviour table"
+                % name)
+
     if problems:
         print("documentation is out of date:\n")
         for problem in problems:
@@ -119,8 +134,8 @@ def main():
         return 1
 
     print("docs/FILES.md covers every tracked file, names nothing that is gone, "
-          "the README layout block lists every module, and it mentions every "
-          "command-line flag.")
+          "the README layout block lists every module, it mentions every "
+          "command-line flag, and it has a row for every behaviour.")
     return 0
 
 

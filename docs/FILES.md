@@ -72,7 +72,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | `test_ack.py` | The 997 - AK1 naming the group, AK3/AK4 carrying findings and a clipped copy of the bad data, AK5 and AK9 codes and counts, one acknowledgment per functional group - and the CONTRL equivalents. Over HTTP, the CONTRL's 0085 codes on the wire - 39, 40, 37, 29 and 28 on `UNT`, 14 on `UNH` - and `UCI` 7 for a sound interchange carrying a refused message. |
 | `test_orders.py` | Reading the same order out of both dialects and getting the same answer, the forgiving readings a real partner needs, and the wire formats for quantities, prices and implied decimals. |
 | `test_choreography.py` | The whole point: 850 in and 997/855/856/810 back, ORDERS in and CONTRL/ORDRSP/DESADV/INVOIC back, the documents referencing each other, both dialects agreeing, and control numbers advancing per partner. |
-| `test_behaviours.py` | Every partner behaviour and the rules that outrank them, in their documented precedence: a line that asks for nothing, an unknown item, the stock cap, and a disputed price - including what happens when two of them apply at once. |
+| `test_behaviours.py` | Every partner behaviour and the rules that outrank them, in their documented precedence: a line that asks for nothing, an unknown item, the stock cap, and a disputed price - including what happens when two of them apply at once; and out-of-order, late, corrupt, reject-ack and no-invoice, each shown on the wire. |
 | `test_async_mdn.py` | The asynchronous MDN as a MIME entity: what the partner's listener receives parsed with the standard library's `email` package rather than matched as substrings, the boundary and the headers that go with it, the text part's declared charset matching its bytes, and `signed-receipt-protocol=required` answered with a failed MDN. |
 | `test_as2.py` | Synchronous and asynchronous MDNs, the MIC under each digest, the human-readable part, refusals (S/MIME, wrong recipient, unregistered sender), and receipts coming back in. |
 | `test_partners.py` | The partner control plane refusing what it cannot act on: unknown fields named rather than dropped, `version` per dialect, the `test` flag, `mdn_mode`, `as2_url`'s scheme, qualifier and id widths, sending one partner's order to another, and what becomes of a deleted partner's outstanding work. |
@@ -96,7 +96,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | What it is |
 | --- | --- |
-| `check_docs.py` | Fails if a tracked file has no row in `docs/FILES.md`, if a row names a file that no longer exists, if a module is missing from the README's layout block, if the README's test count is not the suite's, or if a command-line flag is never mentioned in the README - it asks the real argument parser. It checks coverage, not prose. |
+| `check_docs.py` | Fails if a tracked file has no row in `docs/FILES.md`, if a row names a file that no longer exists, if a module is missing from the README's layout block, if a command-line flag is never mentioned in the README - it asks the real argument parser - or if a partner behaviour has no row in the README's behaviour table. It checks coverage, not prose. |
 | `check_changelog.py` | Fails if `CHANGELOG.md` is malformed, if a released section is edited, if an entry waiting for a release disappears, or if `mockedi/` changed without an entry. A pull request labelled `no changelog` lifts that last rule. |
 
 ## `examples/`

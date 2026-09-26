@@ -92,6 +92,9 @@ def functional_acknowledgment(functional_id: str, group_control: str,
 
 
 def _ak5(item: MessageReport) -> Seg:
+    if item.refused:
+        # A translator that rejects what it should not gives no reason.
+        return seg("AK5", "R")
     if item.clean:
         return seg("AK5", "A")
     code = "A" if item.accepted and not item.set_errors else (
@@ -106,7 +109,7 @@ def _group_code(messages: Sequence[MessageReport]) -> str:
     if not messages:
         return "R"
     accepted = sum(1 for m in messages if m.accepted)
-    if all(m.clean for m in messages):
+    if all(m.clean and not m.refused for m in messages):
         return "A"
     if accepted == 0:
         return "R"

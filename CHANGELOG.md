@@ -10,6 +10,17 @@ says so where it does.
 
 ### Added
 
+- **Five more partner behaviours** ([#45]), the ones an order-to-cash
+  tester asks for next. `out-of-order` sends the invoice before the despatch
+  advice and the order response after both - 997, 810, 856, 855 - which is
+  where a buyer's matching usually breaks. `late` answers everything an hour
+  late, after the chase-up window rather than never. `corrupt` sends every
+  business document with its trailer count one out, so the buyer's own 997
+  has something to reject. `reject-ack` rejects every set in its 997 or
+  CONTRL however clean, as a misconfigured translator does, and acts on none.
+  `no-invoice` ships and never bills. `tools/check_docs.py` now fails a
+  behaviour with no row in the README's table.
+
 - **A warning when the control plane is exposed, and `--deliver-to`**
   ([#29]). Three things that are fine on a laptop and worth stating before
   the container runs on a shared network.
@@ -763,6 +774,7 @@ documents a real one sends.
 [#55]: https://github.com/rseufert/mock-edi/issues/55
 [#2]: https://github.com/rseufert/mock-edi/issues/2
 [#3]: https://github.com/rseufert/mock-edi/issues/3
+[#45]: https://github.com/rseufert/mock-edi/issues/45
 [#46]: https://github.com/rseufert/mock-edi/issues/46
 [#23]: https://github.com/rseufert/mock-edi/issues/23
 [#28]: https://github.com/rseufert/mock-edi/issues/28

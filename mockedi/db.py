@@ -557,6 +557,19 @@ BEHAVIOURS = {
     "duplicate-invoice": "Send the invoice twice, with the same invoice number, "
                          "as a partner with a retry bug does.",
     "strict": "Reject a transaction set for any finding, not only a fatal one.",
+    "out-of-order": "Send the invoice before the despatch advice, and the "
+                    "order response after both - 997, 810, 856, 855 - which "
+                    "is where a buyer's matching usually breaks.",
+    "late": "Answer everything, but an hour late on top of any configured "
+            "delay: after the chase-up window, rather than never.",
+    "corrupt": "Send every business document with its trailer count (SE01 "
+               "or UNT) one out, so your translator's own 997 or CONTRL has "
+               "something to reject.",
+    "reject-ack": "Reject every transaction set in the 997 or CONTRL, however "
+                  "clean, and act on none of them - a partner whose translator "
+                  "is misconfigured.",
+    "no-invoice": "Ship, and never invoice: the three-way match has to give "
+                  "up waiting.",
 }
 
 PARTNERS = [
