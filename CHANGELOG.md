@@ -22,7 +22,20 @@ says so where it does.
   assembling by hand from four endpoints. `?raw` adds the payloads, so one
   call is enough to attach to a bug report.
 
-Nothing yet.
+### Fixed
+
+- **The seller accepted an 855, 856, 810 or 865 from a buyer, clean**
+  ([#117]). Those are what the mock *sends*; one arriving from a partner is
+  a set its relationship with that partner does not process, but it came
+  back `accepted` with a 997 `AK5*A` and was archived under the PO number it
+  named. So a supplier-side integration pointed at the mock by mistake got a
+  clean 997 for its ASN and concluded the connection worked. It is now
+  rejected as a real translator rejects it - `AK5*R*1`, or a `UCM` with
+  0085 = 14 - with a finding that says why, and archived as rejected under
+  no reference. The same for ORDRSP, DESADV and INVOIC. The check is keyed
+  on the mock's role rather than on "the seller", so a partner the mock buys
+  from is a matter of changing the role. `/_mock/validate`, which reads a
+  document on its own, is unaffected.
 
 ## [0.3.1] - 2026-09-26
 
@@ -877,6 +890,7 @@ documents a real one sends.
 [#25]: https://github.com/rseufert/mock-edi/issues/25
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
+[#117]: https://github.com/rseufert/mock-edi/issues/117
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.3.1...HEAD
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
