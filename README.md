@@ -136,6 +136,22 @@ with Mock.start(invoice_delay_ms=3600_000) as mock:   # own port, in this proces
     mock.settle()                                     # nothing left undelivered
 ```
 
+A document also reads as a model, when the assertion is about what the seller
+said rather than about one segment:
+
+```python
+response = mock.document(partner="ACME", kind="response").as_response()
+assert response.short[0].short_by == 40          # confirmed 60 of 100
+
+invoice = mock.document(partner="ACME", kind="invoice").as_invoice()
+assert invoice.line_total == invoice.total       # the supplier's own arithmetic
+```
+
+`as_order`, `as_response`, `as_change_response`, `as_despatch` and
+`as_invoice` cover every business document in both dialects, and they are
+forgiving about how the other side writes one — which is the point, since the
+documents your partner sends are not the ones this mock writes.
+
 `Mock("http://host:9000")` talks to one that is already running, wherever it
 is. `Mock.start(**config)` starts one on a port the OS picks and stops it
 again, and takes the same keywords as the command line.

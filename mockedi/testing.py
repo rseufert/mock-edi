@@ -98,6 +98,49 @@ class Document:
         found = self.all(tag)
         return found[0] if found else None
 
+    # -- as a model
+    #
+    # `find("ACK").get(2)` is the right level for a test about one segment.
+    # For a test about what the seller *said* - confirmed 90 of the 100 I
+    # ordered, billed for 100 - a model reads better, and `transactions.py`
+    # has the readers. These are the four documents a seller sends.
+
+    def _message(self):
+        for group in self.interchange.groups:
+            for message in group.messages:
+                return message
+        raise ValueError("the interchange holds no message to read")
+
+    def as_response(self):
+        """An 855 or an ORDRSP, as a `transactions.Response`."""
+        from . import transactions
+        return transactions.read_response(self._message(),
+                                          self.interchange.dialect)
+
+    def as_change_response(self):
+        """An 865, or an ORDRSP answering an ORDCHG."""
+        from . import transactions
+        return transactions.read_change_response(self._message(),
+                                                 self.interchange.dialect)
+
+    def as_despatch(self):
+        """An 856 or a DESADV, as a `transactions.Despatch`."""
+        from . import transactions
+        return transactions.read_despatch(self._message(),
+                                          self.interchange.dialect)
+
+    def as_invoice(self):
+        """An 810 or an INVOIC, as a `transactions.Invoice`."""
+        from . import transactions
+        return transactions.read_invoice(self._message(),
+                                         self.interchange.dialect)
+
+    def as_order(self):
+        """An 850 or an ORDERS, as a `transactions.Order`."""
+        from . import transactions
+        return transactions.read_order(self._message(),
+                                       self.interchange.dialect)
+
     def __repr__(self) -> str:
         return "<Document %s %s>" % (self.interchange.dialect,
                                      ",".join(self.interchange.codes()))
