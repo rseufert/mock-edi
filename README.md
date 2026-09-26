@@ -662,7 +662,7 @@ everything in memory.
 | Flag | What it is for |
 | --- | --- |
 | `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. |
-| `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed; a `Receipt-Delivery-Option` outside the list is refused with a failure MDN. |
+| `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed: a partner `as2_url` outside the list is refused by the control plane with a `400`, a document already bound for one fails without being posted, and a `Receipt-Delivery-Option` outside it is refused with a failure MDN. |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |

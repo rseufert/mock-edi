@@ -82,6 +82,12 @@ says so where it does.
 
 ### Changed
 
+- **A partner `as2_url` outside `--deliver-to` is refused when it is set**
+  ([#29]). `POST` and `PATCH /_mock/partners` accepted such a URL with a
+  `200`, and every delivery to that partner then failed; it is now a `400`
+  naming the URL and the flag. The courier still refuses one that got in
+  another way - a row from an older file, or from before the flag was set.
+
 - **Every control-plane timestamp is UTC, to the second, with a `Z`**
   ([#21]). They were naive local-time strings of inconsistent precision -
   `started` and `due_at` carried microseconds, `at` did not, and none of them
