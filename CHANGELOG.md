@@ -28,7 +28,9 @@ says so where it does.
   stored payloads at an internal address. `--deliver-to HOST[,HOST]` is an
   allowlist of hosts it may post to, empty by default; a
   `Receipt-Delivery-Option` outside it is refused with a `failed/Failure` MDN
-  returned to the sender, and the interchange is not read.
+  returned to the sender, and the interchange is not read. A partner
+  `as2_url` outside it is refused by `POST` and `PATCH /_mock/partners` with
+  a `400`, rather than accepted and then failed at every delivery.
 
 - **`--keep-requests` and `--retention-days`, for a mock left running**
   ([#48]). The request log gained a row per request and every interchange

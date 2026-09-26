@@ -769,6 +769,9 @@ class Handler(BaseHTTPRequestHandler):
                 identifier = payload.pop("id", "")
                 if not identifier:
                     return self._json(400, {"error": "a partner needs an id"})
+                refused = self._refused_url(payload)
+                if refused:
+                    return self._json(400, {"error": refused})
                 try:
                     row = partners.create(conn, identifier, payload.pop("name", ""),
                                           **payload)
@@ -784,8 +787,12 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(404, {"error": "no partner %r" % identifier})
             return self._json(200, row)
         if method in ("PATCH", "PUT"):
+            payload = _json_body(body)
+            refused = self._refused_url(payload)
+            if refused:
+                return self._json(400, {"error": refused})
             try:
-                row = partners.update(conn, identifier, **_json_body(body))
+                row = partners.update(conn, identifier, **payload)
             except partners.UnknownPartner:
                 return self._json(404, {"error": "no partner %r" % identifier})
             except ValueError as error:
@@ -944,6 +951,21 @@ class Handler(BaseHTTPRequestHandler):
         return self._raw(status, markup.encode("utf-8"), {"Content-Type": HTML})
 
     # -- authentication
+
+    def _refused_url(self, payload: Dict[str, Any]) -> str:
+        """An `as2_url` the courier would refuse to post to, refused now.
+
+        Accepting it and failing every delivery later is the "PATCH answers
+        200 and changes nothing" this control plane stopped doing (#40): the
+        partner would look configured and nothing would ever arrive.
+        """
+        url = payload.get("as2_url")
+        if not url or not isinstance(url, str):
+            return ""
+        if delivery.permitted(url, self.config.deliver_to):
+            return ""
+        return ("as2_url %s is not a host this mock may post to; it was started "
+                "with --deliver-to %s" % (url, ",".join(self.config.deliver_to)))
 
     def _authorised(self) -> bool:
         if not self.config.basic_auth:

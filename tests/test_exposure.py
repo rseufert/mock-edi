@@ -135,16 +135,38 @@ class ARefusedDeliveryTarget(MockServerCase):
         super().setUp()
         Listener.received = []
 
+    def bind_acme_off_the_list(self):
+        """A URL that got past the control plane: a row from an older file,
+        or from before the mock was started with --deliver-to."""
+        with self.httpd.mock.lock:
+            self.httpd.mock.conn.execute(
+                "UPDATE partner SET as2_url = ? WHERE id = ?",
+                ("http://127.0.0.1:%d/as2" % self.port, ACME))
+            self.httpd.mock.conn.commit()
+
+    def test_the_control_plane_refuses_a_url_off_the_list(self):
+        for method, path, payload in (
+                ("PATCH", "/_mock/partners/" + ACME, {}),
+                ("POST", "/_mock/partners", {"id": "SNOOP", "name": "Snoop"})):
+            payload["as2_url"] = "http://169.254.169.254/latest/meta-data"
+            status, _headers, data = self.request(method, path, payload)
+            self.assertEqual(status, 400, data)
+            self.assertIn("--deliver-to", data["error"])
+        self.assertEqual(self.get("/_mock/partners/" + ACME)[2]["as2_url"], "")
+
+    def test_and_accepts_one_on_it(self):
+        status, _headers, data = self.patch(
+            "/_mock/partners/" + ACME, {"as2_url": "https://allowed.test/as2"})
+        self.assertEqual(status, 200, data)
+
     def test_a_partner_url_off_the_list_is_not_posted_to(self):
-        self.patch("/_mock/partners/" + ACME,
-                   {"as2_url": "http://127.0.0.1:%d/as2" % self.port})
+        self.bind_acme_off_the_list()
         self.send(x12_order("EXPOSED-A"))
         self.settle()
         self.assertEqual(Listener.received, [])
 
     def test_and_the_outbox_says_why(self):
-        self.patch("/_mock/partners/" + ACME,
-                   {"as2_url": "http://127.0.0.1:%d/as2" % self.port})
+        self.bind_acme_off_the_list()
         self.send(x12_order("EXPOSED-B"))
         self.settle()
         _status, _headers, rows = self.get("/_mock/outbox")
