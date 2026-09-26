@@ -8,6 +8,20 @@ says so where it does.
 
 ## [Unreleased]
 
+### Added
+
+- **`GET /_mock/orders/<po>/timeline`** ([#113]), everything that happened to
+  one order in the order it happened. Both directions, findings inline,
+  whether each document was delivered and after how many attempts, the
+  receipts that came back, and what the seller promised but has not done yet -
+  each event with a line of prose beside its structured form.
+
+  Nothing new is recorded. These are the rows `/_mock/documents`,
+  `/_mock/outbox`, `/_mock/scheduled` and `/_mock/orders` already return,
+  sorted into a sequence - which is what anyone debugging a failed test was
+  assembling by hand from four endpoints. `?raw` adds the payloads, so one
+  call is enough to attach to a bug report.
+
 Nothing yet.
 
 ## [0.3.1] - 2026-09-26
@@ -821,6 +835,7 @@ documents a real one sends.
 [#20]: https://github.com/rseufert/mock-edi/issues/20
 [#22]: https://github.com/rseufert/mock-edi/issues/22
 [#21]: https://github.com/rseufert/mock-edi/issues/21
+[#113]: https://github.com/rseufert/mock-edi/issues/113
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
