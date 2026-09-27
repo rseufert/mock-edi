@@ -146,6 +146,9 @@ class TheSellerLeavesItAlone(MockServerCase):
     def test_a_customers_850_cannot_replace_it(self):
         summary = self.send(x12_order("PO-PLACED"))
         self.assertEqual(summary["orders"], [])
+        # #131's rule, which covers the mock's own orders as any other's.
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NUMBER_IN_USE])
         self.assertEqual(self.order("PO-PLACED")["direction"], "placed")
         self.assertEqual(self.order("PO-PLACED")["partner"], "NORTHWIND")
 
@@ -157,7 +160,8 @@ class TheSellerLeavesItAlone(MockServerCase):
 
     def test_nor_an_850_restating_it(self):
         summary = self.send(x12_order("PO-PLACED", purpose="04"))  # a restatement
-        self.assertIn("this mock placed", summary["refusals"][0]["reason"])
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NOT_FOUND])
         self.assertEqual(self.order("PO-PLACED")["lines"][0]["quantity"], "100")
 
     def test_and_the_mock_does_not_answer_it_on_demand(self):

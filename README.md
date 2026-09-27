@@ -584,6 +584,32 @@ alone; the payload as a whole is `accepted` only when every interchange in it
 was. Over AS2 one MDN answers the whole file, and says *processed* only when
 all of it was. A dropped file is filed as processed on the same terms.
 
+## An order belongs to the partner that placed it
+
+A purchase order number is not an identity: real numbers are unique per buyer,
+and two customers may both use `4500000042`. The mock stores orders by number
+alone, so until it stores them by partner *and* number, a number one partner
+holds is closed to the others.
+
+A change, a cancellation or a restated 850 against an order another partner
+holds is answered exactly as one against an order that does not exist — the
+same words, because a customer has no business learning which numbers its
+competitors use. An 850 placing a new order on a number somebody else holds is
+refused, with an 855 that rejects every line and says *order number already in
+use*:
+
+```
+BAK*00*RJ*4500000042*20260924*****20260927~
+ACK*IR*0*EA~
+REF*ZZ**order number already in use~
+```
+
+Refusing that is wrong in principle and right for now: the alternative is
+replacing the first partner's order, which is what 0.4.0 did — taking its lines
+with it and leaving the despatch and invoice already promised for it pointing
+at goods nobody ordered. The same partner may still send a number again, and it
+replaces its own order as it always has.
+
 ## A replayed interchange is refused
 
 A retry bug on the sender's side is ordinary, and processing a duplicate order

@@ -71,15 +71,34 @@ UNITS_PER_CARTON = 24
 SHORT_SHIP_FRACTION = Decimal("0.8")
 
 
+def belongs_to(order: Optional[Dict[str, Any]],
+               partner: Dict[str, Any]) -> bool:
+    """Whether this stored order is the given partner's.
+
+    The one place that knows a purchase order number is not an identity. Every
+    caller that looks an order up by number alone has to ask this, because
+    `purchase_order` is keyed by the number and a customer can therefore name
+    another customer's order.
+    """
+    if order is None:
+        return False
+    return (order["partner"] or "") == (partner.get("id") or "")
+
+
 def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
                  when: Optional[datetime.datetime] = None) -> Dict[str, Any]:
     """Store an incoming order, decide every line, and return the stored row.
 
-    A repeat of a purchase order number replaces what was there.  Real
-    receivers differ - some reject a duplicate, some treat it as a change -
-    and the mock takes the forgiving reading so that re-running a test does
-    not need the database thrown away first.  `/_mock/orders` shows the one
-    that survived.
+    A repeat of a purchase order number *from the same partner* replaces what
+    was there.  Real receivers differ - some reject a duplicate, some treat it
+    as a change - and the mock takes the forgiving reading so that re-running
+    a test does not need the database thrown away first.  `/_mock/orders`
+    shows the one that survived.
+
+    A number another partner holds is a different matter, and the caller has
+    to refuse it before reaching here: replacing it would destroy an order
+    this partner has nothing to do with, along with the work promised for it.
+    `belongs_to` is that check.
     """
     moment = when or db.utcnow()
     seller_order = _existing_seller_order(conn, order.po_number) or str(
@@ -652,6 +671,10 @@ REFUSED = "refused"
 APPLIED = "applied"
 
 NOT_FOUND = "no such purchase order"
+# Said to a partner that names a number another partner holds. Deliberately
+# the *same* words as an unknown order: a customer has no business learning
+# which numbers its competitors use.
+NUMBER_IN_USE = "order number already in use"
 ALREADY_INVOICED = "the order has been invoiced and can no longer be changed"
 ALREADY_SHIPPED = "the goods have shipped"
 
@@ -676,11 +699,12 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     from .transactions import ADD, CHANGE_LINE, DELETE, NO_CHANGE
     moment = when or db.utcnow()
     order = order_row(conn, change.po_number)
-    if order is None:
-        return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
-    if order["direction"] == PLACED:
-        # The mock's own order with a supplier. A partner cannot change it,
-        # and the seller's rules below would decide lines nobody sold.
+    # A purchase order number does not identify an order: real numbers are
+    # unique per buyer, and two customers may both hold a 4500000042. Until
+    # orders are keyed by partner and number, an order belonging to somebody
+    # else has to look exactly like one that does not exist - in the same
+    # words, so that nothing leaks which numbers are in use.
+    if order is None or not belongs_to(order, partner):
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
     if order["status"] == "invoiced":
         return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)
