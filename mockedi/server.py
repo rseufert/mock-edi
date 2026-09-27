@@ -1424,6 +1424,10 @@ def _index_page(mock: Mock, base: str) -> str:
            row["behaviour"],
            _esc(partners.BEHAVIOURS.get(row["behaviour"], "")))
         for row in rows)
+    behaviour_rows = "".join(
+        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
+        % (name, " or ".join(partners.BEHAVIOUR_ROLES[name]), _esc(text))
+        for name, text in sorted(partners.BEHAVIOURS.items()))
 
     endpoints = [
         ("POST", "/as2", "An AS2 interchange. Answers with an MDN."),
@@ -1468,6 +1472,8 @@ Send it an 850 or an ORDERS and it answers with an acknowledgment, a purchase
 order response, a despatch advice and an invoice.</p>
 <h2>Trading partners</h2>
 <table><tr><th>Id</th><th>Name</th><th>Role</th><th>Dialect</th><th>Behaviour</th><th></th></tr>%s</table>
+<h2>Behaviours</h2>
+<table><tr><th>Behaviour</th><th>Partner</th><th></th></tr>%s</table>
 <h2>Endpoints</h2>
 <table><tr><th></th><th>Path</th><th></th></tr>%s</table>
 <h2>Try it</h2>
@@ -1475,7 +1481,7 @@ order response, a despatch advice and an invoice.</p>
 The short version:</p>
 <p><code>curl -X POST --data-binary @order.edi %s/edi</code></p>
 </main></body></html>""" % (_STYLE, mock.config.as2_id, partner_rows,
-                            endpoint_rows, base)
+                            behaviour_rows, endpoint_rows, base)
 
 
 def _esc(text: str) -> str:

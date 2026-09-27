@@ -20,10 +20,19 @@ says so where it does.
   under the order they name, listed under `filed` in the receipt, and shown in
   the order's timeline after the order going out. One naming an order the
   mock never placed with that supplier is rejected at the order number's
-  element in the 997 or CONTRL. A customer's 850 or 860 can no longer replace
-  or change an order the mock placed. Nothing about a customer has changed.
+  element in the 997 or CONTRL. Nothing about a customer has changed.
   **The schema version is now 9**; a file database is upgraded in place, and
   every order it held was received.
+
+- **Each behaviour says which partner roles it fits** ([#127]).
+  `db.BEHAVIOUR_ROLES` records it once, and everything else reads it: the
+  refusal of a behaviour on a partner of the wrong role, in both directions,
+  `--help`, the index page's new behaviour table and a *Partner* column in the
+  README's, which `tools/check_docs.py` now holds to the record. The six that
+  change what the mock does with an order it received are for a customer
+  only; `accept`, `no-ack`, `late`, `reject-ack`, `strict` and `corrupt` -
+  how the mock answers, or what it damages in what it sends - fit a supplier
+  as well. `GET /_mock/behaviours` is unchanged.
 
 - **A partner has a `role`: `customer` or `supplier`** ([#125]). The first
   step of the mock buying as well as selling (#116). `role` is what the
@@ -52,6 +61,28 @@ says so where it does.
   company as the customer. The flip lives in two helpers of its own rather
   than in a parameter to the seller's, and several tests exist only to hold it
   down.
+
+### Fixed
+
+- **One customer could change, cancel or replace another customer's order**
+  ([#131]), which is in the released 0.4.0. `purchase_order` is keyed by the
+  purchase order number alone and real numbers are unique only per buyer, so
+  a partner could name a number it did not hold and have the mock act on it.
+  An 860 cancelled a stranger's order; an ordinary 850 replaced one outright,
+  took its lines, and left the despatch and invoice already promised for it
+  pointing at goods nobody had ordered.
+
+  A change, a cancellation or a restated 850 against an order another partner
+  holds is now answered exactly as one against an order that does not exist -
+  the same words, so nothing leaks which numbers are in use. An 850 placing a
+  *new* order on a number somebody else holds is refused with an 855 that
+  rejects every line and says "order number already in use", and the existing
+  order and its scheduled work are untouched.
+
+  Refusing that 850 is wrong in principle - two buyers may both hold a
+  4500000042 - and right for now, because the alternative is destroying the
+  first one. Keying orders by partner and number removes the refusal, and is
+  its own issue; this one is the guard that needs no migration.
 
 ## [0.4.0] - 2026-09-26
 
@@ -954,6 +985,7 @@ documents a real one sends.
 [#114]: https://github.com/rseufert/mock-edi/issues/114
 [#122]: https://github.com/rseufert/mock-edi/issues/122
 [#125]: https://github.com/rseufert/mock-edi/issues/125
+[#131]: https://github.com/rseufert/mock-edi/issues/131
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
@@ -996,6 +1028,7 @@ documents a real one sends.
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
 [#117]: https://github.com/rseufert/mock-edi/issues/117
+[#127]: https://github.com/rseufert/mock-edi/issues/127
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0

@@ -333,24 +333,26 @@ A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
 A behaviour that only a seller can have - one that changes what the mock does
 with an order it received, such as `short-ship` or `no-invoice` - is refused
-on a supplier, and so is a role change that would strand such a behaviour. The
+on a supplier, and so is a role change that would strand such a behaviour.
+The *Partner* column below says which roles each behaviour fits: the ones
+that change how the mock answers, or damage what it sends, fit both. The
 mock places orders with a supplier; see [Buying from a
 supplier](#buying-from-a-supplier).
 
-| Behaviour | What the partner does |
-| --- | --- |
-| `accept` | Confirms everything in full and ships what was ordered. |
-| `short-ship` | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
-| `reject-line` | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
-| `reject-all` | Acknowledges the syntax, then refuses the order (`BAK` `RJ`). |
-| `no-ack` | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
-| `duplicate-invoice` | Sends the invoice twice with the same invoice number, as a partner with a retry bug does. |
-| `strict` | Rejects a transaction set for any finding, not only a fatal one. |
-| `out-of-order` | Sends the invoice before the despatch advice and the order response after both — 997, 810, 856, 855 — which is where a buyer's matching usually breaks. The documents still describe one consignment. |
-| `late` | Answers everything an hour late, on top of any configured delay: after the chase-up window rather than never. `POST /_mock/advance?seconds=3601` brings it in. |
-| `corrupt` | Sends every business document with its trailer count (`SE01` or `UNT`) one out, so your translator's own 997 or CONTRL has something to reject. That one fault and no other; its acknowledgments are sound. |
-| `reject-ack` | Rejects every transaction set in its 997 or CONTRL (`AK5*R` with no reason, `UCM` action 4), however clean, and acts on none of them — a partner whose translator is misconfigured. |
-| `no-invoice` | Ships and never invoices, so a three-way match has to give up waiting. |
+| Behaviour | Partner | What the partner does |
+| --- | --- | --- |
+| `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
+| `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
+| `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
+| `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RJ`). |
+| `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
+| `duplicate-invoice` | customer | Sends the invoice twice with the same invoice number, as a partner with a retry bug does. |
+| `strict` | customer or supplier | Rejects a transaction set for any finding, not only a fatal one. |
+| `out-of-order` | customer | Sends the invoice before the despatch advice and the order response after both — 997, 810, 856, 855 — which is where a buyer's matching usually breaks. The documents still describe one consignment. |
+| `late` | customer or supplier | Answers everything an hour late, on top of any configured delay: after the chase-up window rather than never. `POST /_mock/advance?seconds=3601` brings it in. |
+| `corrupt` | customer or supplier | Sends every business document with its trailer count (`SE01` or `UNT`) one out, so your translator's own 997 or CONTRL has something to reject. That one fault and no other; its acknowledgments are sound. |
+| `reject-ack` | customer or supplier | Rejects every transaction set in its 997 or CONTRL (`AK5*R` with no reason, `UCM` action 4), however clean, and acts on none of them — a partner whose translator is misconfigured. |
+| `no-invoice` | customer | Ships and never invoices, so a three-way match has to give up waiting. |
 
 Some rules apply whatever the behaviour says, because they are what real
 sellers actually do. The first that fires wins:
@@ -583,6 +585,32 @@ An interchange that is refused carries its own `error` and leaves the others
 alone; the payload as a whole is `accepted` only when every interchange in it
 was. Over AS2 one MDN answers the whole file, and says *processed* only when
 all of it was. A dropped file is filed as processed on the same terms.
+
+## An order belongs to the partner that placed it
+
+A purchase order number is not an identity: real numbers are unique per buyer,
+and two customers may both use `4500000042`. The mock stores orders by number
+alone, so until it stores them by partner *and* number, a number one partner
+holds is closed to the others.
+
+A change, a cancellation or a restated 850 against an order another partner
+holds is answered exactly as one against an order that does not exist — the
+same words, because a customer has no business learning which numbers its
+competitors use. An 850 placing a new order on a number somebody else holds is
+refused, with an 855 that rejects every line and says *order number already in
+use*:
+
+```
+BAK*00*RJ*4500000042*20260924*****20260927~
+ACK*IR*0*EA~
+REF*ZZ**order number already in use~
+```
+
+Refusing that is wrong in principle and right for now: the alternative is
+replacing the first partner's order, which is what 0.4.0 did — taking its lines
+with it and leaving the despatch and invoice already promised for it pointing
+at goods nobody ordered. The same partner may still send a number again, and it
+replaces its own order as it always has.
 
 ## A replayed interchange is refused
 

@@ -146,6 +146,9 @@ class TheSellerLeavesItAlone(MockServerCase):
     def test_a_customers_850_cannot_replace_it(self):
         summary = self.send(x12_order("PO-PLACED"))
         self.assertEqual(summary["orders"], [])
+        # #131's rule, which covers the mock's own orders as any other's.
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NUMBER_IN_USE])
         self.assertEqual(self.order("PO-PLACED")["direction"], "placed")
         self.assertEqual(self.order("PO-PLACED")["partner"], "NORTHWIND")
 
@@ -157,7 +160,8 @@ class TheSellerLeavesItAlone(MockServerCase):
 
     def test_nor_an_850_restating_it(self):
         summary = self.send(x12_order("PO-PLACED", purpose="04"))  # a restatement
-        self.assertIn("this mock placed", summary["refusals"][0]["reason"])
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NOT_FOUND])
         self.assertEqual(self.order("PO-PLACED")["lines"][0]["quantity"], "100")
 
     def test_and_the_mock_does_not_answer_it_on_demand(self):
@@ -241,7 +245,11 @@ class PlacingOverHttp(BuyingCase):
                          ("placed", "850"))
         interchange = parse(self.sent(schema.ORDER))
         self.assertTrue(validate.validate(interchange).clean)
-        read = transactions.read_order(interchange.groups[0].messages[0], "X12")
+        message = interchange.groups[0].messages[0]
+        # The mock is the buyer and the goods come to it; the supplier sells.
+        self.assertEqual({n1.get(1): n1.get(4) for n1 in message.find_all("N1")},
+                         {"BY": "MOCKEDI", "SE": NORTHWIND, "ST": "MOCKEDI"})
+        read = transactions.read_order(message, "X12")
         self.assertEqual(read.po_number, "4500001001")
         self.assertEqual([(l.sku, l.quantity) for l in read.lines],
                          [("WIDGET-001", Decimal("100")), ("GADGET-042", Decimal("5"))])
@@ -253,8 +261,11 @@ class PlacingOverHttp(BuyingCase):
         self.placed(partner="NORDIC", po_number="PO-EU-1")
         interchange = parse(self.sent(schema.ORDER, "NORDIC"))
         self.assertEqual(interchange.dialect, "EDIFACT")
-        self.assertEqual(transactions.read_order(
-            next(interchange.messages())[1], "EDIFACT").po_number, "PO-EU-1")
+        message = next(interchange.messages())[1]
+        self.assertEqual({nad.get(1): nad.comp(2, 1) for nad in message.find_all("NAD")},
+                         {"BY": "MOCKEDI", "SU": "NORDIC", "DP": "MOCKEDI"})
+        self.assertEqual(transactions.read_order(message, "EDIFACT").po_number,
+                         "PO-EU-1")
 
     def test_the_mock_does_not_order_from_a_customer(self):
         status, _h, data = self.purchase(partner=ACME)
@@ -285,9 +296,11 @@ class PlacingOverHttp(BuyingCase):
 
     def test_changing_an_order_the_mock_did_not_place(self):
         self.send(x12_order("PO-RECEIVED"))
-        status, _h, _data = self.post("/_mock/purchase/PO-RECEIVED/change",
-                                      {"cancel": True})
+        status, _h, data = self.post("/_mock/purchase/PO-RECEIVED/change",
+                                     {"cancel": True})
         self.assertEqual(status, 404)
+        self.assertIn("the mock placed no purchase order 'PO-RECEIVED'", data["error"])
+        self.assertNotEqual(self.order("PO-RECEIVED")["status"], "cancelled")
 
     def test_the_suppliers_997_acknowledges_it(self):
         self.placed(po_number="PO-ACKED")

@@ -87,9 +87,9 @@ If a change touches more than one of these, it is usually two changes.
   own output against its own dictionary.
 - **Documentation that keeps up.** `tools/check_docs.py` fails the build if a
   tracked file has no row in `docs/FILES.md`, if a row names a file that is
-  gone, if a module is missing from the README's layout block, if the README's
-  test count is wrong, or if a command-line flag has no mention in the README's
-  Configuration section. It checks coverage, not prose - keeping the prose
+  gone, if a module is missing from the README's layout block, if a
+  command-line flag has no mention in the README's Configuration section, or
+  if a behaviour has no row in the README's table. It checks coverage, not prose - keeping the prose
   true is on you.
 - **A line in the changelog.** `tools/check_changelog.py` fails a pull request
   that touches `mockedi/` without adding an entry under `## [Unreleased]` - an
@@ -108,6 +108,77 @@ Small, focused pull requests are easier to take than large ones. If you are
 unsure whether something fits, open an issue first and say what you are trying
 to test against the mock - that is usually the fastest way to the right shape.
 
+## How the team works
+
+Several people work on this at once, most of them through one GitHub account,
+so the usual machinery - assignees, approvals - is not available and the
+agreement has to be written down instead. Each rule is here because its
+absence cost something, and says what.
+
+**Claim an issue before you start.** Comment on it: that you are taking it,
+and your approach in a few lines - what you will change, in which files, and
+what you will leave alone. Add the `claimed` label. An issue with no claim is
+free; one with a claim is not, until its owner says so. Two people once built
+the same issue in the same seven files within minutes of each other, because
+a label assigned a queue and nobody had said "mine".
+
+**One issue, one pull request, and split rather than grow.** If the work turns
+out to be two things, open the second issue. A follow-up pull request that
+only adds tests is welcome.
+
+**Decisions live on the issue.** Whoever is closest to the code may overrule
+the issue's text - an issue is written before the code is read closely - but
+says so on the issue, with the reason, before anything else depends on it. A
+session that restarts can then pick up the thread from the tracker rather
+than from a conversation it no longer has.
+
+**Numbers that are shared are assigned on the issue.** The schema version is
+the usual one: if two pieces of work each migrate the database, the issue says
+which takes which number before either writes a migration.
+
+**Some changes need a second reader**, someone other than the author:
+
+| The pull request | Is read by |
+| --- | --- |
+| comes from the junior | the senior |
+| changes what goes on the wire - a writer, the dictionary in `schema.py`, `ack.py`, `envelope.py`, `x12.py`, `edifact.py` | another coder |
+| changes the database schema or a migration in `db.py` | another coder |
+
+Approvals cannot be recorded when everyone is one account, so a review is a
+comment on the pull request that begins `Review:` and says what was read, what
+was run, and what was found. A reviewer reproduces what they report. An
+author shows, in the description, that each new test fails without the
+change. Everything else may merge on green alone - which is fast, and is why
+these two areas are singled out: a wrong byte on the wire and a wrong
+migration are the mistakes a test suite written by the same author does not
+catch. The project's own best test validates the mock's output against its
+own dictionary, and a wrong dictionary passed it.
+
+**Merging.** A pull request merges when it is mergeable, every check has
+passed, and its second reader, if it needs one, has commented. Its author
+merges it; the project manager does when the author cannot. **Merge commits
+only** - `gh pr merge --merge` - and squash and rebase merging are switched
+off on the repository. After a squash or a rebase, git cannot tell a merged
+branch from an unmerged one: a merged branch was once reopened as a duplicate
+pull request for exactly that reason. The branch is deleted when it merges.
+
+**A conflict belongs to the author.** Nobody pushes to a branch someone else
+is working on; if the resolution is not obvious, post the steps on the pull
+request. A pull request that conflicts with `main` runs no CI at all, so
+whatever it says about being green was true of an older `main`. And once a
+review has started, merge `main` in rather than rebasing, so the review's
+comments still point at something.
+
+**One worktree per person.** Never switch the branch of a checkout somebody
+else may be using:
+
+```bash
+git worktree add ../mock-edi-125 -b feat/partner-role origin/main
+```
+
+**Leave nothing running.** A loop that polls for a CI run outlives the session
+that started it. Give it a limit, or stop it when you are done.
+
 ## Reporting a missing or wrong shape
 
 The most useful bug report contains the interchange a real trading partner
@@ -120,6 +191,12 @@ difference is still plenty to work with.
 mock's reading of a document as prose, without changing anything.
 
 ## Releasing (maintainers)
+
+**A release is one step, taken by one person.** The release pull request,
+the tag, the GitHub Release and the check that PyPI has it follow each other
+without a pause. If you cannot finish, do not merge the release pull request:
+once it merges, `main` says a version exists, and until the tag is pushed
+nothing else does. That gap was once several hours long.
 
 `pyproject.toml` is the only place the version is written; `mockedi.__version__`
 reads it back from the installed package metadata.
