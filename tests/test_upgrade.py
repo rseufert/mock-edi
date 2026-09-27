@@ -90,6 +90,57 @@ class From010(FileDatabase):
             conn.close()
 
 
+ROLE_COLUMN = """,
+    -- What the partner is to the mock: a `customer` it sells to, or a
+    -- `supplier` it buys from. The mock's own side (schema.SELLER/BUYER) is
+    -- derived from this in one place, partners.mock_role, never stored.
+    role         TEXT NOT NULL DEFAULT 'customer'
+);"""
+
+
+class From7(FileDatabase):
+    """A version 7 file: partners with no role, all of them customers."""
+
+    def setUp(self):
+        super().setUp()
+        self.assertIn(ROLE_COLUMN, db.SCHEMA,
+                      "the role column moved; rebuild the version 7 schema here")
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(db.SCHEMA.replace(ROLE_COLUMN, "\n);"))
+        conn.executescript(db.INDEXES)
+        for pid, behaviour in (("ACME", "accept"), ("GLOBEX", "short-ship")):
+            conn.execute("INSERT INTO partner (id, name, behaviour)"
+                         " VALUES (?, ?, ?)", (pid, pid.title(), behaviour))
+        conn.execute("PRAGMA user_version = 7")
+        conn.commit()
+        conn.close()
+
+    def test_every_partner_it_held_is_a_customer(self):
+        httpd, _base = self.serve()
+        with httpd.mock.lock:
+            rows = httpd.mock.conn.execute(
+                "SELECT id, role, behaviour FROM partner ORDER BY id").fetchall()
+        self.assertEqual([tuple(row) for row in rows],
+                         [("ACME", "customer", "accept"),
+                          ("GLOBEX", "customer", "short-ship")])
+
+    def test_no_supplier_is_added_to_a_file_that_has_partners(self):
+        # Seeding is for an empty database; a file keeps the partners it had.
+        httpd, _base = self.serve()
+        with httpd.mock.lock:
+            count = httpd.mock.conn.execute(
+                "SELECT COUNT(*) FROM partner WHERE role = 'supplier'").fetchone()[0]
+        self.assertEqual(count, 0)
+
+    def test_the_upgrade_adds_the_role_and_marks_it_8(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            self.assertEqual(db.upgrade(conn, self.db_path), ["partner.role"])
+        finally:
+            conn.close()
+        self.assertEqual(self.user_version(), 8)
+
+
 class FromANewerMock(FileDatabase):
     def test_it_is_refused_with_the_file_and_both_versions(self):
         conn = sqlite3.connect(self.db_path)
@@ -108,11 +159,11 @@ class FromANewerMock(FileDatabase):
 
 
 class TheVersionMovesWithTheSchema(unittest.TestCase):
-    # The schema as of SCHEMA_VERSION 7. When this fails, the schema has
+    # The schema as of SCHEMA_VERSION 8. When this fails, the schema has
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (7, "5346d82f12963e7d")
+    FINGERPRINT = (8, "e3548c3ea59edeaf")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())

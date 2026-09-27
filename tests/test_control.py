@@ -17,7 +17,7 @@ class Health(MockServerCase):
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "ok")
         self.assertEqual(data["as2Id"], "MOCKEDI")
-        self.assertEqual(data["partners"], 4)
+        self.assertEqual(data["partners"], 5)       # four customers, one supplier
 
     def test_state_counts_everything_and_shows_the_queue(self):
         self.send(x12_order("PO-STATE"))
