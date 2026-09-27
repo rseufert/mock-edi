@@ -8,21 +8,27 @@ says so where it does.
 
 ## [Unreleased]
 
-### Added
+Entries waiting for a release are one file each in
+[`changelog.d/`](changelog.d/), so that two pull requests adding an entry
+cannot conflict. `tools/check_changelog.py --release X.Y.Z` assembles them
+into a dated section here.
 
-- **The mock buys from a supplier** ([#125]). `POST /_mock/purchase` places
-  an order with a partner whose `role` is `supplier`: it is stored with a new
-  `direction`, `placed` rather than `received`, and an 850 or ORDERS goes out
-  through the same queue, delays and delivery as anything else the mock
-  sends. `POST /_mock/purchase/<po>/change` changes or cancels it with an 860
-  or ORDCHG. The pipeline now takes the mock's side from the partner's role:
-  a supplier's 855, 856, 810 and 865 are accepted, acknowledged and filed
-  under the order they name, listed under `filed` in the receipt, and shown in
-  the order's timeline after the order going out. One naming an order the
-  mock never placed with that supplier is rejected at the order number's
-  element in the 997 or CONTRL. Nothing about a customer has changed.
-  **The schema version is now 9**; a file database is upgraded in place, and
-  every order it held was received.
+## [0.5.0] - 2026-09-27
+
+Released for the fix: in 0.4.0 one customer could change, cancel or replace
+another customer's order, because an order is found by its number and a
+number is unique only to the buyer that issued it. Anyone running several
+partners against one mock should upgrade. An 850 that names a number another
+partner already holds is now refused, which is a change in behaviour and a
+stopgap; holding both orders is the next step.
+
+The rest is the first of the mock buying as well as selling (#116), none of
+which acts yet: a partner has a role, each behaviour says which roles it
+fits, and the 850 and 860 can be written. `Mock.exchange` runs two mocks
+against each other to a stop. A file database is upgraded in place to schema
+version 8.
+
+### Added
 
 - **Each behaviour says which partner roles it fits** ([#127]).
   `db.BEHAVIOUR_ROLES` records it once, and everything else reads it: the
@@ -48,6 +54,20 @@ says so where it does.
   recorded and shown; nothing yet acts on it.
   **The schema version is now 8**: a file database is upgraded in place, and
   every partner it held is a customer.
+
+- **`Mock.exchange`** ([#141]), which runs a conversation between two mocks to
+  a stop. `settle` drains one mock and waits for its own outbox; two mocks
+  talking are a rally, and neither side is finished until both are. Worse, two
+  kinds of work are never `ready` however often you settle - a `pending` row in
+  the outbox, and an undone promise in the schedule, where a delayed invoice
+  waits because a delay postpones the work rather than the posting. Both looked
+  like a document that had been lost. `exchange` moves each clock, settles each
+  mock, and stops when a pass changes nothing; it raises with what each side is
+  still holding rather than hanging. `advance=False` is for a test about *when*
+  rather than about what.
+
+  `Mock.scheduled()` comes with it, because a test waiting for a promise was
+  reaching for a raw `GET` of `/_mock/scheduled?all`.
 
 - **`transactions.write_order` and `write_change`** ([#125]), the 850 and the
   860 - ORDERS and ORDCHG - which the mock had no way to produce: the only
@@ -986,6 +1006,7 @@ documents a real one sends.
 [#122]: https://github.com/rseufert/mock-edi/issues/122
 [#125]: https://github.com/rseufert/mock-edi/issues/125
 [#131]: https://github.com/rseufert/mock-edi/issues/131
+[#141]: https://github.com/rseufert/mock-edi/issues/141
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
@@ -1030,7 +1051,8 @@ documents a real one sends.
 [#117]: https://github.com/rseufert/mock-edi/issues/117
 [#127]: https://github.com/rseufert/mock-edi/issues/127
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rseufert/mock-edi/compare/v0.2.1...v0.3.0

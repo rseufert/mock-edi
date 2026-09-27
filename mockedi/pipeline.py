@@ -262,10 +262,12 @@ class Pipeline:
                         self._apply_change(
                             partner, transactions.change_from_order(order, held),
                             receipt)
-                    elif known is not None and not documents.belongs_to(known,
-                                                                        partner):
-                        # Somebody else's number, and this order means to take
-                        # it. Recording it would replace their order and leave
+                    elif known is not None and (
+                            not documents.belongs_to(known, partner)
+                            or known["direction"] == documents.PLACED):
+                        # Somebody else's number, or one the mock placed with
+                        # this partner when it was a supplier, and this order
+                        # means to take it. Recording it would replace their order and leave
                         # the despatch and invoice promised for it pointing at
                         # lines they never sent.
                         #

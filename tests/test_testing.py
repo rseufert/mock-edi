@@ -165,6 +165,70 @@ class WaitingForDelivery(unittest.TestCase):
             self.assertTrue(any(row["status"] == "ready" for row in rows))
 
 
+
+class PushingAConversationThrough(unittest.TestCase):
+    """`exchange`, which exists because every author discovered it the hard way.
+
+    Two mocks are a rally, and two kinds of work are not `ready` however often
+    you settle: a `pending` row in the outbox, and an undone promise in the
+    schedule. A test should not have to know which, or how many alternating
+    calls it takes.
+    """
+
+    def test_an_idle_mock_converges_at_once(self):
+        with Mock.start() as mock:
+            mock.exchange()
+
+    def test_a_mailbox_partner_does_not_hang_it(self):
+        # Those documents stay ready until something collects them, which is
+        # not a conversation waiting to finish.
+        with Mock.start() as mock:
+            mock.send(x12_order("EX-MAIL"))
+            mock.exchange()
+            self.assertTrue(mock.outbox())
+
+    def test_it_keeps_a_promise_the_clock_was_hiding(self):
+        # The case no amount of settling reaches: the invoice does not exist
+        # yet, so it cannot be pending - it is a row in the schedule.
+        with Mock.start(invoice_delay_ms=3600 * 1000) as mock:
+            mock.send(x12_order("EX-PROMISE"))
+            self.assertEqual([row["kind"] for row
+                              in mock.scheduled(pending_only=True)],
+                             ["invoice"])
+            mock.exchange()
+            self.assertEqual(mock.scheduled(pending_only=True), [])
+            self.assertTrue([row for row in mock.outbox()
+                             if row["code"] == "810"])
+
+    def test_advance_false_leaves_the_clock_where_it_was(self):
+        # For a test about *when* rather than about what.
+        with Mock.start(invoice_delay_ms=3600 * 1000) as mock:
+            mock.send(x12_order("EX-WHEN"))
+            mock.exchange(advance=False)
+            self.assertEqual([row["kind"] for row
+                              in mock.scheduled(pending_only=True)],
+                             ["invoice"])
+
+    def test_it_reports_what_is_still_held_rather_than_hanging(self):
+        # A rally with no end is a bug in the test or in the mock. Zero passes
+        # is the cheapest way to reach that branch without writing one.
+        with Mock.start() as mock:
+            mock.send(x12_order("EX-STUCK"))
+            with self.assertRaises(MockError) as caught:
+                mock.exchange(passes=0)
+            self.assertIn("still talking", str(caught.exception))
+            self.assertIn("holding", caught.exception.body)
+
+    def test_the_schedule_is_readable_without_a_raw_get(self):
+        with Mock.start(invoice_delay_ms=3600 * 1000) as mock:
+            mock.send(x12_order("EX-SCHED"))
+            every = mock.scheduled()
+            open_only = mock.scheduled(pending_only=True)
+            self.assertTrue(every)
+            self.assertLess(len(open_only), len(every))
+            self.assertTrue(all(not row["done_at"] for row in open_only))
+
+
 class TheQueryBuilder(unittest.TestCase):
     """This control plane spells a flag as a bare word, not `?flag=true`."""
 
