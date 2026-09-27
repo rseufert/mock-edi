@@ -8,7 +8,20 @@ says so where it does.
 
 ## [Unreleased]
 
-Nothing yet.
+### Added
+
+- **`transactions.write_order` and `write_change`** ([#125]), the 850 and the
+  860 - ORDERS and ORDCHG - which the mock had no way to produce: the only
+  850s in the repository were built by hand in `tests/support.py` and
+  `examples/`. Nothing calls them yet; they are the first piece of the mock
+  becoming a buyer, and `read_order` and `read_change` are the test.
+
+  The hard part is not the segments. A seller writes itself as `SU`/`SE` and
+  its partner as `BY`; an order the mock *places* is the other way round, and
+  a document with those swapped validates perfectly while naming the wrong
+  company as the customer. The flip lives in two helpers of its own rather
+  than in a parameter to the seller's, and several tests exist only to hold it
+  down.
 
 ## [0.4.0] - 2026-09-26
 
@@ -910,6 +923,7 @@ documents a real one sends.
 [#113]: https://github.com/rseufert/mock-edi/issues/113
 [#114]: https://github.com/rseufert/mock-edi/issues/114
 [#122]: https://github.com/rseufert/mock-edi/issues/122
+[#125]: https://github.com/rseufert/mock-edi/issues/125
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
