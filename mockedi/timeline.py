@@ -27,6 +27,11 @@ from . import db
 # endpoints.
 RANK = {"received": 0, "ordered": 1, "promised": 2, "packed": 3,
         "invoiced": 4, "sent": 5, "acknowledged": 6}
+# An order the mock placed runs the other way: the order is recorded, the 850
+# goes out, and everything the supplier sends answers it. Documents in one
+# second keep the order they were archived in, which is the order they
+# happened in.
+PLACED_RANK = dict(RANK, ordered=0, sent=1, received=1, acknowledged=2)
 
 
 def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]]:
@@ -42,7 +47,8 @@ def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]
     events.extend(_promised(conn, po_number))
     events.extend(_packed(conn, po_number))
     events.extend(_invoiced(conn, po_number))
-    events.sort(key=lambda event: (event["at"], RANK[event["event"]],
+    rank = PLACED_RANK if order["direction"] == "placed" else RANK
+    events.sort(key=lambda event: (event["at"], rank[event["event"]],
                                    event.pop("_id")))
     return {"order": po_number, "partner": order["partner"],
             "direction": order["direction"], "status": order["status"],

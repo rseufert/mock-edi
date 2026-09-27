@@ -319,6 +319,19 @@ class WhatComesBack(BuyingCase):
         received = [e["code"] for e in data["events"] if e["event"] == "received"]
         self.assertEqual(received, ["855", "856", "810"])
 
+    def test_the_timeline_has_them_after_the_order_that_prompted_them(self):
+        # All inside one second, as they are when nothing is delayed: the
+        # tie-break must not put the supplier's answer before the question.
+        for kind in (schema.RESPONSE, schema.DESPATCH, schema.INVOICE):
+            self.send(supplier_sends(kind, "PO-BUY"))
+        _s, _h, data = self.get("/_mock/orders/PO-BUY/timeline")
+        self.assertEqual([(e["event"], e.get("code")) for e in data["events"]
+                          if e["event"] in ("ordered", "sent", "received")],
+                         [("ordered", None), ("sent", "850"),
+                          ("received", "855"), ("sent", "997"),
+                          ("received", "856"), ("sent", "997"),
+                          ("received", "810"), ("sent", "997")])
+
     def test_and_each_is_acknowledged(self):
         self.send(supplier_sends(schema.DESPATCH, "PO-BUY"))
         ack = parse(self.sent(schema.ACKNOWLEDGMENT))
