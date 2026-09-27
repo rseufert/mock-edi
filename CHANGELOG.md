@@ -8,6 +8,23 @@ says so where it does.
 
 ## [Unreleased]
 
+Nothing yet.
+
+## [0.5.0] - 2026-09-27
+
+Released for the fix: in 0.4.0 one customer could change, cancel or replace
+another customer's order, because an order is found by its number and a
+number is unique only to the buyer that issued it. Anyone running several
+partners against one mock should upgrade. An 850 that names a number another
+partner already holds is now refused, which is a change in behaviour and a
+stopgap; holding both orders is the next step.
+
+The rest is the first of the mock buying as well as selling (#116), none of
+which acts yet: a partner has a role, each behaviour says which roles it
+fits, and the 850 and 860 can be written. `Mock.exchange` runs two mocks
+against each other to a stop. A file database is upgraded in place to schema
+version 8.
+
 ### Added
 
 - **Each behaviour says which partner roles it fits** ([#127]).
@@ -1031,7 +1048,8 @@ documents a real one sends.
 [#117]: https://github.com/rseufert/mock-edi/issues/117
 [#127]: https://github.com/rseufert/mock-edi/issues/127
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/rseufert/mock-edi/compare/v0.2.1...v0.3.0
