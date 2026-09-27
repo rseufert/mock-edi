@@ -10,6 +10,20 @@ says so where it does.
 
 ### Added
 
+- **`Mock.exchange`** ([#141]), which runs a conversation between two mocks to
+  a stop. `settle` drains one mock and waits for its own outbox; two mocks
+  talking are a rally, and neither side is finished until both are. Worse, two
+  kinds of work are never `ready` however often you settle - a `pending` row in
+  the outbox, and an undone promise in the schedule, where a delayed invoice
+  waits because a delay postpones the work rather than the posting. Both looked
+  like a document that had been lost. `exchange` moves each clock, settles each
+  mock, and stops when a pass changes nothing; it raises with what each side is
+  still holding rather than hanging. `advance=False` is for a test about *when*
+  rather than about what.
+
+  `Mock.scheduled()` comes with it, because a test waiting for a promise was
+  reaching for a raw `GET` of `/_mock/scheduled?all`.
+
 - **`transactions.write_order` and `write_change`** ([#125]), the 850 and the
   860 - ORDERS and ORDCHG - which the mock had no way to produce: the only
   850s in the repository were built by hand in `tests/support.py` and
@@ -947,6 +961,7 @@ documents a real one sends.
 [#122]: https://github.com/rseufert/mock-edi/issues/122
 [#125]: https://github.com/rseufert/mock-edi/issues/125
 [#131]: https://github.com/rseufert/mock-edi/issues/131
+[#141]: https://github.com/rseufert/mock-edi/issues/141
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
