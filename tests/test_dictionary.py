@@ -190,6 +190,16 @@ class EveryWrittenSegmentAgainstTheStandard(unittest.TestCase):
         self.check("EDIFACT", self.EDIFACT)
 
 
+
+def _wrap(dialect, code, body, group, when):
+    """One message in an interchange, so it can be validated as one arrives."""
+    if dialect == "X12":
+        return x12.wrap([x12.message(code, "0001", body)], "MOCKEDI",
+                        "NORTHWIND", "1", "1", group, moment=when)
+    return edifact.wrap([edifact.message(code, "1", body, version="D:96A:UN")],
+                        "MOCKEDI", "NORTHWIND", "1", moment=when)
+
+
 class GeneratedDocumentsAreValid(unittest.TestCase):
     """Everything the mock writes passes the checks it applies to what it reads."""
 
@@ -254,6 +264,72 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
         finally:
             self.config.despatch_delay_ms = 0
             self.config.invoice_delay_ms = 0
+
+
+    def test_an_order_the_mock_writes_validates(self):
+        """The two writers the mock does not use yet.
+
+        `write_order` and `write_change` are the buyer's side, so no pipeline
+        produces them and `_run` cannot reach them. They are held to the same
+        standard here: what they write passes the dictionary.
+        """
+        from mockedi import transactions
+        from mockedi.transactions import Party
+        us = Party(name="Mock EDI Buying Co", identifier="MOCKEDI",
+                   street="500 Seaport Boulevard", city="Boston", region="MA",
+                   postal="02210", country="US")
+        partner = {"id": "NORTHWIND", "name": "Northwind Traders",
+                   "street": "12 Harbour Way", "city": "Seattle",
+                   "region": "WA", "postal": "98101", "country": "US"}
+        order = {"po_number": "4500009001", "ordered_on": "2026-10-01",
+                 "requested_on": "2026-10-15", "currency": "USD"}
+        lines = [{"line": "1", "sku": "WIDGET-001", "upc": "076123400003",
+                  "quantity": "100", "uom": "EA", "price": "12.50",
+                  "description": "Widget, blue, 40mm"},
+                 {"line": "2", "sku": "BRKT-050", "quantity": "40",
+                  "uom": "CA", "price": "4.15"}]
+        when = datetime.datetime(2026, 10, 1, 9, 30)
+
+        for dialect, code, group in (("X12", "850", "PO"),
+                                     ("EDIFACT", "ORDERS", "")):
+            with self.subTest(dialect=dialect, code=code):
+                body = transactions.write_order(dialect, us, partner, order,
+                                                lines, when)
+                interchange = _wrap(dialect, code, body, group, when)
+                report = validate.validate(interchange)
+                self.assertTrue(report.clean, "\n".join(ack.explain(report)))
+
+    def test_a_change_the_mock_writes_validates(self):
+        from decimal import Decimal as D
+
+        from mockedi import transactions
+        from mockedi.transactions import Change, ChangeLine, Party
+        us = Party(name="Mock EDI Buying Co", identifier="MOCKEDI")
+        partner = {"id": "NORTHWIND", "name": "Northwind Traders"}
+        order = {"po_number": "4500009002", "ordered_on": "2026-10-01",
+                 "currency": "USD"}
+        when = datetime.datetime(2026, 10, 5, 11, 0)
+        for purpose in ("04", "01"):
+            change = Change(po_number="4500009002", purpose=purpose,
+                            sequence="2",
+                            changed_on=datetime.date(2026, 10, 5),
+                            ordered_on=datetime.date(2026, 10, 1),
+                            currency="USD",
+                            lines=[ChangeLine(number="1", sku="WIDGET-001",
+                                              quantity=D("60"), uom="EA",
+                                              price=D("12.50"), action="QD"),
+                                   ChangeLine(number="2", sku="BRKT-050",
+                                              quantity=D("0"), uom="EA",
+                                              price=D("0.00"), action="DI")])
+            for dialect, code, group in (("X12", "860", "PC"),
+                                         ("EDIFACT", "ORDCHG", "")):
+                with self.subTest(dialect=dialect, purpose=purpose):
+                    body = transactions.write_change(dialect, us, partner,
+                                                     order, change, when)
+                    interchange = _wrap(dialect, code, body, group, when)
+                    report = validate.validate(interchange)
+                    self.assertTrue(report.clean,
+                                    "\n".join(ack.explain(report)))
 
     def test_every_partner_and_every_behaviour(self):
         """Every seeded partner, under every behaviour: what it writes validates.

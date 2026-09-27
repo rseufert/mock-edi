@@ -20,17 +20,26 @@ Six documents each way:
 
 | Read                   | Write                   | X12 | EDIFACT |
 | ---------------------- | ----------------------- | --- | ------- |
-| `read_order`           |                         | 850 | ORDERS  |
-| `read_change`          |                         | 860 | ORDCHG  |
+| `read_order`           | `write_order`           | 850 | ORDERS  |
+| `read_change`          | `write_change`          | 860 | ORDCHG  |
 | `read_response`        | `write_response`        | 855 | ORDRSP  |
 | `read_despatch`        | `write_despatch`        | 856 | DESADV  |
 | `read_invoice`         | `write_invoice`         | 810 | INVOIC  |
 | `read_change_response` | `write_change_response` | 865 | ORDRSP  |
 
 The mock is the seller, so it reads the first two and writes the last four.
-The readers on the right-hand rows are the other direction of each: nothing
-here calls them, and a buyer needs every one. They are held to the writers by
-`ReadersInvertTheWriters` and to everybody else by `tests/test_readers.py`.
+The other direction of each exists too, for the buyer the mock is becoming:
+nothing in the pipeline calls `write_order`, `write_change` or the four
+readers yet, and a buyer needs all six. Each pair is held to the other -
+`ReadersInvertTheWriters` and `tests/test_order_writers.py` - and to
+everybody else by `tests/test_readers.py`.
+
+The one asymmetry worth knowing about is party roles. A seller writes itself
+as `SU`/`SE` and its partner as `BY`; `write_order` and `write_change` are
+the other way round, because the mock is the customer there. A document with
+those swapped validates perfectly and names the wrong company, so the flip
+lives in `_buyer_parties_x12` and `_buyer_parties_edifact` where it can be
+seen, rather than in a parameter to the seller's helpers.
 """
 from __future__ import annotations
 
@@ -1011,6 +1020,203 @@ def _edifact_ordrsp_change(us: Party, partner: Dict, order: Dict,
             item.elements[1] = actions[item.get(1)]
     return body
 
+
+
+# ---------------------------------------------------------------------------
+# Writing an order, and a change to one
+#
+# The other four writers above are the seller's: the mock answers an order it
+# was sent.  These two are the buyer's, for the partner the mock buys from -
+# and the difference that matters is not the segments, it is which side of
+# every party role the mock is on.  A seller writes itself as SU and its
+# partner as BY; here it is the other way round, and getting that backwards
+# produces a document that validates perfectly and names the wrong company as
+# the customer.
+#
+# Nothing in the mock calls these yet; the pipeline that will is #125's own
+# wiring. They are pure, and `read_order` and `read_change` are the test.
+# ---------------------------------------------------------------------------
+
+def write_order(dialect: str, us: Party, partner: Dict, order: Dict,
+                lines: Sequence[Dict], when: datetime.datetime) -> List[Seg]:
+    """An 850 or an ORDERS: what the mock is ordering, and from whom."""
+    builder = _x12_850 if dialect == "X12" else _edifact_orders
+    return builder(us, partner, order, lines, when)
+
+
+def write_change(dialect: str, us: Party, partner: Dict, order: Dict,
+                 change: Change, when: datetime.datetime) -> List[Seg]:
+    """An 860 or an ORDCHG: what the mock wants changed about an order."""
+    builder = _x12_860 if dialect == "X12" else _edifact_ordchg
+    return builder(us, partner, order, change, when)
+
+
+def _buyer_parties_x12(us: Party, partner: Dict, order: Dict) -> List[Seg]:
+    """BY is the mock, SE the supplier, ST wherever the goods are to go.
+
+    The mirror of `_x12_parties`, which writes the mock as the seller. Kept
+    separate rather than bent into that one, because the flip is the thing a
+    reader of this file needs to see.
+    """
+    out: List[Seg] = [seg("N1", "BY", us.name, "92", us.identifier)]
+    if us.street:
+        out.append(seg("N3", us.street))
+        out.append(seg("N4", us.city, us.region, us.postal, us.country))
+    out.append(seg("N1", "SE", partner.get("name") or "", "92",
+                   partner.get("id") or ""))
+    if partner.get("street"):
+        out.append(seg("N3", partner["street"]))
+        out.append(seg("N4", partner.get("city") or "",
+                       partner.get("region") or "",
+                       partner.get("postal") or "",
+                       partner.get("country") or "US"))
+    # Where it is to be delivered. A buyer that names no other address is
+    # ordering to itself, which is the common case and worth writing out
+    # rather than leaving the supplier to assume.
+    out.append(seg("N1", "ST", order.get("ship_to_name") or us.name, "92",
+                   order.get("ship_to_id") or us.identifier))
+    street = order.get("ship_to_street") or us.street
+    if street:
+        out.append(seg("N3", street))
+        out.append(seg("N4", order.get("ship_to_city") or us.city,
+                       order.get("ship_to_region") or us.region,
+                       order.get("ship_to_postal") or us.postal,
+                       order.get("ship_to_country") or us.country or "US"))
+    return out
+
+
+def _order_line_x12(row: Dict) -> List[Seg]:
+    out = [seg("PO1", row["line"], quantity_text(number(row["quantity"])),
+               row["uom"], price_text(number(row.get("price"), "0.00")), "",
+               "VP", row["sku"],
+               *(("UP", row["upc"]) if row.get("upc") else ()))]
+    if row.get("description"):
+        out.append(seg("PID", "F", "", "", "", row["description"]))
+    # A real 850 often dates each line too. Not written here: `Line` has no
+    # field for a line-level date, so nothing would read it back and no
+    # round-trip could check it. Give `Line` the field first.
+    return out
+
+
+def _x12_850(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
+             when: datetime.datetime) -> List[Seg]:
+    out: List[Seg] = [seg(
+        "BEG", order.get("purpose") or "00", "SA", order["po_number"], "",
+        _iso(order.get("ordered_on")) or when.strftime("%Y%m%d"))]
+    out.append(seg("CUR", "BY", order.get("currency") or "USD"))
+    if order.get("requested_on"):
+        out.append(seg("DTM", "002", _iso(order["requested_on"])))
+    out.extend(_buyer_parties_x12(us, partner, order))
+    for row in lines:
+        out.extend(_order_line_x12(row))
+    out.append(seg("CTT", str(len(lines))))
+    return out
+
+
+def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
+             when: datetime.datetime) -> List[Seg]:
+    out: List[Seg] = [seg(
+        "BCH", change.purpose or "04", "SA", change.po_number or order["po_number"],
+        "", change.sequence or "1",
+        date_text(change.changed_on) or when.strftime("%Y%m%d"),
+        "", "", "",
+        # BCH10 is the date of the order being changed, not of the change.
+        date_text(change.ordered_on) or _iso(order.get("ordered_on")))]
+    out.append(seg("CUR", "BY", change.currency or order.get("currency") or "USD"))
+    for line in change.lines:
+        out.append(seg("POC", line.number, line.action,
+                       quantity_text(line.quantity), "", line.uom,
+                       price_text(line.price), "",
+                       "VP", line.sku,
+                       *(("UP", line.upc) if line.upc else ())))
+        if line.description:
+            out.append(seg("PID", "F", "", "", "", line.description))
+    out.append(seg("CTT", str(len(change.lines))))
+    return out
+
+
+def _buyer_parties_edifact(us: Party, partner: Dict, order: Dict) -> List[Seg]:
+    """BY is the mock, SU the supplier, DP where the goods are to go."""
+    out = [_nad("BY", us.identifier, us.name, us.street, us.city, us.region,
+                us.postal, us.country),
+           _nad("SU", partner.get("id") or "", partner.get("name") or "",
+                partner.get("street") or "", partner.get("city") or "",
+                partner.get("region") or "", partner.get("postal") or "",
+                partner.get("country") or "")]
+    out.append(_nad("DP", order.get("ship_to_id") or us.identifier,
+                    order.get("ship_to_name") or us.name,
+                    order.get("ship_to_street") or us.street,
+                    order.get("ship_to_city") or us.city,
+                    order.get("ship_to_region") or us.region,
+                    order.get("ship_to_postal") or us.postal,
+                    order.get("ship_to_country") or us.country))
+    return out
+
+
+def _edifact_order_line(row: Dict) -> List[Seg]:
+    unit = _edifact_unit(row["uom"])
+    out = [seg("LIN", row["line"], "", [row["sku"], "VP"])]
+    if row.get("upc"):
+        out.append(seg("PIA", "1", [row["upc"], "UP"]))
+    if row.get("description"):
+        out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+    out.append(seg("QTY", ["21", quantity_text(number(row["quantity"])), unit]))
+    out.append(seg("PRI", ["AAA", price_text(number(row.get("price"), "0.00"))]))
+    return out
+
+
+def _edifact_orders(us: Party, partner: Dict, order: Dict,
+                    lines: Sequence[Dict], when: datetime.datetime) -> List[Seg]:
+    out: List[Seg] = [seg("BGM", ["220"], [order["po_number"]], "9")]
+    out.append(seg("DTM", ["137", _iso(order.get("ordered_on"))
+                           or when.strftime("%Y%m%d"), "102"]))
+    if order.get("requested_on"):
+        out.append(seg("DTM", ["2", _iso(order["requested_on"]), "102"]))
+    out.extend(_buyer_parties_edifact(us, partner, order))
+    out.append(seg("CUX", ["2", order.get("currency") or "EUR", "9"]))
+    for row in lines:
+        out.extend(_edifact_order_line(row))
+    out.append(seg("UNS", "S"))
+    out.append(seg("CNT", ["2", str(len(lines))]))
+    return out
+
+
+def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
+                    when: datetime.datetime) -> List[Seg]:
+    """An ORDCHG.
+
+    EDIFACT says "change" and "cancel" in BGM's 1225 rather than in a purpose
+    code of its own, and carries the change's sequence as C106's third
+    component - which is what `_read_change_edifact` reads it back out of.
+    """
+    po_number = change.po_number or order["po_number"]
+    # 230 is "Purchase order change request" in 1001, which is what an ORDCHG
+    # is; 1225 then says whether this one changes the order or withdraws it.
+    # 4 rather than 5: "change" is what a buyer amending some lines means, and
+    # "replace" would tell the supplier to read the message as the whole order.
+    out: List[Seg] = [seg(
+        "BGM", ["230"], [po_number, "", change.sequence or "1"],
+        "1" if change.cancels else "4")]
+    out.append(seg("DTM", ["137", date_text(change.changed_on)
+                           or when.strftime("%Y%m%d"), "102"]))
+    out.append(seg("RFF", ["ON", po_number]))
+    out.extend(_buyer_parties_edifact(us, partner, order))
+    out.append(seg("CUX", ["2", change.currency or order.get("currency")
+                           or "EUR", "9"]))
+    for line in change.lines:
+        unit = _edifact_unit(line.uom)
+        out.append(seg("LIN", line.number,
+                       CHANGE_TO_EDIFACT_ACTION.get(line.action, "3"),
+                       [line.sku, "VP"]))
+        if line.upc:
+            out.append(seg("PIA", "1", [line.upc, "UP"]))
+        if line.description:
+            out.append(seg("IMD", "F", "", ["", "", "", line.description]))
+        out.append(seg("QTY", ["21", quantity_text(line.quantity), unit]))
+        out.append(seg("PRI", ["AAA", price_text(line.price)]))
+    out.append(seg("UNS", "S"))
+    out.append(seg("CNT", ["2", str(len(change.lines))]))
+    return out
 
 # ---------------------------------------------------------------------------
 # Reading the answers
