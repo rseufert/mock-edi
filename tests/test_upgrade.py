@@ -96,6 +96,8 @@ ROLE_COLUMN = """,
     -- derived from this in one place, partners.mock_role, never stored.
     role         TEXT NOT NULL DEFAULT 'customer'
 );"""
+# Version 9's, which a version 7 file does not have either.
+DIRECTION_COLUMN = "\n    direction    TEXT NOT NULL DEFAULT 'received',"
 
 
 class From7(FileDatabase):
@@ -103,10 +105,12 @@ class From7(FileDatabase):
 
     def setUp(self):
         super().setUp()
-        self.assertIn(ROLE_COLUMN, db.SCHEMA,
-                      "the role column moved; rebuild the version 7 schema here")
+        for column in (ROLE_COLUMN, DIRECTION_COLUMN):
+            self.assertIn(column, db.SCHEMA,
+                          "a column moved; rebuild the version 7 schema here")
         conn = sqlite3.connect(self.db_path)
-        conn.executescript(db.SCHEMA.replace(ROLE_COLUMN, "\n);"))
+        conn.executescript(db.SCHEMA.replace(ROLE_COLUMN, "\n);")
+                           .replace(DIRECTION_COLUMN, ""))
         conn.executescript(db.INDEXES)
         for pid, behaviour in (("ACME", "accept"), ("GLOBEX", "short-ship")):
             conn.execute("INSERT INTO partner (id, name, behaviour)"
@@ -132,13 +136,15 @@ class From7(FileDatabase):
                 "SELECT COUNT(*) FROM partner WHERE role = 'supplier'").fetchone()[0]
         self.assertEqual(count, 0)
 
-    def test_the_upgrade_adds_the_role_and_marks_it_8(self):
+    def test_the_upgrade_adds_the_role_and_marks_it_current(self):
         conn = sqlite3.connect(self.db_path)
         try:
-            self.assertEqual(db.upgrade(conn, self.db_path), ["partner.role"])
+            added = db.upgrade(conn, self.db_path)
         finally:
             conn.close()
-        self.assertEqual(self.user_version(), 8)
+        # Version 8 added the role, and 9 an order's direction.
+        self.assertEqual(added, ["partner.role", "purchase_order.direction"])
+        self.assertEqual(self.user_version(), db.SCHEMA_VERSION)
 
 
 class FromANewerMock(FileDatabase):
