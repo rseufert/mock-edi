@@ -481,5 +481,58 @@ class ABehaviourOnASupplier(BuyingCase):
         self.assertTrue(validate.validate(parse(self.acks()[-1]["payload"])).clean)
 
 
+class ASupplierTurnedCustomer(BuyingCase):
+    """The review's reproduction on #133: a role changed under a placed order.
+
+    #134's ownership check keeps other partners off an order the mock placed,
+    because the order is the supplier's. It says nothing when the supplier
+    itself becomes a customer. What the mock bought from it is still not an
+    order it sold to it, and nothing on the seller's side may touch it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.placed(po_number="PO-FLIP")
+        self.before = self.order("PO-FLIP")
+        status, _h, data = self.patch("/_mock/partners/NORTHWIND",
+                                      {"role": "customer"})
+        self.assertEqual(status, 200, data)
+
+    def unchanged(self):
+        after = self.order("PO-FLIP")
+        self.assertEqual((after["direction"], after["status"], after["total"]),
+                         ("placed", "placed", self.before["total"]))
+        self.assertEqual([row["quantity"] for row in after["lines"]],
+                         [row["quantity"] for row in self.before["lines"]])
+        codes = [row["code"] for row in self.mailbox(NORTHWIND)]
+        self.assertNotIn("865", codes)
+        self.assertNotIn("855", codes)
+
+    def test_its_860_cannot_cancel_it(self):
+        summary = self.send(x12_change("PO-FLIP", lines=[("1", "CA", 0, "0")],
+                                       purpose="01", sender=NORTHWIND))
+        self.assertEqual(summary["changed"], [])
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NOT_FOUND])
+        self.unchanged()
+
+    def test_nor_change_it(self):
+        self.send(x12_change("PO-FLIP", lines=[("1", "QD", 5, "12.50")],
+                             sender=NORTHWIND))
+        self.unchanged()
+
+    def test_nor_restate_it(self):
+        self.send(x12_order("PO-FLIP", sender=NORTHWIND, purpose="04"))
+        self.unchanged()
+
+    def test_nor_replace_it_with_an_order_of_its_own(self):
+        summary = self.send(x12_order("PO-FLIP", sender=NORTHWIND))
+        self.assertEqual(summary["orders"], [])
+        self.assertEqual([r["reason"] for r in summary["refusals"]],
+                         [documents.NUMBER_IN_USE])
+        self.assertEqual(self.order("PO-FLIP")["direction"], "placed")
+        self.assertEqual(self.order("PO-FLIP")["lines"][0]["quantity"], "100")
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)
