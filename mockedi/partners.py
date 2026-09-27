@@ -48,8 +48,29 @@ FIELDS = {
     "name": "", "qualifier": "ZZ", "dialect": "X12", "version": "004010",
     "behaviour": "accept", "as2_url": "", "mdn_mode": "sync",
     "street": "", "city": "", "region": "", "postal": "", "country": "US",
-    "duns": "", "test": 1,
+    "duns": "", "test": 1, "role": "customer",
 }
+
+# What a partner is to the mock: a customer it sells to - every partner there
+# was before there were two - or a supplier it buys from.
+#
+# Two vocabularies, on purpose sharing no word. The mock's own side when it
+# receives is schema.SELLER or schema.BUYER; if the partner's side were also
+# called "buyer", passing one where the other belongs would invert every
+# check silently. With no word in common, the same slip is a KeyError.
+CUSTOMER, SUPPLIER = "customer", "supplier"
+ROLES = (CUSTOMER, SUPPLIER)
+MOCK_ROLE = {CUSTOMER: schema.SELLER, SUPPLIER: schema.BUYER}
+
+
+def mock_role(partner) -> str:
+    """What the mock is toward this partner: it sells to a customer, buys from a supplier."""
+    return MOCK_ROLE[partner["role"]]
+
+# Behaviours only a seller can have: each changes what the mock does with an
+# order it *received*, and a supplier partner never sends one.
+SELLER_ONLY = ("short-ship", "reject-line", "reject-all", "duplicate-invoice",
+               "out-of-order", "no-invoice")
 
 DIALECTS = ("X12", "EDIFACT")
 MDN_MODES = ("sync", "async")
@@ -113,6 +134,10 @@ def check(fields: Dict[str, Any], dialect: str,
         raise Invalid("unknown behaviour %r; known: %s"
                       % (out["behaviour"], ", ".join(sorted(BEHAVIOURS))))
 
+    if "role" in out and out["role"] not in ROLES:
+        raise Invalid("role must be one of %s, not %r"
+                      % (" or ".join(ROLES), out["role"]))
+
     if "version" in out and not limits["version"].match(str(out["version"])):
         raise Invalid("%s version %r is not one the mock can write: %s"
                       % (dialect, out["version"], limits["version_hint"]))
@@ -147,6 +172,21 @@ def check(fields: Dict[str, Any], dialect: str,
     if identifier:
         _check_id(identifier, dialect, limits)
     return out
+
+
+def _check_role_fits(role: str, behaviour: str) -> None:
+    """Refuse a behaviour the partner's role cannot have.
+
+    A supplier sends the mock 855s, 856s and 810s; it never sends the order
+    a seller-side behaviour acts on, so `short-ship` on one would be stored,
+    reported and never happen.
+    """
+    if role == SUPPLIER and behaviour in SELLER_ONLY:
+        raise Invalid(
+            "behaviour %r is what a seller does with an order it received, "
+            "and the mock buys from a supplier rather than selling to it. A "
+            "supplier may be: %s" % (behaviour, ", ".join(
+                name for name in sorted(BEHAVIOURS) if name not in SELLER_ONLY)))
 
 
 def _check_id(identifier: str, dialect: str, limits) -> None:
@@ -199,6 +239,8 @@ def create(conn: sqlite3.Connection, identifier: str, name: str = "",
         given["name"] = name
     checked = check(given, given.get("dialect", FIELDS["dialect"]),
                     identifier=identifier)
+    _check_role_fits(checked.get("role", FIELDS["role"]),
+                     checked.get("behaviour", FIELDS["behaviour"]))
 
     columns = dict(FIELDS)
     columns.update(checked)
@@ -225,6 +267,9 @@ def update(conn: sqlite3.Connection, identifier: str,
     if not fields:
         return row
     changes = check(fields, row["dialect"])
+    # Either half can change, so the pair is checked as it will stand.
+    _check_role_fits(changes.get("role", row["role"]),
+                     changes.get("behaviour", row["behaviour"]))
     if "dialect" in changes and changes["dialect"] != row["dialect"]:
         _check_id(identifier, changes["dialect"], LIMITS[changes["dialect"]])
 

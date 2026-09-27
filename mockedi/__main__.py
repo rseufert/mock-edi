@@ -191,8 +191,9 @@ def main(argv=None) -> int:
     if config.pickup_dir:
         print("  Pickup   %s" % config.pickup_dir)
     for row in httpd.mock.conn.execute(
-            "SELECT id, dialect, behaviour FROM partner ORDER BY id"):
-        print("  partner  %-10s %-8s %s" % (row["id"], row["dialect"], row["behaviour"]))
+            "SELECT id, role, dialect, behaviour FROM partner ORDER BY id"):
+        print("  partner  %-10s %-8s %-8s %s" % (row["id"], row["role"],
+                                                 row["dialect"], row["behaviour"]))
     warning = exposure_warning(config)
     if warning:
         # Last, so that it is the line still on the screen.

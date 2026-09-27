@@ -303,5 +303,123 @@ class DeletingAPartnerWithWorkOutstanding(PartnerCase):
         self.assertFalse(outcome["deleted"])
 
 
+class TheRole(PartnerCase):
+    """The mock sells to a customer and buys from a supplier (#125)."""
+
+    def test_every_partner_there_was_is_a_customer(self):
+        for pid in (ACME, EURODIS):
+            self.assertEqual(self.get("/_mock/partners/" + pid)[2]["role"],
+                             "customer")
+
+    def test_one_supplier_is_seeded(self):
+        _s, _h, rows = self.get("/_mock/partners")
+        self.assertEqual([r["id"] for r in rows if r["role"] == "supplier"],
+                         ["NORTHWIND"])
+
+    def test_a_new_partner_is_a_customer_unless_told_otherwise(self):
+        status, _h, data = self.create_partner({"id": "NEWCO"})
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["role"], "customer")
+
+    def test_a_supplier_can_be_created(self):
+        status, _h, data = self.create_partner({"id": "PARTS", "role": "supplier"})
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["role"], "supplier")
+
+    def test_an_unknown_role_is_refused_with_the_known_ones(self):
+        status, _h, data = self.patch_partner(ACME, {"role": "reseller"})
+        self.assertRefused(status, data, "'reseller'", "customer", "supplier")
+
+    def test_the_mocks_word_for_itself_is_not_a_partner_role(self):
+        # "buyer" and "seller" are the mock's side; a partner is a customer or
+        # a supplier, so the two vocabularies can never be confused.
+        for word in ("buyer", "seller"):
+            status, _h, data = self.patch_partner(ACME, {"role": word})
+            self.assertRefused(status, data, repr(word))
+
+    def test_the_role_can_be_changed(self):
+        status, _h, data = self.patch_partner(ACME, {"role": "supplier"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["role"], "supplier")
+
+
+class TheOneConversion(unittest.TestCase):
+    """The partner's role and the mock's are turned into each other in one place."""
+
+    def test_the_mock_sells_to_a_customer_and_buys_from_a_supplier(self):
+        from mockedi import partners, schema
+        self.assertEqual(partners.mock_role({"role": partners.CUSTOMER}),
+                         schema.SELLER)
+        self.assertEqual(partners.mock_role({"role": partners.SUPPLIER}),
+                         schema.BUYER)
+
+    def test_the_two_vocabularies_share_no_word(self):
+        from mockedi import partners, schema
+        self.assertFalse(set(partners.ROLES) & set(schema.RECEIVED_BY))
+        with self.assertRaises(KeyError):
+            partners.mock_role({"role": schema.BUYER})
+
+
+class ABehaviourFitsTheRole(PartnerCase):
+    """A seller-only behaviour on a supplier would be stored and never happen."""
+
+    SELLER_ONLY = ("short-ship", "reject-line", "reject-all",
+                   "duplicate-invoice", "out-of-order", "no-invoice")
+    EITHER = ("accept", "no-ack", "late", "reject-ack", "strict", "corrupt")
+
+    def test_each_seller_only_behaviour_is_refused_on_a_supplier(self):
+        for behaviour in self.SELLER_ONLY:
+            with self.subTest(behaviour=behaviour):
+                status, _h, data = self.patch_partner(
+                    "NORTHWIND", {"behaviour": behaviour})
+                self.assertRefused(status, data, repr(behaviour), "supplier")
+        self.assertEqual(self.get("/_mock/partners/NORTHWIND")[2]["behaviour"],
+                         "accept")
+
+    def test_the_refusal_says_what_a_supplier_may_be(self):
+        status, _h, data = self.patch_partner("NORTHWIND", {"behaviour": "short-ship"})
+        self.assertRefused(status, data, "accept", "no-ack")
+
+    def test_the_rest_are_allowed(self):
+        for behaviour in self.EITHER:
+            with self.subTest(behaviour=behaviour):
+                status, _h, data = self.patch_partner(
+                    "NORTHWIND", {"behaviour": behaviour})
+                self.assertEqual(status, 200, data)
+
+    def test_it_applies_on_create(self):
+        status, _h, data = self.create_partner(
+            {"id": "PARTS", "role": "supplier", "behaviour": "reject-all"})
+        self.assertRefused(status, data, "'reject-all'")
+        self.assertEqual(self.get("/_mock/partners/PARTS")[0], 404)
+
+    def test_changing_the_role_is_checked_against_the_behaviour_held(self):
+        # GLOBEX short-ships; making it a supplier would strand the behaviour.
+        status, _h, data = self.patch_partner("GLOBEX", {"role": "supplier"})
+        self.assertRefused(status, data, "'short-ship'")
+        self.assertEqual(self.get("/_mock/partners/GLOBEX")[2]["role"],
+                         "customer")
+
+    def test_both_changed_together_is_fine(self):
+        status, _h, data = self.patch_partner(
+            "GLOBEX", {"role": "supplier", "behaviour": "accept"})
+        self.assertEqual(status, 200, data)
+
+    def test_a_customer_may_have_any_of_them(self):
+        for behaviour in self.SELLER_ONLY + self.EITHER:
+            with self.subTest(behaviour=behaviour):
+                status, _h, data = self.patch_partner(ACME, {"behaviour": behaviour})
+                self.assertEqual(status, 200, data)
+
+
+class TheIndexPage(PartnerCase):
+    def test_it_shows_each_partners_role(self):
+        _s, _h, body = self.get("/", raw=True)
+        page = body.decode()
+        self.assertIn("<th>Role</th>", page)
+        self.assertIn("<td><code>NORTHWIND</code></td><td>Northwind Components Ltd"
+                      "</td><td>supplier</td>", page)
+
+
 if __name__ == "__main__":
     unittest.main(verbosity=2)

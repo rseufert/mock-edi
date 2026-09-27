@@ -1388,9 +1388,10 @@ def _index_page(mock: Mock, base: str) -> str:
     conn = mock.conn
     rows = partners.listing(conn)
     partner_rows = "".join(
-        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td>"
+        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>"
         "<td><code>%s</code></td><td>%s</td></tr>"
-        % (row["id"], _esc(row["name"]), row["dialect"], row["behaviour"],
+        % (row["id"], _esc(row["name"]), row["role"], row["dialect"],
+           row["behaviour"],
            _esc(partners.BEHAVIOURS.get(row["behaviour"], "")))
         for row in rows)
 
@@ -1434,7 +1435,7 @@ def _index_page(mock: Mock, base: str) -> str:
 Send it an 850 or an ORDERS and it answers with an acknowledgment, a purchase
 order response, a despatch advice and an invoice.</p>
 <h2>Trading partners</h2>
-<table><tr><th>Id</th><th>Name</th><th>Dialect</th><th>Behaviour</th><th></th></tr>%s</table>
+<table><tr><th>Id</th><th>Name</th><th>Role</th><th>Dialect</th><th>Behaviour</th><th></th></tr>%s</table>
 <h2>Endpoints</h2>
 <table><tr><th></th><th>Path</th><th></th></tr>%s</table>
 <h2>Try it</h2>
