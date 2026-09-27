@@ -173,7 +173,8 @@ NORTHWIND = "NORTHWIND"
 WHEN = datetime.datetime(2026, 9, 25, 10, 0)
 
 
-def supplier_sends(kind, po_number, sender=NORTHWIND, dialect="X12"):
+def supplier_sends(kind, po_number, sender=NORTHWIND, dialect="X12",
+                   description="Widget"):
     """What a supplier's translator sends about `po_number`: an 855, 856 or 810.
 
     Written by the mock's own seller-side writers with the parties turned
@@ -190,7 +191,7 @@ def supplier_sends(kind, po_number, sender=NORTHWIND, dialect="X12"):
              "ship_to_name": "Mock EDI", "ship_to_id": "MOCKEDI", "ship_to_street": "",
              "ship_to_city": "", "ship_to_region": "", "ship_to_postal": "",
              "ship_to_country": "US"}
-    lines = [{"line": "1", "sku": "WIDGET-001", "upc": "", "description": "Widget",
+    lines = [{"line": "1", "sku": "WIDGET-001", "upc": "", "description": description,
               "quantity": "100", "uom": "EA", "price": "12.50",
               "ordered_price": "12.50", "status": "IA", "confirmed": "100",
               "shipped": "100", "invoiced": "100", "reason": "", "scheduled_on": ""}]
@@ -389,6 +390,69 @@ class WhatComesBack(BuyingCase):
         summary = self.send(supplier_sends(schema.RESPONSE, "PO-BUY", ACME))
         self.assertIn("the seller sends",
                       " ".join(summary["transactionSets"][0]["findings"]))
+
+
+class ABehaviourOnASupplier(BuyingCase):
+    """The behaviours that describe how the mock answers, on the buying side.
+
+    `accept` is every other test here. Each of these is the seller's own
+    behaviour, and on a supplier it means the same thing about what the mock
+    sends back - the 997 for an 855, and the 850 and 860 themselves.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.placed(po_number="PO-BHV")
+
+    def acks(self):
+        return self.mailbox(NORTHWIND, schema.ACKNOWLEDGMENT)
+
+    def test_no_ack_files_the_855_and_never_acknowledges_it(self):
+        self.behaviour(NORTHWIND, "no-ack")
+        summary = self.send(supplier_sends(schema.RESPONSE, "PO-BHV"))
+        self.assertEqual([f["order"] for f in summary["filed"]], ["PO-BHV"])
+        self.post("/_mock/advance?all")
+        self.assertEqual(self.acks(), [])
+
+    def test_late_acknowledges_an_hour_later(self):
+        self.behaviour(NORTHWIND, "late")
+        self.send(supplier_sends(schema.RESPONSE, "PO-BHV"))
+        self.assertEqual(self.acks(), [])
+        self.post("/_mock/advance?seconds=3601")
+        self.assertEqual(len(self.acks()), 1)
+
+    def test_reject_ack_rejects_a_clean_855_and_files_nothing(self):
+        self.behaviour(NORTHWIND, "reject-ack")
+        summary = self.send(supplier_sends(schema.RESPONSE, "PO-BHV"))
+        self.assertEqual(summary["filed"], [])
+        self.assertEqual(summary["transactionSets"][0]["findings"], [])
+        ak5 = parse(self.acks()[-1]["payload"]).groups[0].messages[0].find("AK5")
+        self.assertEqual(ak5.get(1), "R")
+
+    def test_strict_rejects_what_accept_lets_through(self):
+        # PID05 is 80 characters at most: a finding, but not a fatal one.
+        sloppy = lambda: supplier_sends(schema.RESPONSE, "PO-BHV", description="W" * 90)
+        summary = self.send(sloppy())
+        self.assertTrue(summary["transactionSets"][0]["findings"])
+        self.assertEqual([f["order"] for f in summary["filed"]], ["PO-BHV"])
+        self.behaviour(NORTHWIND, "strict")
+        summary = self.send(sloppy())
+        self.assertEqual(summary["filed"], [])
+        ak5 = parse(self.acks()[-1]["payload"]).groups[0].messages[0].find("AK5")
+        self.assertEqual(ak5.get(1), "R")
+
+    def test_corrupt_miscounts_the_850_and_860_the_mock_sends(self):
+        self.behaviour(NORTHWIND, "corrupt")
+        self.placed(po_number="PO-BHV-2")
+        self.post("/_mock/purchase/PO-BHV-2/change", {"cancel": True})
+        for kind in (schema.ORDER, schema.CHANGE):
+            message = parse(self.sent(kind)).groups[0].messages[0]
+            self.assertEqual(int(message.segments[-1].get(1)),
+                             len(message.segments) + 1, kind)
+            self.assertFalse(validate.validate(parse(self.sent(kind))).clean)
+        # Its 997s stay intact: a corrupt acknowledgment tests something else.
+        self.send(supplier_sends(schema.RESPONSE, "PO-BHV-2"))
+        self.assertTrue(validate.validate(parse(self.acks()[-1]["payload"])).clean)
 
 
 if __name__ == "__main__":
