@@ -412,6 +412,61 @@ class ABehaviourFitsTheRole(PartnerCase):
                 self.assertEqual(status, 200, data)
 
 
+class EachBehaviourSaysWhichRolesItFits(PartnerCase):
+    """db.BEHAVIOUR_ROLES is the one record; the refusal and the docs read it (#127)."""
+
+    def test_every_behaviour_has_roles_and_nothing_else_does(self):
+        from mockedi import db, partners
+        self.assertEqual(set(db.BEHAVIOUR_ROLES), set(db.BEHAVIOURS))
+        for name, roles in db.BEHAVIOUR_ROLES.items():
+            self.assertTrue(roles, name)
+            self.assertLessEqual(set(roles), set(partners.ROLES), name)
+
+    def test_the_ones_that_describe_how_the_mock_answers_fit_both(self):
+        from mockedi import db
+        for name in ("accept", "no-ack", "late", "reject-ack", "strict", "corrupt"):
+            self.assertEqual(set(db.BEHAVIOUR_ROLES[name]),
+                             {"customer", "supplier"}, name)
+
+    def test_each_of_them_can_be_set_on_the_seeded_supplier(self):
+        for name in ("accept", "no-ack", "late", "reject-ack", "strict", "corrupt"):
+            with self.subTest(behaviour=name):
+                status, _h, data = self.patch_partner("NORTHWIND", {"behaviour": name})
+                self.assertEqual(status, 200, data)
+                self.assertEqual(data["behaviour"], name)
+
+    def test_a_supplier_only_behaviour_would_be_refused_on_a_customer(self):
+        # None exists yet - #127's buyer behaviours are next - so one is added
+        # for the length of this test, to show the rule runs both ways.
+        from mockedi import db
+        db.BEHAVIOURS["duplicate-order"] = "Send the 850 twice."
+        db.BEHAVIOUR_ROLES["duplicate-order"] = ("supplier",)
+        try:
+            status, _h, data = self.patch_partner(ACME, {"behaviour": "duplicate-order"})
+            self.assertRefused(status, data, "'duplicate-order'",
+                               "sells to a customer", "A customer may be")
+            status, _h, data = self.patch_partner(
+                "NORTHWIND", {"behaviour": "duplicate-order"})
+            self.assertEqual(status, 200, data)
+        finally:
+            self.patch_partner("NORTHWIND", {"behaviour": "accept"})
+            del db.BEHAVIOURS["duplicate-order"]
+            del db.BEHAVIOUR_ROLES["duplicate-order"]
+
+    def test_help_names_the_roles(self):
+        from mockedi.__main__ import build_parser
+        epilog = build_parser().epilog
+        self.assertIn("short-ship         [customer]", epilog)
+        self.assertIn("no-ack             [customer, supplier]", epilog)
+
+    def test_the_index_page_lists_them_with_their_roles(self):
+        _s, _h, body = self.get("/", raw=True)
+        page = body.decode()
+        self.assertIn("<h2>Behaviours</h2>", page)
+        self.assertIn("<td><code>short-ship</code></td><td>customer</td>", page)
+        self.assertIn("<td><code>late</code></td><td>customer or supplier</td>", page)
+
+
 class TheIndexPage(PartnerCase):
     def test_it_shows_each_partners_role(self):
         _s, _h, body = self.get("/", raw=True)

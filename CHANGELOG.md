@@ -24,6 +24,16 @@ says so where it does.
   **The schema version is now 9**; a file database is upgraded in place, and
   every order it held was received.
 
+- **Each behaviour says which partner roles it fits** ([#127]).
+  `db.BEHAVIOUR_ROLES` records it once, and everything else reads it: the
+  refusal of a behaviour on a partner of the wrong role, in both directions,
+  `--help`, the index page's new behaviour table and a *Partner* column in the
+  README's, which `tools/check_docs.py` now holds to the record. The six that
+  change what the mock does with an order it received are for a customer
+  only; `accept`, `no-ack`, `late`, `reject-ack`, `strict` and `corrupt` -
+  how the mock answers, or what it damages in what it sends - fit a supplier
+  as well. `GET /_mock/behaviours` is unchanged.
+
 - **A partner has a `role`: `customer` or `supplier`** ([#125]). The first
   step of the mock buying as well as selling (#116). `role` is what the
   partner is to the mock - a `customer` it sells to, the default and every
@@ -1018,6 +1028,7 @@ documents a real one sends.
 
 [#43]: https://github.com/rseufert/mock-edi/issues/43
 [#117]: https://github.com/rseufert/mock-edi/issues/117
+[#127]: https://github.com/rseufert/mock-edi/issues/127
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.4.0...HEAD
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0
