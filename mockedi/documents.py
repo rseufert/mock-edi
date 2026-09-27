@@ -313,32 +313,6 @@ def change_placed(conn: sqlite3.Connection, po_number: str,
     return change
 
 
-def as_order(conn: sqlite3.Connection, po_number: str, us, partner: Dict[str, Any]):
-    """A placed order as a `transactions.Order`, which is what an 850 says."""
-    from .transactions import Line, Order, Party
-    order = order_row(conn, po_number)
-    ship_to = Party(role="ST", name=order["ship_to_name"],
-                    identifier=order["ship_to_id"], street=order["ship_to_street"],
-                    city=order["ship_to_city"], region=order["ship_to_region"],
-                    postal=order["ship_to_postal"], country=order["ship_to_country"])
-    buyer = Party(role="BY", name=us.name, identifier=us.identifier,
-                  street=us.street, city=us.city, region=us.region,
-                  postal=us.postal, country=us.country)
-    seller = Party(role="SE", name=partner["name"], identifier=partner["id"],
-                   street=partner["street"], city=partner["city"],
-                   region=partner["region"], postal=partner["postal"],
-                   country=partner["country"])
-    return Order(
-        po_number=po_number, ordered_on=_date(order["ordered_on"]),
-        requested_on=_date(order["requested_on"]), currency=order["currency"],
-        parties={"BY": buyer, "ST": ship_to, "SE": seller},
-        lines=[Line(number=row["line"], sku=row["sku"], upc=row["upc"],
-                    description=row["description"],
-                    quantity=number(row["quantity"]), uom=row["uom"],
-                    price=number(row["price"]))
-               for row in order_lines(conn, po_number)])
-
-
 def _date(text: str) -> Optional[datetime.date]:
     return datetime.date.fromisoformat(text) if text else None
 

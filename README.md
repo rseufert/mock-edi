@@ -191,6 +191,7 @@ Both are walked through, test by test, in
 | Send out of band | `POST /_mock/send` — replay an invoice, or send one unprompted |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>` |
+| Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
@@ -333,8 +334,8 @@ the default and every partner there was before, or a `supplier` it buys from.
 A behaviour that only a seller can have - one that changes what the mock does
 with an order it received, such as `short-ship` or `no-invoice` - is refused
 on a supplier, and so is a role change that would strand such a behaviour. The
-role is recorded, checked and shown today; placing orders with a supplier
-comes next.
+mock places orders with a supplier; see [Buying from a
+supplier](#buying-from-a-supplier).
 
 | Behaviour | What the partner does |
 | --- | --- |
@@ -521,6 +522,39 @@ yet has not been packed, so a change arriving in the meantime affects it —
 which is the whole point, and why `GET /_mock/scheduled` shows work promised
 but not done, separately from `/_mock/outbox`, which shows documents that
 already exist.
+
+## Buying from a supplier
+
+The mock sells to its customers and buys from its suppliers - a partner whose
+`role` is `supplier`, such as the seeded `NORTHWIND`. It places an order when
+told to; nothing is ordered on a timer.
+
+```bash
+curl -X POST localhost:8080/_mock/purchase -d '{
+  "partner": "NORTHWIND", "po_number": "4500001001", "requested_on": "2026-10-15",
+  "lines": [{"sku": "WIDGET-001", "quantity": "100", "uom": "EA", "price": "12.50"}]}'
+```
+
+The order is stored with `direction: placed`, and an **850** (an **ORDERS**
+for an EDIFACT supplier) goes out like anything else the mock writes: through
+the delays, to the partner's `as2_url` or the pickup directory, and into
+`/_mock/mailbox`. With no `po_number` the mock numbers the order from its own
+range. `POST /_mock/purchase/<po>/change` sends an **860** or **ORDCHG**:
+`{"lines": [{"line": "1", "quantity": "80"}]}`, with `action` `add` or
+`delete` on a line, or `{"cancel": true}`.
+
+What the supplier sends back - an **855**, **856**, **810** or **865**, or
+their EDIFACT counterparts - is accepted, acknowledged and filed under the
+order it names, and `/_mock/orders/<po>/timeline` shows the whole exchange
+from the order going out. The receipt lists these under `filed`. A document
+naming an order the mock never placed with that supplier is **rejected** in
+the 997 or CONTRL, at the element holding the order number: with no order
+there is nothing to hold it against. A supplier's 850 is refused as a
+customer's 855 is, as the wrong document for the relationship.
+
+The mock does not yet judge what a supplier says - a confirmation of more than
+was ordered, or an invoice for more than shipped. That comes next, and those
+disagreements will be reported beside the 997, never in it.
 
 ## One file, several interchanges
 

@@ -516,6 +516,7 @@ class Handler(BaseHTTPRequestHandler):
             "acknowledged": [a for item in each for a in item["acknowledged"]],
             "changed": [c for item in each for c in item["changed"]],
             "refusals": [r for item in each for r in item["refusals"]],
+            "filed": [f for item in each for f in item["filed"]],
             "interchanges": each,
         })
         return self._json(200, summary)
@@ -743,6 +744,34 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(400, {"error": str(error)})
             return self._json(201, {"id": queued.id, "kind": queued.kind,
                                     "code": queued.code, "dueAt": queued.due_at})
+
+        if head == "purchase":
+            # The mock as buyer: place an order with a supplier, or change one.
+            if method != "POST":
+                return self._text(405, "POST an order to place it")
+            payload = _json_body(body)
+            try:
+                if not rest:
+                    order, queued = self.mock.pipeline.place(
+                        str(payload.get("partner") or ""), payload)
+                    status = 201
+                elif len(rest) == 2 and rest[1] == "change":
+                    order, queued = self.mock.pipeline.change_placed(rest[0], payload)
+                    status = 200
+                else:
+                    return self._json(404, {"error": "no route for %s %s"
+                                                     % (method, path)})
+            except partners.UnknownPartner as error:
+                return self._json(404, {"error": "no partner %s" % error})
+            except LookupError as error:
+                return self._json(404, {"error": str(error)})
+            except documents.Refused as error:
+                return self._json(400, {"error": str(error),
+                                        "problems": error.problems})
+            order["lines"] = documents.order_lines(conn, order["po_number"])
+            order["sent"] = {"id": queued.id, "kind": queued.kind,
+                             "code": queued.code, "dueAt": queued.due_at}
+            return self._json(status, order)
 
         if head == "unacknowledged":
             return self._json(200, reconcile.unacknowledged(
@@ -1223,6 +1252,7 @@ def _interchange_summary(receipt) -> Dict[str, Any]:
         "acknowledged": receipt.acknowledged,
         "changed": receipt.changes,
         "refusals": receipt.refusals,
+        "filed": receipt.filed,
     }
     if not receipt.ok:
         # One interchange of several can be refused while the rest are read.
@@ -1404,7 +1434,9 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/state", "Counts, queue depth, configured delays."),
         ("GET", "/_mock/partners", "Who we trade with, and how each misbehaves."),
         ("GET", "/_mock/catalog", "What we sell."),
-        ("GET", "/_mock/orders", "Purchase orders received, and what became of them."),
+        ("GET", "/_mock/orders", "Purchase orders received and placed, and what became of them."),
+        ("POST", "/_mock/purchase", "Place an order with a supplier: an 850 or ORDERS goes out."),
+        ("POST", "/_mock/purchase/{po}/change", "Change or cancel an order the mock placed."),
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
         ("GET", "/_mock/interchanges", "Raw payloads. Add <code>?raw</code> for one."),
         ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),

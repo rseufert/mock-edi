@@ -7,6 +7,7 @@ applying a customer's change - must never touch one. These are the storage
 rules; placing one over HTTP and reading what the supplier sends back is
 #125's wiring, tested with it.
 """
+import datetime
 import os
 import sys
 import unittest
@@ -16,10 +17,11 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from mockedi import db, documents, schema
+from mockedi import db, documents, edifact, schema, transactions, validate, x12
 from mockedi.transactions import Party
 
-from support import ACME, MockServerCase, x12_change, x12_order
+from support import (ACME, MockServerCase, _next_control, acknowledge, parse,
+                     x12_change, x12_order)
 
 US = Party(role="BY", name="Mock EDI Inc", identifier="MOCKEDI",
            street="1 Test St", city="Springfield", region="IL", postal="62701",
@@ -77,14 +79,6 @@ class PlacingAnOrder(Stored):
                          "price 'x' is not a number", "for 0 of something"):
             self.assertIn(fragment, text)
         self.assertEqual(len(caught.exception.problems), 5)
-
-    def test_it_reads_as_the_order_an_850_carries(self):
-        order = documents.as_order(self.conn, self.place()["po_number"], US, SUPPLIER)
-        self.assertEqual(order.parties["BY"].identifier, "MOCKEDI")
-        self.assertEqual(order.parties["SE"].identifier, "NORTHWIND")
-        self.assertEqual([(l.sku, l.quantity) for l in order.lines],
-                         [("WIDGET-001", Decimal("100")), ("GADGET-042", Decimal("5"))])
-        self.assertEqual(order.total, Decimal("1265.50"))
 
 
 class ChangingIt(Stored):
@@ -171,6 +165,230 @@ class TheSellerLeavesItAlone(MockServerCase):
             "partner": ACME, "kind": schema.RESPONSE, "po": "PO-PLACED"})
         self.assertEqual(status, 400, data)
         self.assertIn("the mock placed", data["error"])
+
+
+# -- over HTTP, with a supplier on the other end
+
+NORTHWIND = "NORTHWIND"
+WHEN = datetime.datetime(2026, 9, 25, 10, 0)
+
+
+def supplier_sends(kind, po_number, sender=NORTHWIND, dialect="X12"):
+    """What a supplier's translator sends about `po_number`: an 855, 856 or 810.
+
+    Written by the mock's own seller-side writers with the parties turned
+    round, so the documents are the ones a real seller of the mock's kind
+    produces.
+    """
+    supplier = Party(role="SE", name="Northwind Components Ltd", identifier=sender,
+                     country="US")
+    mock = {"id": "MOCKEDI", "name": "Mock EDI", "qualifier": "ZZ", "street": "",
+            "city": "", "region": "", "postal": "", "country": "US", "duns": "",
+            "dialect": dialect, "version": "004010"}
+    order = {"po_number": po_number, "seller_order": "SO-77", "ordered_on":
+             "2026-09-24", "requested_on": "", "currency": "USD", "total": "1250.00",
+             "ship_to_name": "Mock EDI", "ship_to_id": "MOCKEDI", "ship_to_street": "",
+             "ship_to_city": "", "ship_to_region": "", "ship_to_postal": "",
+             "ship_to_country": "US"}
+    lines = [{"line": "1", "sku": "WIDGET-001", "upc": "", "description": "Widget",
+              "quantity": "100", "uom": "EA", "price": "12.50",
+              "ordered_price": "12.50", "status": "IA", "confirmed": "100",
+              "shipped": "100", "invoiced": "100", "reason": "", "scheduled_on": ""}]
+    shipment = {"shipment_id": "SH-1", "shipped_on": "2026-09-25", "tracking": "1Z1",
+                "bol": "BOL-1", "carrier": "UPS", "scac": "UPSN", "cartons": "1",
+                "weight": "10"}
+    invoice = {"invoice_number": "INV-1", "total": "1250.00", "subtotal": "1250.00", "invoiced_on":
+               "2026-09-25", "tax": "0.00", "currency": "USD"}
+    if kind == schema.RESPONSE:
+        body = transactions.write_response(dialect, supplier, mock, order, lines, WHEN)
+    elif kind == schema.DESPATCH:
+        body = transactions.write_despatch(dialect, supplier, mock, order, lines,
+                                           shipment, WHEN)
+    else:
+        body = transactions.write_invoice(dialect, supplier, mock, order, lines,
+                                          invoice, shipment, WHEN)
+    code = schema.set_code(dialect, kind)
+    control = _next_control(9)
+    if dialect == "X12":
+        return x12.render(x12.wrap([x12.message(code, "0001", body)], sender,
+                                   "MOCKEDI", control, control.lstrip("0"),
+                                   schema.lookup(dialect, code).group))
+    return edifact.render(edifact.wrap([edifact.message(code, "1", body, "D:96A:UN")],
+                                       sender, "MOCKEDI", control))
+
+
+class BuyingCase(MockServerCase):
+    def purchase(self, partner=NORTHWIND, **request):
+        request.setdefault("lines", LINES)
+        return self.post("/_mock/purchase", dict(request, partner=partner))
+
+    def placed(self, **request):
+        status, _h, data = self.purchase(**request)
+        self.assertEqual(status, 201, data)
+        return data
+
+    def sent(self, kind, partner=NORTHWIND):
+        rows = self.mailbox(partner, kind)
+        self.assertTrue(rows, "nothing of kind %s for %s" % (kind, partner))
+        return rows[-1]["payload"]
+
+
+class PlacingOverHttp(BuyingCase):
+    def test_the_850_goes_out_and_says_what_was_ordered(self):
+        order = self.placed(po_number="4500001001", requested_on="2026-10-15")
+        self.assertEqual((order["direction"], order["sent"]["code"]),
+                         ("placed", "850"))
+        interchange = parse(self.sent(schema.ORDER))
+        self.assertTrue(validate.validate(interchange).clean)
+        read = transactions.read_order(interchange.groups[0].messages[0], "X12")
+        self.assertEqual(read.po_number, "4500001001")
+        self.assertEqual([(l.sku, l.quantity) for l in read.lines],
+                         [("WIDGET-001", Decimal("100")), ("GADGET-042", Decimal("5"))])
+
+    def test_in_edifact_for_an_edifact_supplier(self):
+        self.post("/_mock/partners", {"id": "NORDIC", "dialect": "EDIFACT",
+                                      "version": "D:96A:UN", "role": "supplier",
+                                      "qualifier": "14"})
+        self.placed(partner="NORDIC", po_number="PO-EU-1")
+        interchange = parse(self.sent(schema.ORDER, "NORDIC"))
+        self.assertEqual(interchange.dialect, "EDIFACT")
+        self.assertEqual(transactions.read_order(
+            next(interchange.messages())[1], "EDIFACT").po_number, "PO-EU-1")
+
+    def test_the_mock_does_not_order_from_a_customer(self):
+        status, _h, data = self.purchase(partner=ACME)
+        self.assertEqual(status, 400, data)
+        self.assertIn("the mock sells to ACME; it does not order from it", data["error"])
+
+    def test_what_is_wrong_is_named(self):
+        status, _h, data = self.purchase(lines=[{"sku": "WIDGET-001"}])
+        self.assertEqual(status, 400)
+        self.assertEqual(len(data["problems"]), 2, data["problems"])
+        status, _h, _data = self.purchase(partner="NOBODY")
+        self.assertEqual(status, 404)
+
+    def test_a_change_and_a_cancellation_go_out_as_860s(self):
+        self.placed(po_number="PO-CHG")
+        status, _h, data = self.post("/_mock/purchase/PO-CHG/change",
+                                     {"lines": [{"line": "1", "quantity": "80"}]})
+        self.assertEqual((status, data["sent"]["code"]), (200, "860"), data)
+        change = transactions.read_change(
+            parse(self.sent(schema.CHANGE)).groups[0].messages[0], "X12")
+        self.assertEqual([(l.number, l.quantity) for l in change.lines],
+                         [("1", Decimal("80"))])
+        self.post("/_mock/purchase/PO-CHG/change", {"cancel": True})
+        change = transactions.read_change(
+            parse(self.sent(schema.CHANGE)).groups[0].messages[0], "X12")
+        self.assertTrue(change.cancels)
+        self.assertEqual(self.order("PO-CHG")["status"], "cancelled")
+
+    def test_changing_an_order_the_mock_did_not_place(self):
+        self.send(x12_order("PO-RECEIVED"))
+        status, _h, _data = self.post("/_mock/purchase/PO-RECEIVED/change",
+                                      {"cancel": True})
+        self.assertEqual(status, 404)
+
+    def test_the_suppliers_997_acknowledges_it(self):
+        self.placed(po_number="PO-ACKED")
+        summary = self.send(acknowledge(self.sent(schema.ORDER)))
+        self.assertEqual([(a["code"], a["status"]) for a in summary["acknowledged"]],
+                         [("850", "accepted")])
+
+    def test_the_timeline_starts_with_the_order_going_out(self):
+        self.placed(po_number="PO-TL")
+        _s, _h, data = self.get("/_mock/orders/PO-TL/timeline")
+        self.assertEqual(data["direction"], "placed")
+        self.assertEqual([(e["event"], e.get("code")) for e in data["events"]][:2],
+                         [("ordered", None), ("sent", "850")])
+        self.assertIn("placed with NORTHWIND", data["events"][0]["summary"])
+
+
+class WhatComesBack(BuyingCase):
+    def setUp(self):
+        super().setUp()
+        self.placed(po_number="PO-BUY")
+
+    def test_the_855_856_and_810_are_accepted_and_filed(self):
+        for kind in (schema.RESPONSE, schema.DESPATCH, schema.INVOICE):
+            summary = self.send(supplier_sends(kind, "PO-BUY"))
+            self.assertTrue(summary["accepted"], summary["transactionSets"])
+            self.assertEqual([(f["kind"], f["order"]) for f in summary["filed"]],
+                             [(kind, "PO-BUY")])
+        _s, _h, data = self.get("/_mock/orders/PO-BUY/timeline")
+        received = [e["code"] for e in data["events"] if e["event"] == "received"]
+        self.assertEqual(received, ["855", "856", "810"])
+
+    def test_and_each_is_acknowledged(self):
+        self.send(supplier_sends(schema.DESPATCH, "PO-BUY"))
+        ack = parse(self.sent(schema.ACKNOWLEDGMENT))
+        self.assertEqual(ack.groups[0].messages[0].find("AK5").get(1), "A")
+
+    def test_in_edifact_too(self):
+        self.post("/_mock/partners", {"id": "NORDIC", "dialect": "EDIFACT",
+                                      "version": "D:96A:UN", "role": "supplier",
+                                      "qualifier": "14"})
+        self.placed(partner="NORDIC", po_number="PO-EU-2")
+        for kind in (schema.RESPONSE, schema.DESPATCH, schema.INVOICE):
+            summary = self.send(supplier_sends(kind, "PO-EU-2", "NORDIC", "EDIFACT"),
+                                headers={"Content-Type": "application/edifact"})
+            self.assertEqual([f["order"] for f in summary["filed"]], ["PO-EU-2"],
+                             summary["transactionSets"])
+
+    def test_one_for_an_order_never_placed_is_rejected(self):
+        summary = self.send(supplier_sends(schema.RESPONSE, "PO-NEVER"))
+        self.assertFalse(summary["accepted"])
+        self.assertEqual(summary["filed"], [])
+        self.assertIn("purchase order PO-NEVER was never placed with NORTHWIND",
+                      " ".join(summary["transactionSets"][0]["findings"]))
+        message = parse(self.sent(schema.ACKNOWLEDGMENT)).groups[0].messages[0]
+        ak4 = message.find("AK4")
+        self.assertEqual((message.find("AK3").get(1), ak4.get(1), ak4.get(3),
+                          ak4.get(4)), ("BAK", "3", "7", "PO-NEVER"))
+        self.assertEqual(message.find("AK5").get(1), "R")
+
+    def test_in_edifact_the_contrl_points_at_rff(self):
+        self.post("/_mock/partners", {"id": "NORDIC", "dialect": "EDIFACT",
+                                      "version": "D:96A:UN", "role": "supplier",
+                                      "qualifier": "14"})
+        summary = self.send(supplier_sends(schema.INVOICE, "PO-NEVER", "NORDIC",
+                                           "EDIFACT"),
+                            headers={"Content-Type": "application/edifact"})
+        self.assertFalse(summary["accepted"])
+        contrl = next(parse(self.sent(schema.ACKNOWLEDGMENT, "NORDIC")).messages())[1]
+        ucd = contrl.find("UCD")
+        self.assertEqual((ucd.get(1), ucd.comp(2, 1), ucd.comp(2, 2)), ("12", "1", "2"))
+
+    def test_one_for_another_suppliers_order_is_rejected(self):
+        self.post("/_mock/partners", {"id": "OTHERSUP", "role": "supplier"})
+        summary = self.send(supplier_sends(schema.INVOICE, "PO-BUY", "OTHERSUP"))
+        self.assertFalse(summary["accepted"])
+        self.assertIn("never placed with OTHERSUP",
+                      " ".join(summary["transactionSets"][0]["findings"]))
+
+    def test_one_for_an_order_it_received_is_rejected(self):
+        # A customer that became a supplier: the orders it sent are still
+        # ones the mock received, and nothing it confirms can be filed there.
+        self.send(x12_order("PO-WAS-SOLD"))
+        status, _h, data = self.patch("/_mock/partners/ACME", {"role": "supplier"})
+        self.assertEqual(status, 200, data)
+        summary = self.send(supplier_sends(schema.RESPONSE, "PO-WAS-SOLD", ACME))
+        self.assertFalse(summary["accepted"])
+        self.assertEqual(summary["filed"], [])
+
+    def test_a_suppliers_850_is_refused_by_the_role(self):
+        summary = self.send(x12_order("PO-FROM-SUP", sender=NORTHWIND))
+        self.assertEqual(summary["orders"], [])
+        self.assertIn("the buyer sends",
+                      " ".join(summary["transactionSets"][0]["findings"]))
+
+    def test_a_customer_is_unchanged(self):
+        # ACME's 850 is answered as it always was; its 855 is still refused.
+        summary = self.send(x12_order("PO-STILL-SELLING"))
+        self.assertEqual(summary["orders"], ["PO-STILL-SELLING"])
+        self.assertEqual(summary["filed"], [])
+        summary = self.send(supplier_sends(schema.RESPONSE, "PO-BUY", ACME))
+        self.assertIn("the seller sends",
+                      " ".join(summary["transactionSets"][0]["findings"]))
 
 
 if __name__ == "__main__":
