@@ -43,6 +43,13 @@ README = "README.md"
 # Files that are their own documentation, or carry nothing worth describing.
 EXEMPT = {".gitignore"}
 
+# Directories whose contents are transient rather than part of the repository's
+# furniture. `changelog.d/` holds one file per entry waiting for a release, and
+# they come and go with every pull request: a row each would put this index in
+# the way of exactly the pull requests #138 freed from CHANGELOG.md, and move
+# the conflict here instead of removing it. Its README is documented.
+EXEMPT_DIRECTORIES = ("changelog.d/",)
+
 # Tokens in the index that look like a path and are therefore checked to exist.
 PATH_RE = re.compile(r"`([\w./-]+\.(?:py|md|yml|yaml|toml|in|sh|cfg))`")
 
@@ -85,6 +92,8 @@ def main():
         name = os.path.basename(path)
         if name in EXEMPT or path == INDEX:
             continue
+        if (path.startswith(EXEMPT_DIRECTORIES) and name != "README.md"):
+            continue
         if ("`%s`" % path) not in index and ("`%s`" % name) not in index:
             problems.append(
                 "%s is not documented in %s - add a row describing it" % (path, INDEX))
@@ -94,6 +103,8 @@ def main():
     basenames = {os.path.basename(p) for p in existing}
     for token in sorted(set(PATH_RE.findall(index))):
         if token in existing or token in basenames:
+            continue
+        if token.startswith(EXEMPT_DIRECTORIES):
             continue
         problems.append(
             "%s mentions `%s`, which no longer exists - update or remove the row"

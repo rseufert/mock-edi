@@ -91,15 +91,23 @@ If a change touches more than one of these, it is usually two changes.
   command-line flag has no mention in the README's Configuration section, or
   if a behaviour has no row in the README's table. It checks coverage, not prose - keeping the prose
   true is on you.
-- **A line in the changelog.** `tools/check_changelog.py` fails a pull request
-  that touches `mockedi/` without adding an entry under `## [Unreleased]` - an
-  entry, not merely a changed file. It is what a user of the published package
-  reads. The same check holds released sections to being history and refuses to
-  let an entry waiting for a release disappear. A change that genuinely needs
-  no entry - a comment, a rename, a pure refactor - can carry the
-  `no changelog` label, which lifts that one rule and leaves the others
-  standing. Only someone with triage rights can label a pull request, so say
-  in the description why no entry is needed and a maintainer will apply it.
+- **A changelog entry, as a file of its own.** A pull request that touches
+  `mockedi/` adds `changelog.d/<number>.<kind>.md`, where kind is `added`,
+  `changed` or `fixed`, holding the bullet exactly as it will appear under that
+  heading - see [`changelog.d/README.md`](changelog.d/README.md). One file
+  each, because two pull requests editing `## [Unreleased]` conflicted on the
+  same line every time, and a pull request that conflicts with its base runs no
+  CI at all: seven were in that state at once on 25 September, each one's green
+  true only of an older `main`.
+
+  `tools/check_changelog.py` fails a pull request with no fragment - an entry,
+  not merely a changed file. It is what a user of the published package reads.
+  The same check holds released sections to being history and refuses to let an
+  entry waiting for a release disappear. A change that genuinely needs no entry
+  - a comment, a rename, a pure refactor - can carry the `no changelog` label,
+  which lifts that one rule and leaves the others standing. Only someone with
+  triage rights can label a pull request, so say in the description why no
+  entry is needed and a maintainer will apply it.
 - **No new dependencies.** See above.
 - **A commit message that says what changed and why.** The why is the part a
   reader cannot reconstruct. Wrap at 72 characters.
@@ -191,6 +199,17 @@ difference is still plenty to work with.
 mock's reading of a document as prose, without changing anything.
 
 ## Releasing (maintainers)
+
+**A release assembles the fragments.** `python3 tools/check_changelog.py
+--release X.Y.Z` writes the dated section into `CHANGELOG.md` with its headings
+in order and its links, and deletes the files it came from. Two things are left
+by hand, and both are meant to be: the paragraph saying why anyone should
+upgrade - the tool writes a placeholder the changelog check *fails* on, so a
+release cannot reach `main` without one, and cannot reach it with an invented
+summary - and the version in `pyproject.toml`, which stays a deliberate edit
+because the check that the two agree is only worth having while one of them is.
+The order entries appear in under a heading is editorial too; reorder them in
+the same pass.
 
 **A release is one step, taken by one person.** The release pull request,
 the tag, the GitHub Release and the check that PyPI has it follow each other
