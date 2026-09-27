@@ -584,6 +584,30 @@ BEHAVIOURS = {
                   "up waiting.",
 }
 
+# The partner roles each behaviour applies to - partners.CUSTOMER and
+# partners.SUPPLIER, spelled out because partners imports this module. A
+# behaviour that changes what the mock does with an order it *received* is
+# for a customer only: a supplier never sends one. One that changes how the
+# mock answers, or damages what it sends, fits whichever side it is on - a
+# buyer sends documents too, and a corrupted 850 is what a supplier's 997
+# logic should be tested against.
+BOTH = ("customer", "supplier")
+CUSTOMER_ONLY = ("customer",)
+BEHAVIOUR_ROLES = {
+    "accept": BOTH,
+    "short-ship": CUSTOMER_ONLY,
+    "reject-line": CUSTOMER_ONLY,
+    "reject-all": CUSTOMER_ONLY,
+    "no-ack": BOTH,
+    "duplicate-invoice": CUSTOMER_ONLY,
+    "strict": BOTH,
+    "out-of-order": CUSTOMER_ONLY,
+    "late": BOTH,
+    "corrupt": BOTH,
+    "reject-ack": BOTH,
+    "no-invoice": CUSTOMER_ONLY,
+}
+
 PARTNERS = [
     # id, name, qualifier, dialect, version, behaviour, address, duns, role
     ("ACME", "Acme Distribution Inc", "ZZ", "X12", "004010", "accept",
