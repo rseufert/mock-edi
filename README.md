@@ -45,8 +45,8 @@ documented wire formats for testing purposes and is not affiliated with or
 endorsed by any standards body or vendor.
 
 By [Rick Seufert](https://rickseufert.com). The [projects page](https://rickseufert.com/#projects)
-has this mock, [mock-sap](https://github.com/rseufert/mock-sap) and the worked examples
-that use them together.
+has this mock, [mock-sap](https://github.com/rseufert/mock-sap), [mock-bank](https://github.com/rseufert/mock-bank)
+and the worked examples that use them together.
 
 ---
 
@@ -866,5 +866,12 @@ uses the two mocks together: purchase orders out and confirmations in, then
 invoices checked against what was ordered and shipped, with the failure modes
 each test exercises.
 
-[rickseufert.com](https://rickseufert.com/#projects) lists both mocks side by
-side, with the worked examples and how to run each one.
+[mock-bank](https://github.com/rseufert/mock-bank) is the third: a mock bank
+that takes an ISO 20022 `pain.001` payment file and answers with a `pain.002`
+status report, a `camt.054` debit notification and a `camt.053` statement,
+on a bank clock a test can move. It is the payment that follows an approved
+invoice, the one an 810 from this mock asks for; a `payment_run` example
+joining it to mock-sap is planned for its 0.2 release.
+
+[rickseufert.com](https://rickseufert.com/#projects) lists all three mocks side
+by side, with the worked examples and how to run each one.
