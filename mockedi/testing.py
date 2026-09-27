@@ -20,6 +20,11 @@ Or against one already running, anywhere:
 
     mock = Mock("http://127.0.0.1:8080")
 
+Two mocks wired to each other - a seller and a buyer - are a conversation
+rather than a request, and `exchange` runs it to a stop:
+
+    seller.exchange(buyer)
+
 Still no dependencies.  `Response` is a named tuple, so it reads as
 `reply.status` and unpacks as `status, headers, body` - which is what let the
 suite's own harness move onto this without touching a single test.
@@ -282,6 +287,17 @@ class Mock:
     def outbox(self) -> List[Dict[str, Any]]:
         return self.expect("GET", "/_mock/outbox")
 
+    def scheduled(self, pending_only: bool = False) -> List[Dict[str, Any]]:
+        """Work the mock has promised: a despatch to pack, an invoice to write.
+
+        Distinct from the outbox, which holds documents that already exist. A
+        delay postpones the work, so what a test is waiting for is often here
+        rather than there.
+        """
+        rows = self.expect("GET", "/_mock/scheduled" + _query(all=True))
+        return [row for row in rows if not row["done_at"]] if pending_only \
+            else rows
+
     def unacknowledged(self, older_than: Optional[float] = None) -> List[Dict[str, Any]]:
         query = {} if older_than is None else {"older-than": older_than}
         return self.expect("GET", "/_mock/unacknowledged" + _query(**query))
@@ -327,6 +343,61 @@ class Mock:
         if everything:
             return self.expect("POST", "/_mock/advance?all")
         return self.expect("POST", "/_mock/advance" + _query(seconds=seconds))
+
+    def exchange(self, *others: "Mock", timeout: float = 15.0,
+                 passes: int = 10, advance: bool = True) -> None:
+        """Push a conversation between this mock and others until it stops.
+
+        `settle` drains one mock and waits for its own outbox. A conversation
+        between two mocks is a rally: the seller's 855 arrives, the buyer
+        answers with a 997, the seller reconciles it. Neither side is finished
+        until both are, so settling either one returns with the other still
+        holding work, and the number of alternating calls it takes is not
+        something a test should have to know.
+
+        Work that is only *promised* is the harder half. There are two kinds
+        of not-yet and settling reaches neither: a `pending` row in the outbox,
+        which `duplicate-invoice` produces for its second invoice, and an
+        undone row in the schedule, which is where a delayed despatch or
+        invoice waits - a delay postpones the work, not the posting, so the
+        document does not exist yet to be pending. Either way the symptom is a
+        document that appears to have been lost. So each pass moves every
+        mock's clock before settling it.
+
+        That means **`exchange` moves every clock it touches**, which is what a
+        test about *what* is exchanged wants and the opposite of what a test
+        about *when* wants. Pass `advance=False` to settle only what is already
+        due, and drive the clock yourself.
+
+        Raises rather than hanging if `passes` full rounds do not converge: a
+        rally with no end is a bug in the test or in the mock, and the useful
+        report is what each side was still holding.
+        """
+        mocks = (self,) + others
+        for _ in range(passes):
+            moved = False
+            for mock in mocks:
+                before = mock._outbox_state()
+                if advance:
+                    mock.advance(everything=True)
+                mock.settle(timeout)
+                # Movement, not advancing, is the signal. A promise that can
+                # never be kept - a despatch for an order with nothing left to
+                # ship - would otherwise advance for ever and make a sound flow
+                # look like one that never ends.
+                if mock._outbox_state() != before:
+                    moved = True
+            if not moved:
+                return
+        raise MockError("GET", "/_mock/outbox", 200,
+                        {"error": "the mocks were still talking after %d "
+                                  "passes" % passes,
+                         "holding": {mock.base: mock._outbox_state()
+                                     for mock in mocks}})
+
+    def _outbox_state(self) -> List[Any]:
+        """Enough of the outbox to tell whether anything moved."""
+        return [(row["id"], row["status"]) for row in self.outbox()]
 
     def settle(self, timeout: float = 30.0) -> List[Dict[str, Any]]:
         """Wait until nothing in the outbox is still waiting to be delivered.
