@@ -23,6 +23,28 @@ says so where it does.
   than in a parameter to the seller's, and several tests exist only to hold it
   down.
 
+### Fixed
+
+- **One customer could change, cancel or replace another customer's order**
+  ([#131]), which is in the released 0.4.0. `purchase_order` is keyed by the
+  purchase order number alone and real numbers are unique only per buyer, so
+  a partner could name a number it did not hold and have the mock act on it.
+  An 860 cancelled a stranger's order; an ordinary 850 replaced one outright,
+  took its lines, and left the despatch and invoice already promised for it
+  pointing at goods nobody had ordered.
+
+  A change, a cancellation or a restated 850 against an order another partner
+  holds is now answered exactly as one against an order that does not exist -
+  the same words, so nothing leaks which numbers are in use. An 850 placing a
+  *new* order on a number somebody else holds is refused with an 855 that
+  rejects every line and says "order number already in use", and the existing
+  order and its scheduled work are untouched.
+
+  Refusing that 850 is wrong in principle - two buyers may both hold a
+  4500000042 - and right for now, because the alternative is destroying the
+  first one. Keying orders by partner and number removes the refusal, and is
+  its own issue; this one is the guard that needs no migration.
+
 ## [0.4.0] - 2026-09-26
 
 A minor release, because the seller now refuses documents it used to accept.
@@ -924,6 +946,7 @@ documents a real one sends.
 [#114]: https://github.com/rseufert/mock-edi/issues/114
 [#122]: https://github.com/rseufert/mock-edi/issues/122
 [#125]: https://github.com/rseufert/mock-edi/issues/125
+[#131]: https://github.com/rseufert/mock-edi/issues/131
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30
 [#42]: https://github.com/rseufert/mock-edi/issues/42
