@@ -285,9 +285,11 @@ class PlacingOverHttp(BuyingCase):
 
     def test_changing_an_order_the_mock_did_not_place(self):
         self.send(x12_order("PO-RECEIVED"))
-        status, _h, _data = self.post("/_mock/purchase/PO-RECEIVED/change",
-                                      {"cancel": True})
+        status, _h, data = self.post("/_mock/purchase/PO-RECEIVED/change",
+                                     {"cancel": True})
         self.assertEqual(status, 404)
+        self.assertIn("the mock placed no purchase order 'PO-RECEIVED'", data["error"])
+        self.assertNotEqual(self.order("PO-RECEIVED")["status"], "cancelled")
 
     def test_the_suppliers_997_acknowledges_it(self):
         self.placed(po_number="PO-ACKED")
