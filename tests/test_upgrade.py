@@ -159,11 +159,11 @@ class FromANewerMock(FileDatabase):
 
 
 class TheVersionMovesWithTheSchema(unittest.TestCase):
-    # The schema as of SCHEMA_VERSION 8. When this fails, the schema has
+    # The schema as of SCHEMA_VERSION 9. When this fails, the schema has
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (8, "e3548c3ea59edeaf")
+    FINGERPRINT = (9, "f600271da77c0a07")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())

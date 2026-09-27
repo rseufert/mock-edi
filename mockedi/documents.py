@@ -30,6 +30,23 @@ Line status is decided in this order, and the first rule that fires wins:
    `IP`.  Price discrepancies are the commonest EDI dispute there is, and a
    mock that always agreed with the buyer would never let you test one.
 6. Otherwise `IA`, accepted as ordered.
+
+An order goes one of two ways, and `purchase_order.direction` says which:
+
+- **`received`**: a customer's order, which the mock sells against. Everything
+  above applies. `quantity` and `ordered_price` are what the customer asked
+  for, `price` is what the mock will bill, and `confirmed`, `shipped` and
+  `invoiced` are what the mock *did*.
+- **`placed`**: an order the mock sent to a supplier (`place_order`). None of
+  the rules above run: the mock is the buyer, and the supplier decides.
+  `quantity`, `price` and `ordered_price` are what the mock asked for.
+  `confirmed`, `shipped` and `invoiced` stay zero until the supplier's 855,
+  856 and 810 are reconciled against them (#126), and then they hold what the
+  supplier *claimed*, not anything the mock did.
+
+The seller's machinery - deciding, packing, invoicing, applying a change -
+touches only received orders. A placed order is changed by `change_placed`,
+which records what the mock asked for and nothing else.
 """
 from __future__ import annotations
 
@@ -44,6 +61,10 @@ from . import db
 from .envelope import local
 from .transactions import (ACCEPTED, BACKORDERED, REJECTED, SHORT, Order,
                            number, quantity_text)
+
+RECEIVED = "received"
+PLACED = "placed"
+DIRECTIONS = (RECEIVED, PLACED)
 
 PRICE_CHANGED = "IP"
 UNITS_PER_CARTON = 24
@@ -105,6 +126,257 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
          ship_to.country or partner["country"], db.now()))
     conn.commit()
     return order_row(conn, order.po_number)
+
+
+class Refused(ValueError):
+    """An order the mock will not place or change, with every reason at once."""
+
+    def __init__(self, problems: Sequence[str]):
+        super().__init__("; ".join(problems))
+        self.problems = list(problems)
+
+
+def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
+                request: Dict[str, Any],
+                when: Optional[datetime.datetime] = None) -> Dict[str, Any]:
+    """Store an order the mock is placing with a supplier, and return its row.
+
+    `request` is what `POST /_mock/purchase` was given: `lines`, each with a
+    `sku` or `upc`, a `quantity` and a `price`, and optionally `po_number`,
+    `requested_on`, `currency`. The PO number comes from the mock's own range
+    when there is none, because a buyer numbers its own orders. The order
+    ships to the mock itself.
+
+    Nothing about deciding runs here - see the module docstring. Writing the
+    850 and sending it is the caller's business, so this stays a function of
+    the database alone.
+    """
+    moment = when or db.utcnow()
+    problems: List[str] = []
+    po_number = str(request.get("po_number") or "").strip()
+    if po_number and order_row(conn, po_number) is not None:
+        problems.append("purchase order %s already exists; change it with "
+                        "/_mock/purchase/%s/change" % (po_number, po_number))
+    requested_on = str(request.get("requested_on") or "")
+    if requested_on:
+        try:
+            datetime.date.fromisoformat(requested_on)
+        except ValueError:
+            problems.append("requested_on %r is not a date (YYYY-MM-DD)"
+                            % requested_on)
+    lines = request.get("lines")
+    if not isinstance(lines, list) or not lines:
+        problems.append("an order needs at least one line")
+        lines = []
+    rows = []
+    for index, line in enumerate(lines, 1):
+        row, line_problems = _placed_line(conn, index, line)
+        problems.extend(line_problems)
+        rows.append(row)
+    if problems:
+        raise Refused(problems)
+
+    po_number = po_number or str(db.next_number(conn, "purchase_order"))
+    total = Decimal("0.00")
+    for row in rows:
+        total += (row["quantity"] * row["price"]).quantize(Decimal("0.01"))
+        conn.execute(
+            "INSERT INTO order_line (po_number, line, sku, upc, description,"
+            " quantity, uom, price, ordered_price)"
+            " VALUES (?,?,?,?,?,?,?,?,?)",
+            (po_number, row["line"], row["sku"], row["upc"], row["description"],
+             quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
+             db.money(row["price"])))
+    conn.execute(
+        "INSERT INTO purchase_order (po_number, partner, ordered_on,"
+        " requested_on, currency, status, total, ship_to_name, ship_to_id,"
+        " ship_to_street, ship_to_city, ship_to_region, ship_to_postal,"
+        " ship_to_country, direction, at)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (po_number, partner["id"], local(moment).date().isoformat(), requested_on,
+         str(request.get("currency") or "USD"), PLACED, db.money(total),
+         us.name, us.identifier, us.street, us.city, us.region, us.postal,
+         us.country or "US", PLACED, db.now()))
+    conn.commit()
+    return order_row(conn, po_number)
+
+
+# The verbs a change request is given in, and the 670 codes they are.
+CHANGE_ACTIONS = {"add": "AI", "change": "CA", "delete": "DI"}
+
+
+def change_placed(conn: sqlite3.Connection, po_number: str,
+                  request: Dict[str, Any],
+                  when: Optional[datetime.datetime] = None):
+    """Change an order the mock placed, and return the change to send.
+
+    `request` is `{"cancel": true}`, or `lines`, each naming a `line` and an
+    `action` - `add`, `change` (the default) or `delete` - with the new
+    `quantity` and `price`. What the order now asks for is stored; the
+    returned `transactions.Change` is what the 860 or ORDCHG says.
+    """
+    from .transactions import CANCEL_PURPOSES, Change, ChangeLine
+    moment = when or db.utcnow()
+    order = order_row(conn, po_number)
+    if order is None or order["direction"] != PLACED:
+        raise LookupError("the mock placed no purchase order %r" % po_number)
+    if order["status"] == "cancelled":
+        raise Refused(["purchase order %s is already cancelled" % po_number])
+    held = {row["line"]: row for row in order_lines(conn, po_number)}
+    change = Change(po_number=po_number, changed_on=local(moment).date(),
+                    ordered_on=_date(order["ordered_on"]),
+                    currency=order["currency"],
+                    sequence=str(db.next_number(conn, "purchase_change", po_number)))
+
+    if request.get("cancel"):
+        change.purpose = CANCEL_PURPOSES[0]
+        conn.execute("UPDATE purchase_order SET status = 'cancelled'"
+                     " WHERE po_number = ?", (po_number,))
+        conn.commit()
+        return change
+
+    lines = request.get("lines")
+    problems: List[str] = []
+    if not isinstance(lines, list) or not lines:
+        problems.append("a change needs at least one line, or cancel: true")
+        lines = []
+    wanted = []
+    for index, line in enumerate(lines, 1):
+        action = CHANGE_ACTIONS.get(str((line or {}).get("action") or "change")
+                                    if isinstance(line, dict) else "")
+        if action is None:
+            problems.append("line %d: action %r is not one of %s"
+                            % (index, line.get("action"), ", ".join(CHANGE_ACTIONS)))
+            continue
+        wanted_line = str(line.get("line") or "")
+        if action == "AI":
+            if wanted_line in held:
+                problems.append("line %s is already on the order" % wanted_line)
+                continue
+            row, line_problems = _placed_line(conn, index, line)
+            row["line"] = wanted_line or str(max([int(n) for n in held if n.isdigit()]
+                                            + [len(held)]) + 1)
+        elif wanted_line not in held:
+            problems.append("purchase order %s has no line %r to %s"
+                            % (po_number, wanted_line, "delete" if action == "DI"
+                               else "change"))
+            continue
+        elif action == "DI":
+            row, line_problems = dict(held[wanted_line]), []
+            row["quantity"] = number(row["quantity"])
+            row["price"] = number(row["price"])
+        else:
+            merged = {"sku": held[wanted_line]["sku"], "upc": held[wanted_line]["upc"],
+                      "description": held[wanted_line]["description"],
+                      "uom": held[wanted_line]["uom"],
+                      "quantity": held[wanted_line]["quantity"],
+                      "price": held[wanted_line]["price"], "line": wanted_line}
+            merged.update({k: v for k, v in line.items() if k != "action"})
+            row, line_problems = _placed_line(conn, index, merged)
+        problems.extend(line_problems)
+        wanted.append((action, row))
+    remaining = (set(held) - {row["line"] for action, row in wanted if action == "DI"}
+                 | {row["line"] for action, row in wanted if action == "AI"})
+    if wanted and not remaining:
+        problems.append("that deletes every line; send cancel: true to "
+                        "withdraw the order")
+    if problems:
+        raise Refused(problems)
+
+    for action, row in wanted:
+        if action == "DI":
+            conn.execute("DELETE FROM order_line WHERE po_number = ? AND line = ?",
+                         (po_number, row["line"]))
+        elif action == "AI":
+            conn.execute(
+                "INSERT INTO order_line (po_number, line, sku, upc, description,"
+                " quantity, uom, price, ordered_price) VALUES (?,?,?,?,?,?,?,?,?)",
+                (po_number, row["line"], row["sku"], row["upc"], row["description"],
+                 quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
+                 db.money(row["price"])))
+        else:
+            conn.execute(
+                "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
+                " ordered_price = ? WHERE po_number = ? AND line = ?",
+                (quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
+                 db.money(row["price"]), po_number, row["line"]))
+        change.lines.append(ChangeLine(
+            number=row["line"], sku=row["sku"], upc=row["upc"],
+            description=row["description"], quantity=row["quantity"],
+            uom=row["uom"], price=row["price"], action=action))
+    total = sum(((number(row["quantity"]) * number(row["price"], "0.00"))
+                 .quantize(Decimal("0.01"))
+                 for row in order_lines(conn, po_number)), Decimal("0.00"))
+    conn.execute("UPDATE purchase_order SET total = ? WHERE po_number = ?",
+                 (db.money(total), po_number))
+    conn.commit()
+    return change
+
+
+def as_order(conn: sqlite3.Connection, po_number: str, us, partner: Dict[str, Any]):
+    """A placed order as a `transactions.Order`, which is what an 850 says."""
+    from .transactions import Line, Order, Party
+    order = order_row(conn, po_number)
+    ship_to = Party(role="ST", name=order["ship_to_name"],
+                    identifier=order["ship_to_id"], street=order["ship_to_street"],
+                    city=order["ship_to_city"], region=order["ship_to_region"],
+                    postal=order["ship_to_postal"], country=order["ship_to_country"])
+    buyer = Party(role="BY", name=us.name, identifier=us.identifier,
+                  street=us.street, city=us.city, region=us.region,
+                  postal=us.postal, country=us.country)
+    seller = Party(role="SE", name=partner["name"], identifier=partner["id"],
+                   street=partner["street"], city=partner["city"],
+                   region=partner["region"], postal=partner["postal"],
+                   country=partner["country"])
+    return Order(
+        po_number=po_number, ordered_on=_date(order["ordered_on"]),
+        requested_on=_date(order["requested_on"]), currency=order["currency"],
+        parties={"BY": buyer, "ST": ship_to, "SE": seller},
+        lines=[Line(number=row["line"], sku=row["sku"], upc=row["upc"],
+                    description=row["description"],
+                    quantity=number(row["quantity"]), uom=row["uom"],
+                    price=number(row["price"]))
+               for row in order_lines(conn, po_number)])
+
+
+def _date(text: str) -> Optional[datetime.date]:
+    return datetime.date.fromisoformat(text) if text else None
+
+
+def _placed_line(conn: sqlite3.Connection, index: int,
+                 line: Any) -> Tuple[Dict[str, Any], List[str]]:
+    """One requested line, filled in from the catalogue, and what is wrong with it."""
+    where = "line %d" % index
+    if not isinstance(line, dict):
+        return {}, ["%s is not an object" % where]
+    problems = []
+    sku, upc = str(line.get("sku") or ""), str(line.get("upc") or "")
+    if not (sku or upc):
+        problems.append("%s names no item: give a sku or a upc" % where)
+    values = {}
+    for name in ("quantity", "price"):
+        try:
+            values[name] = Decimal(str(line.get(name, "")))
+        except ArithmeticError:
+            values[name] = None
+        if values[name] is None or not values[name].is_finite():
+            problems.append("%s: %s %r is not a number" % (where, name, line.get(name)))
+    if values.get("quantity") is not None and values["quantity"] <= 0:
+        problems.append("%s: an order for %s of something is not an order"
+                        % (where, line.get("quantity")))
+    if values.get("price") is not None and values["price"] < 0:
+        problems.append("%s: price %s is negative" % (where, line.get("price")))
+    # The items the mock sells are the ones it buys, so the catalogue fills in
+    # the number the request left out - a supplier's translator may match on
+    # either.
+    item = (db.one(conn, "SELECT * FROM catalog WHERE sku = ?", (sku,)) if sku
+            else db.one(conn, "SELECT * FROM catalog WHERE upc = ?", (upc,)))
+    row = {"line": str(line.get("line") or index), "sku": sku or (item or {}).get("sku", ""),
+           "upc": upc or (item or {}).get("upc", ""),
+           "description": str(line.get("description") or "") or (item or {}).get("description", ""),
+           "uom": str(line.get("uom") or "EA"),
+           "quantity": values.get("quantity"), "price": values.get("price")}
+    return row, problems
 
 
 def _existing_seller_order(conn: sqlite3.Connection, po_number: str) -> str:
@@ -431,6 +703,10 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     moment = when or db.utcnow()
     order = order_row(conn, change.po_number)
     if order is None:
+        return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
+    if order["direction"] == PLACED:
+        # The mock's own order with a supplier. A partner cannot change it,
+        # and the seller's rules below would decide lines nobody sold.
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
     if order["status"] == "invoiced":
         return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)

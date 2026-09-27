@@ -225,7 +225,14 @@ class Pipeline:
                     # 860, and BEG01 says so. Against an order the mock already
                     # holds that is a change, not a replacement.
                     known = documents.order_row(self.conn, order.po_number)
-                    if order.purpose in transactions.CHANGE_PURPOSES and known:
+                    if known and known["direction"] == documents.PLACED:
+                        # The number of an order the mock placed with a
+                        # supplier: not this customer's to replace or change.
+                        receipt.refusals.append({
+                            "order": order.po_number,
+                            "reason": "%s is an order this mock placed, not "
+                                      "one it received" % order.po_number})
+                    elif order.purpose in transactions.CHANGE_PURPOSES and known:
                         held = [row["line"] for row in
                                 documents.order_lines(self.conn, order.po_number)]
                         self._apply_change(
@@ -712,6 +719,9 @@ class Pipeline:
         order = documents.order_row(self.conn, po_number) if po_number else None
         if order is None:
             raise ValueError("no purchase order %r" % po_number)
+        if order["direction"] == documents.PLACED:
+            raise ValueError("purchase order %s is one the mock placed; the "
+                             "supplier answers it, not the mock" % po_number)
         if order["partner"] != partner_id:
             # Sending one partner's order to another is not a scenario, it is
             # a mistake - and a mock that performed it would let a test prove

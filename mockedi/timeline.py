@@ -45,7 +45,8 @@ def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]
     events.sort(key=lambda event: (event["at"], RANK[event["event"]],
                                    event.pop("_id")))
     return {"order": po_number, "partner": order["partner"],
-            "status": order["status"], "events": events}
+            "direction": order["direction"], "status": order["status"],
+            "events": events}
 
 
 def _documents(conn, po_number: str, raw: bool) -> List[Dict[str, Any]]:
@@ -150,11 +151,14 @@ def _ordered(conn, order) -> Dict[str, Any]:
         "at": order["at"],
         "event": "ordered",
         "direction": "",
+        "orderDirection": order["direction"],
         "lines": len(lines),
         "total": order["total"],
         "currency": order["currency"],
-        "summary": "order recorded: %d line(s), %s %s"
-                   % (len(lines), order["total"], order["currency"]),
+        "summary": "order %s: %d line(s), %s %s"
+                   % ("placed with %s" % order["partner"]
+                      if order["direction"] == "placed" else "recorded",
+                      len(lines), order["total"], order["currency"]),
     }
 
 
