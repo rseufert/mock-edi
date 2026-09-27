@@ -152,6 +152,20 @@ assert invoice.line_total == invoice.total       # the supplier's own arithmetic
 forgiving about how the other side writes one — which is the point, since the
 documents your partner sends are not the ones this mock writes.
 
+Two mocks wired to each other — a seller and a buyer — are a conversation
+rather than a request, and one call runs it to a stop:
+
+```python
+seller.exchange(buyer)
+```
+
+Settling one mock leaves the other holding work, and a document that is only
+*promised* — a delayed invoice, which does not exist yet — is never `ready`
+however often you settle. `exchange` moves each clock and settles each mock
+until a whole pass changes nothing, and raises with what each side still holds
+rather than hanging. Pass `advance=False` for a test about *when* something
+arrives rather than about what.
+
 `Mock("http://host:9000")` talks to one that is already running, wherever it
 is. `Mock.start(**config)` starts one on a port the OS picks and stops it
 again, and takes the same keywords as the command line.
