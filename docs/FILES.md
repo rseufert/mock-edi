@@ -109,7 +109,9 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | File | What it is |
 | --- | --- |
 | `check_docs.py` | Fails if a tracked file has no row in `docs/FILES.md`, if a row names a file that no longer exists, if a module is missing from the README's layout block, if a command-line flag is never mentioned in the README - it asks the real argument parser - or if a partner behaviour has no row in the README's behaviour table or the row names the wrong roles for it. It checks coverage, not prose. |
+| `changelog.d/README.md` | How to write an entry: one file per entry, named `<number>.<kind>.md`, holding the bullet exactly as it will appear - so that two pull requests adding an entry cannot conflict, and assembling a release is concatenation. |
 | `check_changelog.py` | Fails if `CHANGELOG.md` is malformed, if a released section is edited, if an entry waiting for a release disappears, or if `mockedi/` changed without an entry. A pull request labelled `no changelog` lifts that last rule. |
+| `test_changelog_tool.py` | The changelog checks and the release that assembles them: fragment naming including two entries for one issue, the intro placeholder that the check refuses, an entry that vanished from `changelog.d/` reported as lost, and the newest released section split back into fragments and reassembled entry for entry. |
 
 ## `examples/`
 
