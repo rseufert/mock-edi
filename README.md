@@ -204,7 +204,7 @@ Both are walked through, test by test, in
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice, or send one unprompted |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
-| Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>` |
+| Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
 | Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
@@ -603,28 +603,31 @@ all of it was. A dropped file is filed as processed on the same terms.
 ## An order belongs to the partner that placed it
 
 A purchase order number is not an identity: real numbers are unique per buyer,
-and two customers may both use `4500000042`. The mock stores orders by number
-alone, so until it stores them by partner *and* number, a number one partner
-holds is closed to the others.
+and two customers may both use `4500000042`. The mock keeps an order by its
+partner *and* its number, so both are held, each answered, packed and billed
+on its own, and neither's documents touch the other's.
 
-A change, a cancellation or a restated 850 against an order another partner
-holds is answered exactly as one against an order that does not exist — the
-same words, because a customer has no business learning which numbers its
-competitors use. An 850 placing a new order on a number somebody else holds is
-refused, with an 855 that rejects every line and says *order number already in
-use*:
+Where a URL names an order by number, `?partner=` says whose:
 
-```
-BAK*00*RJ*4500000042*20260924*****20260927~
-ACK*IR*0*EA~
-REF*ZZ**order number already in use~
+```bash
+curl -s 'http://127.0.0.1:8080/_mock/orders/4500000042?partner=GLOBEX'
 ```
 
-Refusing that is wrong in principle and right for now: the alternative is
-replacing the first partner's order, which is what 0.4.0 did — taking its lines
-with it and leaving the despatch and invoice already promised for it pointing
-at goods nobody ordered. The same partner may still send a number again, and it
-replaces its own order as it always has.
+Without it the number has to be unambiguous. When two partners hold it,
+`/_mock/orders/<po>` and its `/timeline` answer `409`, naming both, rather
+than guessing. `/_mock/orders` lists every order, and `mock.order(po,
+partner=...)` in `mockedi.testing` takes the same choice.
+
+A change, a cancellation or a restated 850 is about the sender's own order. One
+naming a number the sender holds no order under is answered exactly as one
+against an order that does not exist, in the same words, because a customer
+has no business learning which numbers its competitors use. The same partner
+may send a number again, and it replaces its own order as it always has.
+
+The one number a partner cannot reuse is that of an order the mock placed with
+it as a supplier, should it later become a customer: that order is the mock's
+own, and an 850 on its number is refused with an 855 that says *order number
+already in use*.
 
 ## A replayed interchange is refused
 

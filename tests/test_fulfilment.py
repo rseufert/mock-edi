@@ -122,8 +122,8 @@ class PackingTheDifference(MockServerCase):
         self.send(x12_order("PO-TWICE"))
         conn = self.httpd.mock.conn
         with self.httpd.mock.lock:
-            before = documents.latest_shipment(conn, "PO-TWICE")
-            again = documents.create_shipment(conn, "PO-TWICE")
+            before = documents.latest_shipment(conn, "PO-TWICE", ACME)
+            again = documents.create_shipment(conn, "PO-TWICE", ACME)
         self.assertEqual(again["shipment_id"], before["shipment_id"],
                          "a second call should name the consignment, not make one")
         rows = self.order("PO-TWICE")["shipments"]
@@ -134,7 +134,8 @@ class PackingTheDifference(MockServerCase):
         self.behaviour(ACME, "reject-all")
         self.send(x12_order("PO-NONE"))
         with self.httpd.mock.lock:
-            shipment = documents.create_shipment(self.httpd.mock.conn, "PO-NONE")
+            shipment = documents.create_shipment(self.httpd.mock.conn, "PO-NONE",
+                                                 ACME)
         self.assertEqual(shipment, None)
         self.assertEqual(self.order("PO-NONE")["shipments"], [])
         self.assertEqual(self.order("PO-NONE")["status"], "rejected")

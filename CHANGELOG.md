@@ -24,6 +24,21 @@ says so where it does.
   **The schema version is now 9**; a file database is upgraded in place, and
   every order it held was received.
 
+### Changed
+
+- **Two partners may each hold an order with the same number** ([#132]). An
+  order is now keyed by its partner and its number, as real purchase order
+  numbers are unique per buyer, not to the world. The 850 that 0.5.0 refused
+  for reusing another partner's number ([#131]) is recorded as that partner's
+  own order, and answered, packed and billed on its own; neither order's
+  documents, shipments or invoices touch the other's. `/_mock/orders/<po>`
+  and its `/timeline` take `?partner=`, and answer `409` naming both partners
+  when the number alone is ambiguous; `mock.order()` and `mock.timeline()`
+  in `mockedi.testing` take `partner=`. A change naming a number the sender
+  holds no order under is still "no such purchase order". **The schema
+  version is now 10**: `purchase_order` and `order_line` are rebuilt in place,
+  every order line taking its order's partner.
+
 ## [0.5.0] - 2026-09-27
 
 Released for the fix: in 0.4.0 one customer could change, cancel or replace
@@ -1017,6 +1032,7 @@ documents a real one sends.
 [#122]: https://github.com/rseufert/mock-edi/issues/122
 [#125]: https://github.com/rseufert/mock-edi/issues/125
 [#131]: https://github.com/rseufert/mock-edi/issues/131
+[#132]: https://github.com/rseufert/mock-edi/issues/132
 [#141]: https://github.com/rseufert/mock-edi/issues/141
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30

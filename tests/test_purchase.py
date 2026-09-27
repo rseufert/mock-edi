@@ -50,7 +50,7 @@ class PlacingAnOrder(Stored):
                          ("placed", "placed", "NORTHWIND"))
         self.assertEqual(order["total"], "1265.50")      # 100 x 12.50 + 5 x 3.10
         self.assertEqual(order["ship_to_id"], "MOCKEDI")
-        line = documents.order_lines(self.conn, order["po_number"])[0]
+        line = documents.order_lines(self.conn, order["po_number"], NORTHWIND)[0]
         self.assertEqual((line["quantity"], line["price"], line["ordered_price"]),
                          ("100", "12.50", "12.50"))
         # Nothing the supplier has said yet, and nothing the seller decided.
@@ -65,7 +65,7 @@ class PlacingAnOrder(Stored):
 
     def test_the_catalogue_fills_in_the_other_item_number(self):
         order = self.place()
-        line = documents.order_lines(self.conn, order["po_number"])[0]
+        line = documents.order_lines(self.conn, order["po_number"], NORTHWIND)[0]
         self.assertTrue(line["upc"])
         self.assertTrue(line["description"])
 
@@ -87,7 +87,7 @@ class ChangingIt(Stored):
         self.po = self.place()["po_number"]
 
     def change(self, **request):
-        return documents.change_placed(self.conn, self.po, request)
+        return documents.change_placed(self.conn, self.po, NORTHWIND, request)
 
     def test_a_line_changed_added_and_deleted(self):
         change = self.change(lines=[
@@ -98,10 +98,10 @@ class ChangingIt(Stored):
                          [("1", "CA", Decimal("80")), ("2", "DI", Decimal("5")),
                           ("3", "AI", Decimal("1"))])
         self.assertFalse(change.cancels)
-        rows = {r["line"]: r for r in documents.order_lines(self.conn, self.po)}
+        rows = {r["line"]: r for r in documents.order_lines(self.conn, self.po, NORTHWIND)}
         self.assertEqual(sorted(rows), ["1", "3"])
         self.assertEqual((rows["1"]["quantity"], rows["1"]["price"]), ("80", "12.50"))
-        self.assertEqual(documents.order_row(self.conn, self.po)["total"], "1012.00")
+        self.assertEqual(documents.order_row(self.conn, self.po, NORTHWIND)["total"], "1012.00")
 
     def test_changes_are_numbered_in_sequence(self):
         first = self.change(lines=[{"line": "1", "quantity": "90"}])
@@ -111,7 +111,7 @@ class ChangingIt(Stored):
     def test_a_cancellation(self):
         change = self.change(cancel=True)
         self.assertTrue(change.cancels)
-        self.assertEqual(documents.order_row(self.conn, self.po)["status"], "cancelled")
+        self.assertEqual(documents.order_row(self.conn, self.po, NORTHWIND)["status"], "cancelled")
         with self.assertRaises(documents.Refused):
             self.change(lines=[{"line": "1", "quantity": "1"}])
 
@@ -131,11 +131,16 @@ class ChangingIt(Stored):
 
     def test_only_a_placed_order_is_changed_this_way(self):
         with self.assertRaises(LookupError):
-            documents.change_placed(self.conn, "NO-SUCH-PO", {"cancel": True})
+            documents.change_placed(self.conn, "NO-SUCH-PO", NORTHWIND, {"cancel": True})
 
 
 class TheSellerLeavesItAlone(MockServerCase):
-    """A placed order's number, arriving from a customer, is not theirs."""
+    """A customer using the number of an order the mock placed.
+
+    Its number, not its order: orders are keyed by partner and number (#132),
+    so the customer's traffic is about its own order and the placed one is
+    untouched whatever arrives.
+    """
 
     def setUp(self):
         super().setUp()
@@ -143,32 +148,39 @@ class TheSellerLeavesItAlone(MockServerCase):
         documents.place_order(conn, SUPPLIER, US,
                               {"po_number": "PO-PLACED", "lines": LINES})
 
-    def test_a_customers_850_cannot_replace_it(self):
-        summary = self.send(x12_order("PO-PLACED"))
-        self.assertEqual(summary["orders"], [])
-        # #131's rule, which covers the mock's own orders as any other's.
-        self.assertEqual([r["reason"] for r in summary["refusals"]],
-                         [documents.NUMBER_IN_USE])
-        self.assertEqual(self.order("PO-PLACED")["direction"], "placed")
-        self.assertEqual(self.order("PO-PLACED")["partner"], "NORTHWIND")
+    def placed(self):
+        order = self.order("PO-PLACED?partner=NORTHWIND")
+        self.assertEqual((order["direction"], order["lines"][0]["quantity"]),
+                         ("placed", "100"))
+        return order
 
-    def test_nor_can_an_860_change_it(self):
+    def test_a_customers_850_is_its_own_order(self):
+        summary = self.send(x12_order("PO-PLACED"))
+        self.assertEqual(summary["orders"], ["PO-PLACED"])
+        self.assertEqual(self.order("PO-PLACED?partner=ACME")["direction"],
+                         "received")
+        self.placed()
+
+    def test_its_860_changes_nothing_of_the_mocks(self):
         summary = self.send(x12_change("PO-PLACED"))
         self.assertEqual([r["reason"] for r in summary["refusals"]],
                          [documents.NOT_FOUND])
-        self.assertEqual(self.order("PO-PLACED")["lines"][0]["quantity"], "100")
+        self.placed()
 
-    def test_nor_an_850_restating_it(self):
-        summary = self.send(x12_order("PO-PLACED", purpose="04"))  # a restatement
-        self.assertEqual([r["reason"] for r in summary["refusals"]],
-                         [documents.NOT_FOUND])
-        self.assertEqual(self.order("PO-PLACED")["lines"][0]["quantity"], "100")
+    def test_nor_does_an_850_restating_it(self):
+        self.send(x12_order("PO-PLACED", purpose="04"))  # a restatement
+        self.placed()
 
     def test_and_the_mock_does_not_answer_it_on_demand(self):
         status, _h, data = self.post("/_mock/send", {
-            "partner": ACME, "kind": schema.RESPONSE, "po": "PO-PLACED"})
+            "partner": NORTHWIND, "kind": schema.RESPONSE, "po": "PO-PLACED"})
         self.assertEqual(status, 400, data)
         self.assertIn("the mock placed", data["error"])
+        status, _h, data = self.post("/_mock/send", {
+            "partner": ACME, "kind": schema.RESPONSE, "po": "PO-PLACED"})
+        self.assertEqual(status, 400, data)
+        self.assertIn("ACME has no purchase order 'PO-PLACED'; NORTHWIND does",
+                      data["error"])
 
 
 # -- over HTTP, with a supplier on the other end
@@ -299,7 +311,7 @@ class PlacingOverHttp(BuyingCase):
         status, _h, data = self.post("/_mock/purchase/PO-RECEIVED/change",
                                      {"cancel": True})
         self.assertEqual(status, 404)
-        self.assertIn("the mock placed no purchase order 'PO-RECEIVED'", data["error"])
+        self.assertIn("no purchase order 'PO-RECEIVED' placed", data["error"])
         self.assertNotEqual(self.order("PO-RECEIVED")["status"], "cancelled")
 
     def test_the_suppliers_997_acknowledges_it(self):

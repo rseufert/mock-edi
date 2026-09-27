@@ -238,8 +238,8 @@ class SendingSomebodyElsesOrder(PartnerCase):
                                      {"partner": EURODIS, "kind": "invoice",
                                       "order": "PO-OWNED"})
         self.assertEqual(status, 400, data)
-        self.assertIn("belongs to ACME", data["error"])
-        self.assertIn(EURODIS, data["error"])
+        self.assertIn("EURODIS has no purchase order 'PO-OWNED'; ACME does",
+                      data["error"])
 
     def test_and_nothing_is_queued_for_them(self):
         self.post("/_mock/send", {"partner": EURODIS, "kind": "invoice",

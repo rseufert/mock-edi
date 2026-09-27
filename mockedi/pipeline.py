@@ -251,30 +251,23 @@ class Pipeline:
                     # A buyer may restate a whole order rather than send an
                     # 860, and BEG01 says so. Against an order the mock already
                     # holds that is a change, not a replacement.
-                    known = documents.order_row(self.conn, order.po_number)
+                    # This partner's own order with the number: another
+                    # partner's order with it is a different order (#132).
+                    known = documents.order_row(self.conn, order.po_number,
+                                                partner["id"])
                     if order.purpose in transactions.CHANGE_PURPOSES and known:
-                        # A restatement is a change, and a change to an order
-                        # somebody else holds is answered exactly as a change
-                        # to an order that does not exist - `apply_change` has
-                        # the ownership check, and the 865 says no such order.
-                        held = [row["line"] for row in
-                                documents.order_lines(self.conn, order.po_number)]
+                        held = [row["line"] for row in documents.order_lines(
+                            self.conn, order.po_number, partner["id"])]
                         self._apply_change(
                             partner, transactions.change_from_order(order, held),
                             receipt)
-                    elif known is not None and (
-                            not documents.belongs_to(known, partner)
-                            or known["direction"] == documents.PLACED):
-                        # Somebody else's number, or one the mock placed with
-                        # this partner when it was a supplier, and this order
-                        # means to take it. Recording it would replace their order and leave
-                        # the despatch and invoice promised for it pointing at
-                        # lines they never sent.
-                        #
-                        # Unlike a change, this one is told the number is in
-                        # use rather than that no such order exists: placing an
-                        # order is not asking about one, and "pick another
-                        # number" is the only answer a sender can act on.
+                    elif known is not None and known["direction"] == documents.PLACED:
+                        # This partner's number for an order the mock placed
+                        # with it when it was a supplier. Recording it would
+                        # replace the mock's own purchase order with one it
+                        # received; the sender is told the number is in use,
+                        # since "pick another number" is the only answer it
+                        # can act on.
                         receipt.refusals.append(
                             {"order": order.po_number,
                              "reason": documents.NUMBER_IN_USE})
@@ -349,9 +342,9 @@ class Pipeline:
         """
         kind = message_report.kind
         po_number = SUPPLIER_DOCUMENTS[kind](message, dialect).po_number
-        order = documents.order_row(self.conn, po_number) if po_number else None
-        if (order is not None and order["direction"] == documents.PLACED
-                and order["partner"] == partner["id"]):
+        order = (documents.order_row(self.conn, po_number, partner["id"])
+                 if po_number else None)
+        if order is not None and order["direction"] == documents.PLACED:
             receipt.filed.append({"kind": kind, "code": message.code,
                                   "control": message.control, "order": po_number})
             return po_number
@@ -402,8 +395,8 @@ class Pipeline:
             # Nothing more will be packed or billed for a cancelled order.
             self.conn.execute(
                 "UPDATE scheduled SET done_at = ?, note = 'order cancelled'"
-                " WHERE po_number = ? AND done_at = ''",
-                (db.now(), change.po_number))
+                " WHERE partner = ? AND po_number = ? AND done_at = ''",
+                (db.now(), partner["id"], change.po_number))
             self.conn.commit()
             return
         self._schedule_the_difference(partner, change.po_number, self.now())
@@ -418,13 +411,14 @@ class Pipeline:
         an 856 and an 810 of its own. Work already scheduled is not doubled:
         a despatch still to come packs whatever is confirmed by then.
         """
-        lines = documents.order_lines(self.conn, po_number)
+        lines = documents.order_lines(self.conn, po_number, partner["id"])
         if not any(transactions.number(row["confirmed"])
                    > transactions.number(row["shipped"]) for row in lines):
             return
         waiting = {row["kind"] for row in db.rows(
-            self.conn, "SELECT kind FROM scheduled WHERE po_number = ?"
-                       " AND done_at = ''", (po_number,))}
+            self.conn, "SELECT kind FROM scheduled WHERE partner = ?"
+                       " AND po_number = ? AND done_at = ''",
+            (partner["id"], po_number))}
         self._schedule_fulfilment(partner, po_number, moment,
                                   skip=waiting)
 
@@ -443,12 +437,13 @@ class Pipeline:
         self._queue_acknowledgment(partner, interchange, report, receipt, moment)
 
         for po_number in receipt.orders:
-            order = documents.order_row(self.conn, po_number)
+            order = documents.order_row(self.conn, po_number, partner["id"])
             if order is None:
                 continue
             if behaviour == "out-of-order" and any(
                     transactions.number(row["confirmed"]) > 0
-                    for row in documents.order_lines(self.conn, po_number)):
+                    for row in documents.order_lines(self.conn, po_number,
+                                                     partner["id"])):
                 # The response waits until the goods have shipped; see
                 # _fulfil. An order with nothing to ship has no despatch to
                 # wait for, and is answered now.
@@ -466,7 +461,7 @@ class Pipeline:
                                 documents.NUMBER_IN_USE, moment)
 
         for po_number in receipt.changes:
-            order = documents.order_row(self.conn, po_number)
+            order = documents.order_row(self.conn, po_number, partner["id"])
             if order is not None:
                 self._queue_change_response(partner, order, po_number, receipt,
                                             moment)
@@ -550,7 +545,7 @@ class Pipeline:
                    moment, self.config.response_delay_ms)
 
     def _queue_response(self, partner, order, receipt, moment) -> None:
-        lines = documents.order_lines(self.conn, order["po_number"])
+        lines = documents.order_lines(self.conn, order["po_number"], order["partner"])
         body = transactions.write_response(
             partner["dialect"], self.us, partner, order, lines, moment)
         self._send(partner, schema.RESPONSE, body, order["po_number"], receipt,
@@ -603,10 +598,11 @@ class Pipeline:
         po_number = row["po_number"]
 
         if row["kind"] == schema.DESPATCH:
-            shipment = documents.create_shipment(self.conn, po_number, moment)
+            shipment = documents.create_shipment(self.conn, po_number,
+                                                 partner["id"], moment)
             if shipment is None:
                 return
-            order = documents.order_row(self.conn, po_number)
+            order = documents.order_row(self.conn, po_number, partner["id"])
             lines = documents.consignment_lines(self.conn, shipment["shipment_id"])
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order, lines, shipment,
@@ -622,14 +618,15 @@ class Pipeline:
         # before the despatch, or before the second consignment of a quantity
         # raised after the first. The despatch, when it comes, advises that
         # consignment rather than packing another.
-        documents.create_shipment(self.conn, po_number, moment)
-        for shipment in documents.uninvoiced_shipments(self.conn, po_number):
+        documents.create_shipment(self.conn, po_number, partner["id"], moment)
+        for shipment in documents.uninvoiced_shipments(self.conn, po_number,
+                                                       partner["id"]):
             invoice = documents.create_invoice(
-                self.conn, po_number, shipment["shipment_id"], moment,
-                self.config.tax_rate)
+                self.conn, po_number, partner["id"], shipment["shipment_id"],
+                moment, self.config.tax_rate)
             if invoice is None:
                 continue
-            order = documents.order_row(self.conn, po_number)
+            order = documents.order_row(self.conn, po_number, partner["id"])
             lines = documents.consignment_lines(self.conn, shipment["shipment_id"])
             body = transactions.write_invoice(
                 partner["dialect"], self.us, partner, order, lines, invoice,
@@ -654,7 +651,7 @@ class Pipeline:
         change = receipt.change_requests.get(po_number)
         outcome = receipt.change_outcomes.get(po_number)
         stored = {row["line"]: row for row in
-                  documents.order_lines(self.conn, po_number)}
+                  documents.order_lines(self.conn, po_number, partner["id"])}
         lines = []
         for entry in (outcome.lines if outcome else []):
             row = dict(stored.get(entry["line"], {}))
@@ -825,44 +822,49 @@ class Pipeline:
         if kind == schema.ACKNOWLEDGMENT:
             raise ValueError("an acknowledgment answers an interchange; send the "
                              "interchange instead")
-        order = documents.order_row(self.conn, po_number) if po_number else None
+        order = (documents.order_row(self.conn, po_number, partner_id)
+                 if po_number else None)
         if order is None:
-            raise ValueError("no purchase order %r" % po_number)
-        if order["direction"] == documents.PLACED:
-            raise ValueError("purchase order %s is one the mock placed; the "
-                             "supplier answers it, not the mock" % po_number)
-        if order["partner"] != partner_id:
             # Sending one partner's order to another is not a scenario, it is
             # a mistake - and a mock that performed it would let a test prove
             # something that could never happen on a real connection.
+            others = [row["partner"] for row in
+                      documents.orders_numbered(self.conn, po_number)]
             raise ValueError(
-                "purchase order %s belongs to %s, not to %s"
-                % (po_number, order["partner"], partner_id))
-        lines = documents.order_lines(self.conn, po_number)
+                "%s has no purchase order %r%s"
+                % (partner_id, po_number,
+                   "; %s does" % " and ".join(others) if others else ""))
+        if order["direction"] == documents.PLACED:
+            raise ValueError("purchase order %s is one the mock placed; the "
+                             "supplier answers it, not the mock" % po_number)
+        lines = documents.order_lines(self.conn, po_number, partner_id)
 
         if kind == schema.RESPONSE:
             body = transactions.write_response(
                 partner["dialect"], self.us, partner, order, lines, moment)
         elif kind == schema.DESPATCH:
-            shipment = documents.latest_shipment(self.conn, po_number) or \
-                documents.create_shipment(self.conn, po_number, moment) or {}
-            order = documents.order_row(self.conn, po_number)
-            lines = documents.order_lines(self.conn, po_number)
+            shipment = documents.latest_shipment(self.conn, po_number, partner_id) or \
+                documents.create_shipment(self.conn, po_number, partner_id,
+                                          moment) or {}
+            order = documents.order_row(self.conn, po_number, partner_id)
+            lines = documents.order_lines(self.conn, po_number, partner_id)
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order, lines, shipment, moment)
         elif kind == schema.INVOICE:
-            shipment = documents.latest_shipment(self.conn, po_number) or {}
-            invoice = db.one(self.conn, "SELECT * FROM invoice WHERE po_number = ?"
-                                        " ORDER BY rowid DESC LIMIT 1", (po_number,))
+            shipment = documents.latest_shipment(self.conn, po_number, partner_id) or {}
+            invoice = db.one(self.conn, "SELECT * FROM invoice WHERE partner = ?"
+                                        " AND po_number = ?"
+                                        " ORDER BY rowid DESC LIMIT 1",
+                             (partner_id, po_number))
             if invoice is None:
                 invoice = documents.create_invoice(
-                    self.conn, po_number, shipment.get("shipment_id", ""), moment,
-                    self.config.tax_rate)
+                    self.conn, po_number, partner_id, shipment.get("shipment_id", ""),
+                    moment, self.config.tax_rate)
             if invoice is None:
                 raise ValueError("nothing has shipped against %r, so there is "
                                  "nothing to invoice" % po_number)
-            order = documents.order_row(self.conn, po_number)
-            lines = documents.order_lines(self.conn, po_number)
+            order = documents.order_row(self.conn, po_number, partner_id)
+            lines = documents.order_lines(self.conn, po_number, partner_id)
             body = transactions.write_invoice(
                 partner["dialect"], self.us, partner, order, lines, invoice,
                 shipment, moment)
@@ -888,22 +890,24 @@ class Pipeline:
         order = documents.place_order(self.conn, partner, self.us, request, moment)
         body = transactions.write_order(
             partner["dialect"], self.us, partner, order,
-            documents.order_lines(self.conn, order["po_number"]), moment)
+            documents.order_lines(self.conn, order["po_number"], partner["id"]), moment)
         queued = self._send(partner, schema.ORDER, body, order["po_number"], None,
                             moment)
         self.release(self.now())
         return order, queued
 
-    def change_placed(self, po_number: str,
+    def change_placed(self, po_number: str, partner_id: str,
                       request: Dict[str, Any]) -> Tuple[Dict, Queued]:
         """Change or cancel an order the mock placed, and send the 860 or ORDCHG."""
-        order = documents.order_row(self.conn, po_number)
+        order = documents.order_row(self.conn, po_number, partner_id)
         if order is None or order["direction"] != documents.PLACED:
-            raise LookupError("the mock placed no purchase order %r" % po_number)
-        partner = self._supplier(order["partner"])
+            raise LookupError("the mock placed no purchase order %r with %s"
+                              % (po_number, partner_id))
+        partner = self._supplier(partner_id)
         moment = self.now()
-        change = documents.change_placed(self.conn, po_number, request, moment)
-        order = documents.order_row(self.conn, po_number)
+        change = documents.change_placed(self.conn, po_number, partner_id,
+                                         request, moment)
+        order = documents.order_row(self.conn, po_number, partner_id)
         body = transactions.write_change(partner["dialect"], self.us, partner,
                                          order, change, moment)
         queued = self._send(partner, schema.CHANGE, body, po_number, None, moment)
