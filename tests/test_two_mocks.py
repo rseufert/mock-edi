@@ -42,12 +42,10 @@ LINES = [{"sku": "WIDGET-001", "quantity": "100", "uom": "EA",
 class Pair:
     """A seller and a buyer, each the other's trading partner.
 
-    `exchange` is the part worth naming. `settle` drains one mock's courier,
-    and a conversation between two of them is a rally: the seller's 855
-    arrives, the buyer answers with a 997, the seller reconciles it. Neither
-    side is finished until both are, and work that is only *scheduled* - the
-    second invoice `duplicate-invoice` sends - is not ready until the clock
-    moves. So the rally runs until nothing moves on either side.
+    Pushing the conversation through is `Mock.exchange`, which this file's own
+    copy of became: a rally between two mocks, with each clock moved so that
+    work only *promised* - the second invoice `duplicate-invoice` sends - is
+    not mistaken for a document that never arrived. #141 has the story.
     """
 
     def __init__(self, dialect="X12", behaviour="accept"):
@@ -75,25 +73,8 @@ class Pair:
             {"partner": "SELLCO", "po_number": po_number,
              "lines": lines if lines is not None else LINES}, status=201)
 
-    def exchange(self, rounds=10):
-        for _ in range(rounds):
-            moved = False
-            for mock in (self.buyer, self.seller):
-                if any(row["status"] == "pending" for row in mock.outbox()):
-                    mock.advance(everything=True)
-                    moved = True
-                before = self._state(mock)
-                mock.settle(timeout=15.0)
-                if self._state(mock) != before:
-                    moved = True
-            if not moved:
-                return
-        raise AssertionError(
-            "the two mocks were still talking after %d rounds" % rounds)
-
-    @staticmethod
-    def _state(mock):
-        return [(row["id"], row["status"]) for row in mock.outbox()]
+    def exchange(self):
+        self.buyer.exchange(self.seller)
 
     # -- what the buyer made of it
 
