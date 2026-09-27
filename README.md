@@ -322,7 +322,9 @@ happened in.
 
 ## Partner behaviours
 
-Four partners are seeded. Change any of them at runtime:
+Five partners are seeded. The mock sells to four customers - `ACME`,
+`GLOBEX`, `INITECH` and `EURODIS` - and buys from one supplier, `NORTHWIND`.
+Change any of them at runtime:
 
 ```bash
 curl -X PATCH -H 'Content-Type: application/json' \
@@ -339,6 +341,14 @@ to something the partner could never be found by. It may use only letters,
 digits, and `.`, `-` or `_` between them: narrower than the standards allow,
 because an id also becomes a pickup filename and part of a URL, and one with a
 `/` in it once wrote documents outside `--pickup-dir`.
+
+A partner's `role` is what it is to the mock: a `customer` the mock sells to,
+the default and every partner there was before, or a `supplier` it buys from.
+A behaviour that only a seller can have - one that changes what the mock does
+with an order it received, such as `short-ship` or `no-invoice` - is refused
+on a supplier, and so is a role change that would strand such a behaviour. The
+role is recorded, checked and shown today; placing orders with a supplier
+comes next.
 
 | Behaviour | What the partner does |
 | --- | --- |

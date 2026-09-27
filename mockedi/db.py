@@ -43,7 +43,11 @@ CREATE TABLE IF NOT EXISTS partner (
     postal       TEXT NOT NULL DEFAULT '',
     country      TEXT NOT NULL DEFAULT 'US',
     duns         TEXT NOT NULL DEFAULT '',
-    test         INTEGER NOT NULL DEFAULT 0
+    test         INTEGER NOT NULL DEFAULT 0,
+    -- What the partner is to the mock: a `customer` it sells to, or a
+    -- `supplier` it buys from. The mock's own side (schema.SELLER/BUYER) is
+    -- derived from this in one place, partners.mock_role, never stored.
+    role         TEXT NOT NULL DEFAULT 'customer'
 );
 
 -- A partner's implementation guide, as a narrowing of the dictionary: the
@@ -348,7 +352,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 7
+SCHEMA_VERSION = 8
 
 
 class DatabaseError(Exception):
@@ -581,15 +585,24 @@ BEHAVIOURS = {
 }
 
 PARTNERS = [
-    # id, name, qualifier, dialect, version, behaviour, address, duns
+    # id, name, qualifier, dialect, version, behaviour, address, duns, role
     ("ACME", "Acme Distribution Inc", "ZZ", "X12", "004010", "accept",
-     ("1 Industrial Parkway", "Columbus", "OH", "43215", "US"), "004321789"),
+     ("1 Industrial Parkway", "Columbus", "OH", "43215", "US"), "004321789",
+     "customer"),
     ("GLOBEX", "Globex Retail Group", "ZZ", "X12", "005010", "short-ship",
-     ("4400 Commerce Drive", "Fort Worth", "TX", "76102", "US"), "008812345"),
+     ("4400 Commerce Drive", "Fort Worth", "TX", "76102", "US"), "008812345",
+     "customer"),
     ("INITECH", "Initech Supply Co", "01", "X12", "004010", "reject-line",
-     ("222 Bishop Ranch", "San Ramon", "CA", "94583", "US"), "007654321"),
+     ("222 Bishop Ranch", "San Ramon", "CA", "94583", "US"), "007654321",
+     "customer"),
     ("EURODIS", "Eurodis Handels GmbH", "14", "EDIFACT", "D:96A:UN", "accept",
-     ("Hafenstrasse 12", "Hamburg", "HH", "20457", "DE"), "315522110"),
+     ("Hafenstrasse 12", "Hamburg", "HH", "20457", "DE"), "315522110",
+     "customer"),
+    # The one partner the mock buys from, so the demo and the index page have
+    # a supplier to show.
+    ("NORTHWIND", "Northwind Components Ltd", "ZZ", "X12", "004010", "accept",
+     ("77 Harbour Road", "Portland", "OR", "97209", "US"), "006135792",
+     "supplier"),
 ]
 
 CATALOG = [
@@ -635,14 +648,14 @@ def seed(conn: sqlite3.Connection, seed_value: int = 42, us_id: str = "MOCKEDI")
     rng = random.Random(seed_value)
 
     for index, (pid, name, qualifier, dialect, version, behaviour, address,
-                duns) in enumerate(PARTNERS):
+                duns, role) in enumerate(PARTNERS):
         street, city, region, postal, country = address
         conn.execute(
             "INSERT INTO partner (id, name, qualifier, dialect, version, behaviour,"
-            " street, city, region, postal, country, duns, test)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " street, city, region, postal, country, duns, test, role)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (pid, name, qualifier, dialect, version, behaviour,
-             street, city, region, postal, country, duns, 1))
+             street, city, region, postal, country, duns, 1, role))
 
     for index, (sku, description, price, uom, stock) in enumerate(CATALOG):
         conn.execute(

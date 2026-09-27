@@ -10,6 +10,21 @@ says so where it does.
 
 ### Added
 
+- **A partner has a `role`: `customer` or `supplier`** ([#125]). The first
+  step of the mock buying as well as selling (#116). `role` is what the
+  partner is to the mock - a `customer` it sells to, the default and every
+  partner there was before, or a `supplier` it buys from - and it is set and
+  checked on `POST` and `PATCH /_mock/partners` like every other field. The
+  words are chosen to share nothing with the mock's own side, `seller` and
+  `buyer`, so the two cannot be confused. A behaviour only a seller can have
+  (`short-ship`, `reject-line`, `reject-all`, `duplicate-invoice`,
+  `out-of-order`, `no-invoice`) is refused on a supplier, and so is a role
+  change that would strand one. `NORTHWIND` is seeded as a supplier, and the
+  index page and the startup banner show each partner's role. The role is
+  recorded and shown; nothing yet acts on it.
+  **The schema version is now 8**: a file database is upgraded in place, and
+  every partner it held is a customer.
+
 - **`Mock.exchange`** ([#141]), which runs a conversation between two mocks to
   a stop. `settle` drains one mock and waits for its own outbox; two mocks
   talking are a rally, and neither side is finished until both are. Worse, two
