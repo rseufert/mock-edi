@@ -27,6 +27,11 @@ from . import db
 # endpoints.
 RANK = {"received": 0, "ordered": 1, "promised": 2, "packed": 3,
         "invoiced": 4, "sent": 5, "acknowledged": 6}
+# An order the mock placed runs the other way: the order is recorded, the 850
+# goes out, and everything the supplier sends answers it. Documents in one
+# second keep the order they were archived in, which is the order they
+# happened in.
+PLACED_RANK = dict(RANK, ordered=0, sent=1, received=1, acknowledged=2)
 
 
 def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]]:
@@ -42,10 +47,12 @@ def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]
     events.extend(_promised(conn, po_number))
     events.extend(_packed(conn, po_number))
     events.extend(_invoiced(conn, po_number))
-    events.sort(key=lambda event: (event["at"], RANK[event["event"]],
+    rank = PLACED_RANK if order["direction"] == "placed" else RANK
+    events.sort(key=lambda event: (event["at"], rank[event["event"]],
                                    event.pop("_id")))
     return {"order": po_number, "partner": order["partner"],
-            "status": order["status"], "events": events}
+            "direction": order["direction"], "status": order["status"],
+            "events": events}
 
 
 def _documents(conn, po_number: str, raw: bool) -> List[Dict[str, Any]]:
@@ -150,11 +157,14 @@ def _ordered(conn, order) -> Dict[str, Any]:
         "at": order["at"],
         "event": "ordered",
         "direction": "",
+        "orderDirection": order["direction"],
         "lines": len(lines),
         "total": order["total"],
         "currency": order["currency"],
-        "summary": "order recorded: %d line(s), %s %s"
-                   % (len(lines), order["total"], order["currency"]),
+        "summary": "order %s: %d line(s), %s %s"
+                   % ("placed with %s" % order["partner"]
+                      if order["direction"] == "placed" else "recorded",
+                      len(lines), order["total"], order["currency"]),
     }
 
 

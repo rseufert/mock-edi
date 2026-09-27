@@ -123,6 +123,7 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     ship_to_region TEXT NOT NULL DEFAULT '',
     ship_to_postal TEXT NOT NULL DEFAULT '',
     ship_to_country TEXT NOT NULL DEFAULT 'US',
+    direction    TEXT NOT NULL DEFAULT 'received',
     at           TEXT NOT NULL
 );
 
@@ -296,6 +297,7 @@ RANGE_START = {
     "group": 1,
     "transaction": 1,
     "seller_order": 5100000,
+    "purchase_order": 4800000001,
     "shipment": 8000000,
     "invoice": 9000000,
     "bol": 700000,
@@ -352,7 +354,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 8
+SCHEMA_VERSION = 9
 
 
 class DatabaseError(Exception):

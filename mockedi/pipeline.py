@@ -30,7 +30,8 @@ from . import (ack, charsets, db, documents, edifact, partners, profiles, reconc
                transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
-from .validate import EnvelopeFinding, InterchangeReport, validate
+from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
+                       SegmentFinding, validate)
 
 PENDING = "pending"
 # How much later the `late` partner answers than it otherwise would: an hour.
@@ -42,6 +43,19 @@ FAILED = "failed"
 
 # The order documents leave in, and which behaviours suppress each one.
 FOLLOW_UPS = (schema.RESPONSE, schema.DESPATCH, schema.INVOICE)
+
+# What a supplier sends about an order the mock placed, and how to read it.
+SUPPLIER_DOCUMENTS = {
+    schema.RESPONSE: transactions.read_response,
+    schema.CHANGE_RESPONSE: transactions.read_change_response,
+    schema.DESPATCH: transactions.read_despatch,
+    schema.INVOICE: transactions.read_invoice,
+}
+
+# Where each of them names the purchase order, for a finding that points at
+# it: X12 in a header element, EDIFACT in RFF+ON's second component.
+_X12_ORDER_REFERENCE = {"855": ("BAK", 3), "865": ("BCA", 3), "810": ("BIG", 4),
+                        "856": ("PRF", 1)}
 
 
 @dataclass
@@ -72,6 +86,8 @@ class Receipt:
     change_outcomes: Dict[str, Any] = field(default_factory=dict)
     acknowledged: List[Dict[str, Any]] = field(default_factory=list)
     refusals: List[Dict[str, str]] = field(default_factory=list)
+    # What a supplier sent about an order the mock placed, and which order.
+    filed: List[Dict[str, str]] = field(default_factory=list)
     # The orders that were refused outright, by number, so that the 855 saying
     # so can be queued after the 997 rather than before it. Mirrors
     # `change_requests`: what arrived, kept until there is somewhere to answer.
@@ -204,9 +220,9 @@ class Pipeline:
             "in", interchange, partner["id"], text, transport, message_id, mic,
             raw, charset)
 
-        # Every partner is a buyer, so the mock receives as the seller.
+        role = partners.mock_role(partner)
         report = validate(interchange, strict=partner["behaviour"] == "strict",
-                          envelope_faults=faults, role=schema.SELLER,
+                          envelope_faults=faults, role=role,
                           profile=profiles.load(self.conn, partner["id"]))
         if partner["behaviour"] == "reject-ack":
             # A translator misconfigured into refusing everything: every set
@@ -220,8 +236,15 @@ class Pipeline:
 
         for (_group, message), message_report in zip(interchange.messages(),
                                                      report.messages):
+            reference = None
+            if (message_report.kind in SUPPLIER_DOCUMENTS
+                    and message_report.accepted):
+                # Only a supplier's can get here: the role table refused the
+                # same documents from a customer.
+                reference = self._file(partner, message, message_report,
+                                       dialect, receipt)
             self._record(interchange_id, partner, message, message_report,
-                         dialect)
+                         dialect, reference)
             if (message_report.kind == schema.ORDER and message_report.accepted):
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
@@ -239,10 +262,12 @@ class Pipeline:
                         self._apply_change(
                             partner, transactions.change_from_order(order, held),
                             receipt)
-                    elif known is not None and not documents.belongs_to(known,
-                                                                        partner):
-                        # Somebody else's number, and this order means to take
-                        # it. Recording it would replace their order and leave
+                    elif known is not None and (
+                            not documents.belongs_to(known, partner)
+                            or known["direction"] == documents.PLACED):
+                        # Somebody else's number, or one the mock placed with
+                        # this partner when it was a supplier, and this order
+                        # means to take it. Recording it would replace their order and leave
                         # the despatch and invoice promised for it pointing at
                         # lines they never sent.
                         #
@@ -312,15 +337,41 @@ class Pipeline:
             note="interchange control reference %s was already received from "
                  "%s at %s" % (interchange.control, partner_id, seen["at"]))]
 
+    def _file(self, partner: Dict[str, Any], message, message_report,
+              dialect: str, receipt: Receipt) -> str:
+        """Match a supplier's document to the order the mock placed with it.
+
+        One that names an order the mock never placed with this supplier is
+        refused - the one business disagreement that is also a 997's business,
+        because with no order there is nothing to reconcile the document
+        against (#116). Returns the PO number to archive it under, or "" for
+        a refused one, which is no order's story.
+        """
+        kind = message_report.kind
+        po_number = SUPPLIER_DOCUMENTS[kind](message, dialect).po_number
+        order = documents.order_row(self.conn, po_number) if po_number else None
+        if (order is not None and order["direction"] == documents.PLACED
+                and order["partner"] == partner["id"]):
+            receipt.filed.append({"kind": kind, "code": message.code,
+                                  "control": message.control, "order": po_number})
+            return po_number
+        message_report.segments.append(
+            _unknown_order(message, dialect, po_number, partner["id"]))
+        message_report.accepted = False
+        if not any(code == "5" for code, _ in message_report.set_errors):
+            message_report.set_errors.append(("5", "one or more segments in error"))
+        return ""
+
     def _record(self, interchange_id: int, partner: Dict[str, Any], message,
-                message_report, dialect: str) -> str:
+                message_report, dialect: str, reference: Optional[str] = None) -> str:
         """Log one inbound transaction set and what validation made of it."""
         # A set from the wrong direction is archived, as everything received
         # is, but not under the PO number it names: it is not part of that
         # order's story, and ?reference= would otherwise show a stranger's
         # invoice beside it.
-        reference = ("" if message_report.misdirected
-                     else _reference_of(message, dialect, message_report.kind))
+        if reference is None:
+            reference = ("" if message_report.misdirected
+                         else _reference_of(message, dialect, message_report.kind))
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
             " partner, code, kind, control, group_control, reference, accepted,"
@@ -777,6 +828,9 @@ class Pipeline:
         order = documents.order_row(self.conn, po_number) if po_number else None
         if order is None:
             raise ValueError("no purchase order %r" % po_number)
+        if order["direction"] == documents.PLACED:
+            raise ValueError("purchase order %s is one the mock placed; the "
+                             "supplier answers it, not the mock" % po_number)
         if order["partner"] != partner_id:
             # Sending one partner's order to another is not a scenario, it is
             # a mistake - and a mock that performed it would let a test prove
@@ -819,6 +873,49 @@ class Pipeline:
         queued = self._send(partner, kind, body, po_number, None, moment, delay_ms)
         self.release(self.now())
         return queued
+
+    # -- buying
+
+    def place(self, partner_id: str, request: Dict[str, Any]) -> Tuple[Dict, Queued]:
+        """Place an order with a supplier: store it, and send the 850 or ORDERS.
+
+        It goes through `_send` like anything else the mock writes, so delays,
+        `as2_url` delivery, the pickup directory and `/_mock/outbox` treat it
+        as they treat an 855.
+        """
+        partner = self._supplier(partner_id)
+        moment = self.now()
+        order = documents.place_order(self.conn, partner, self.us, request, moment)
+        body = transactions.write_order(
+            partner["dialect"], self.us, partner, order,
+            documents.order_lines(self.conn, order["po_number"]), moment)
+        queued = self._send(partner, schema.ORDER, body, order["po_number"], None,
+                            moment)
+        self.release(self.now())
+        return order, queued
+
+    def change_placed(self, po_number: str,
+                      request: Dict[str, Any]) -> Tuple[Dict, Queued]:
+        """Change or cancel an order the mock placed, and send the 860 or ORDCHG."""
+        order = documents.order_row(self.conn, po_number)
+        if order is None or order["direction"] != documents.PLACED:
+            raise LookupError("the mock placed no purchase order %r" % po_number)
+        partner = self._supplier(order["partner"])
+        moment = self.now()
+        change = documents.change_placed(self.conn, po_number, request, moment)
+        order = documents.order_row(self.conn, po_number)
+        body = transactions.write_change(partner["dialect"], self.us, partner,
+                                         order, change, moment)
+        queued = self._send(partner, schema.CHANGE, body, po_number, None, moment)
+        self.release(self.now())
+        return order, queued
+
+    def _supplier(self, partner_id: str) -> Dict[str, Any]:
+        partner = partners.require(self.conn, partner_id)
+        if partners.mock_role(partner) != schema.BUYER:
+            raise documents.Refused(["the mock sells to %s; it does not order "
+                                     "from it" % partner_id])
+        return partner
 
     # -- the queue
 
@@ -1007,6 +1104,35 @@ def _reference_of(message, dialect: str, kind: str) -> str:
         return ""
     bgm = message.find("BGM")
     return bgm.comp(2, 1) if bgm is not None else ""
+
+
+def _unknown_order(message, dialect: str, po_number: str,
+                   partner_id: str) -> SegmentFinding:
+    """A finding at the element naming an order the mock never placed."""
+    note = ("purchase order %s was never placed with %s" % (po_number, partner_id)
+            if po_number else "names no purchase order placed with %s" % partner_id)
+    if dialect == "X12":
+        tag, position = _X12_ORDER_REFERENCE[message.code]
+        component = 0
+        found = message.find(tag)
+    else:
+        tag, position, component = "RFF", 1, 2
+        found = next((item for item in message.segments
+                      if item.tag == "RFF" and item.comp(1, 1) == "ON"), None)
+    if found is None:
+        # 720 code 3, a mandatory segment missing: without it there is no
+        # order to hold the document against.
+        return SegmentFinding(tag=tag, position=len(message.segments), code="3",
+                              note=note, severity=FATAL)
+    # 723 code 7 - which 0085 says as 12, Invalid value: an order number
+    # that is not one of the buyer's is as wrong as a code not in its list.
+    return SegmentFinding(
+        tag=tag, position=found.position, code="8", note=note, severity=FATAL,
+        loop="HL" if tag == "PRF" else "",
+        elements=[ElementFinding(position=position, component=component,
+                                 ref="324" if dialect == "X12" else "1154",
+                                 code="7", value=po_number, note=note,
+                                 severity=FATAL)])
 
 
 def _findings(message_report) -> List[str]:
