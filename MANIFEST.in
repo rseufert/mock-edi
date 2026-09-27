@@ -1,3 +1,6 @@
 include LICENSE README.md CHANGELOG.md CONTRIBUTING.md Dockerfile
 recursive-include examples *.py *.sh *.edi
 recursive-include tests *.py *.sql
+# Entries waiting for a release. A user of the package reads CHANGELOG.md;
+# an sdist should never carry half-assembled notes.
+prune changelog.d
