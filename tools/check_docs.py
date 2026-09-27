@@ -12,7 +12,8 @@ Five checks:
 2. every file named in docs/FILES.md exists
 3. every module of the package appears in the README's layout block
 4. every command-line flag is mentioned in the README
-5. every partner behaviour has a row in the README's behaviour table
+5. every partner behaviour has a row in the README's behaviour table, and
+   the row names the partner roles it applies to
 
 The fourth asks the real argument parser for its flags, so a flag added to
 `mockedi/__main__.py` without a word in the README fails the build - fourteen
@@ -68,10 +69,10 @@ def cli_flags():
 
 
 def behaviours():
-    """Every partner behaviour, from the table the mock itself uses."""
+    """Every partner behaviour and the roles it applies to, from the mock's own table."""
     sys.path.insert(0, ROOT)
-    from mockedi.db import BEHAVIOURS
-    return sorted(BEHAVIOURS)
+    from mockedi.db import BEHAVIOUR_ROLES, BEHAVIOURS
+    return [(name, BEHAVIOUR_ROLES[name]) for name in sorted(BEHAVIOURS)]
 
 
 def main():
@@ -119,12 +120,21 @@ def main():
                 "%s is a command-line flag the README never mentions - add it to "
                 "the Configuration section" % flag)
 
-    # 5. every behaviour a partner can be set to has a row in the README
-    for name in behaviours():
-        if not re.search(r"^\| `%s` \|" % re.escape(name), readme, re.M):
+    # 5. every behaviour a partner can be set to has a row in the README,
+    #    which says which partner roles it applies to
+    for name, roles in behaviours():
+        row = re.search(r"^\| `%s` \|([^|]*)\|" % re.escape(name), readme, re.M)
+        if row is None:
             problems.append(
                 "the behaviour %r has no row in the README's behaviour table"
                 % name)
+            continue
+        said = sorted(re.findall(r"\b(customer|supplier)\b", row.group(1)))
+        if said != sorted(roles):
+            problems.append(
+                "the README says the behaviour %r is for %s; db.BEHAVIOUR_ROLES "
+                "says %s" % (name, " and ".join(said) or "no one",
+                             " and ".join(roles)))
 
     if problems:
         print("documentation is out of date:\n")
@@ -135,7 +145,8 @@ def main():
 
     print("docs/FILES.md covers every tracked file, names nothing that is gone, "
           "the README layout block lists every module, it mentions every "
-          "command-line flag, and it has a row for every behaviour.")
+          "command-line flag, and it has a row for every behaviour, naming "
+          "the roles it applies to.")
     return 0
 
 

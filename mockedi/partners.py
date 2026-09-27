@@ -67,10 +67,13 @@ def mock_role(partner) -> str:
     """What the mock is toward this partner: it sells to a customer, buys from a supplier."""
     return MOCK_ROLE[partner["role"]]
 
-# Behaviours only a seller can have: each changes what the mock does with an
-# order it *received*, and a supplier partner never sends one.
-SELLER_ONLY = ("short-ship", "reject-line", "reject-all", "duplicate-invoice",
-               "out-of-order", "no-invoice")
+# The roles each behaviour applies to, from the one table in db.
+BEHAVIOUR_ROLES = db.BEHAVIOUR_ROLES
+
+
+def behaviours_for(role: str) -> List[str]:
+    """The behaviours a partner of `role` may be set to, in name order."""
+    return sorted(name for name, roles in BEHAVIOUR_ROLES.items() if role in roles)
 
 DIALECTS = ("X12", "EDIFACT")
 MDN_MODES = ("sync", "async")
@@ -179,14 +182,19 @@ def _check_role_fits(role: str, behaviour: str) -> None:
 
     A supplier sends the mock 855s, 856s and 810s; it never sends the order
     a seller-side behaviour acts on, so `short-ship` on one would be stored,
-    reported and never happen.
+    reported and never happen. The reverse holds for a behaviour only a buyer
+    can have. Which is which is db.BEHAVIOUR_ROLES; nothing here lists them.
     """
-    if role == SUPPLIER and behaviour in SELLER_ONLY:
-        raise Invalid(
-            "behaviour %r is what a seller does with an order it received, "
-            "and the mock buys from a supplier rather than selling to it. A "
-            "supplier may be: %s" % (behaviour, ", ".join(
-                name for name in sorted(BEHAVIOURS) if name not in SELLER_ONLY)))
+    if role in BEHAVIOUR_ROLES.get(behaviour, ROLES):
+        return
+    if role == SUPPLIER:
+        why = ("is what a seller does with an order it received, and the mock "
+               "buys from a supplier rather than selling to it")
+    else:
+        why = ("is what a buyer does, and the mock sells to a customer rather "
+               "than buying from it")
+    raise Invalid("behaviour %r %s. A %s may be: %s"
+                  % (behaviour, why, role, ", ".join(behaviours_for(role))))
 
 
 def _check_id(identifier: str, dialect: str, limits) -> None:

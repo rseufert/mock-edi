@@ -7,7 +7,7 @@ import sqlite3
 import sys
 
 from . import __version__, db
-from .partners import BEHAVIOURS
+from .partners import BEHAVIOUR_ROLES, BEHAVIOURS
 from .server import Config, make_server
 
 
@@ -16,8 +16,10 @@ def build_parser() -> argparse.ArgumentParser:
         prog="mock-edi",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description="Run a mock EDI trading partner (X12 and EDIFACT over AS2).",
-        epilog="partner behaviours:\n" + "\n".join(
-            "  %-18s %s" % (name, text) for name, text in sorted(BEHAVIOURS.items())))
+        epilog="partner behaviours (and the partner roles each applies to):\n"
+               + "\n".join("  %-18s %-21s %s" % (
+                   name, "[%s]" % ", ".join(BEHAVIOUR_ROLES[name]), text)
+                   for name, text in sorted(BEHAVIOURS.items())))
     p.add_argument("--host", default="127.0.0.1", help="bind address (default: 127.0.0.1)")
     p.add_argument("--port", type=int, default=8080, help="port (default: 8080)")
     p.add_argument("--db", dest="db_path", default=":memory:",
