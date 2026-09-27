@@ -72,6 +72,10 @@ class Receipt:
     change_outcomes: Dict[str, Any] = field(default_factory=dict)
     acknowledged: List[Dict[str, Any]] = field(default_factory=list)
     refusals: List[Dict[str, str]] = field(default_factory=list)
+    # The orders that were refused outright, by number, so that the 855 saying
+    # so can be queued after the 997 rather than before it. Mirrors
+    # `change_requests`: what arrived, kept until there is somewhere to answer.
+    refused_orders: Dict[str, Any] = field(default_factory=dict)
 
     @property
     def accepted(self) -> bool:
@@ -226,11 +230,30 @@ class Pipeline:
                     # holds that is a change, not a replacement.
                     known = documents.order_row(self.conn, order.po_number)
                     if order.purpose in transactions.CHANGE_PURPOSES and known:
+                        # A restatement is a change, and a change to an order
+                        # somebody else holds is answered exactly as a change
+                        # to an order that does not exist - `apply_change` has
+                        # the ownership check, and the 865 says no such order.
                         held = [row["line"] for row in
                                 documents.order_lines(self.conn, order.po_number)]
                         self._apply_change(
                             partner, transactions.change_from_order(order, held),
                             receipt)
+                    elif known is not None and not documents.belongs_to(known,
+                                                                        partner):
+                        # Somebody else's number, and this order means to take
+                        # it. Recording it would replace their order and leave
+                        # the despatch and invoice promised for it pointing at
+                        # lines they never sent.
+                        #
+                        # Unlike a change, this one is told the number is in
+                        # use rather than that no such order exists: placing an
+                        # order is not asking about one, and "pick another
+                        # number" is the only answer a sender can act on.
+                        receipt.refusals.append(
+                            {"order": order.po_number,
+                             "reason": documents.NUMBER_IN_USE})
+                        receipt.refused_orders[order.po_number] = order
                     else:
                         documents.record_order(self.conn, partner, order,
                                                self.now())
@@ -385,6 +408,12 @@ class Pipeline:
                 continue
             self._schedule_fulfilment(partner, po_number, moment)
 
+        for po_number, refused in receipt.refused_orders.items():
+            # After the acknowledgment, like every other answer: the 997 says
+            # the syntax was read, and the 855 says the order was not taken.
+            self._queue_refusal(partner, refused, receipt,
+                                documents.NUMBER_IN_USE, moment)
+
         for po_number in receipt.changes:
             order = documents.order_row(self.conn, po_number)
             if order is not None:
@@ -432,6 +461,42 @@ class Pipeline:
             body = ack.syntax_report(interchange, report, messages)
             self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                        receipt, moment, delay, dialect="EDIFACT")
+
+    def _queue_refusal(self, partner, order, receipt, reason: str,
+                       moment) -> None:
+        """Answer an order the mock will not take, having stored none of it.
+
+        A refusal is still an answer: the 855 rejects every line and says why,
+        which is what a real seller sends and what a buyer's own retry logic
+        waits for. Nothing was written to the database - that is the whole
+        point - so the response is built from the order that arrived rather
+        than from a stored row.
+        """
+        rows = [{"line": line.number, "sku": line.sku, "upc": line.upc,
+                 "description": line.description,
+                 "quantity": transactions.quantity_text(line.quantity),
+                 "uom": line.uom,
+                 "price": transactions.price_text(line.price),
+                 "confirmed": "0", "status": transactions.REJECTED,
+                 "reason": reason, "scheduled_on": ""}
+                for line in order.lines]
+        # The ship-to the buyer named, carried through: an 855 that refuses an
+        # order still addresses the order it was sent, and leaving it out
+        # writes an N1*ST with nothing in it.
+        ship_to = order.ship_to
+        stub = {"po_number": order.po_number,
+                "ordered_on": (order.ordered_on.isoformat()
+                               if order.ordered_on else ""),
+                "currency": order.currency, "seller_order": "",
+                "ship_to_name": ship_to.name, "ship_to_id": ship_to.identifier,
+                "ship_to_street": ship_to.street, "ship_to_city": ship_to.city,
+                "ship_to_region": ship_to.region,
+                "ship_to_postal": ship_to.postal,
+                "ship_to_country": ship_to.country}
+        body = transactions.write_response(partner["dialect"], self.us, partner,
+                                          stub, rows, moment)
+        self._send(partner, schema.RESPONSE, body, order.po_number, receipt,
+                   moment, self.config.response_delay_ms)
 
     def _queue_response(self, partner, order, receipt, moment) -> None:
         lines = documents.order_lines(self.conn, order["po_number"])
