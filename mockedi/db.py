@@ -694,6 +694,15 @@ BEHAVIOURS = {
                   "is misconfigured.",
     "no-invoice": "Ship, and never invoice: the three-way match has to give "
                   "up waiting.",
+    "duplicate-order": "Send the order twice under the same PO number, a "
+                       "moment apart, as a buyer with a retry bug does. The "
+                       "mirror of duplicate-invoice.",
+    "change-after-confirm": "Send an 860 lowering a line as soon as the 855 "
+                            "confirming it arrives: a change that lands after "
+                            "the order was answered, not before.",
+    "cancel-late": "Send an 860 cancelling the order as soon as the 856 "
+                   "arrives - after the goods have left - which a supplier "
+                   "must refuse rather than honour.",
 }
 
 # The partner roles each behaviour applies to - partners.CUSTOMER and
@@ -705,6 +714,10 @@ BEHAVIOURS = {
 # logic should be tested against.
 BOTH = ("customer", "supplier")
 CUSTOMER_ONLY = ("customer",)
+# And the reverse: a behaviour that changes what the mock does with an order
+# it *placed* is for a supplier only, because the mock never places one with
+# a customer (#127).
+SUPPLIER_ONLY = ("supplier",)
 BEHAVIOUR_ROLES = {
     "accept": BOTH,
     "short-ship": CUSTOMER_ONLY,
@@ -718,6 +731,9 @@ BEHAVIOUR_ROLES = {
     "corrupt": BOTH,
     "reject-ack": BOTH,
     "no-invoice": CUSTOMER_ONLY,
+    "duplicate-order": SUPPLIER_ONLY,
+    "change-after-confirm": SUPPLIER_ONLY,
+    "cancel-late": SUPPLIER_ONLY,
 }
 
 PARTNERS = [

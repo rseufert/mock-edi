@@ -396,6 +396,9 @@ what the mock did.
 | `corrupt` | customer or supplier | Sends every business document with its trailer count (`SE01` or `UNT`) one out, so your translator's own 997 or CONTRL has something to reject. That one fault and no other; its acknowledgments are sound. |
 | `reject-ack` | customer or supplier | Rejects every transaction set in its 997 or CONTRL (`AK5*R` with no reason, `UCM` action 4), however clean, and acts on none of them — a partner whose translator is misconfigured. |
 | `no-invoice` | customer | Ships and never invoices, so a three-way match has to give up waiting. |
+| `duplicate-order` | supplier | Sends the order twice under one PO number, a moment apart, as a buyer with a retry bug does. The mirror of `duplicate-invoice`, and what a supplier's own duplicate handling should be tested against. |
+| `change-after-confirm` | supplier | Sends an 860 lowering a line the moment the 855 confirming it arrives: a change that lands after the order was answered rather than before. |
+| `cancel-late` | supplier | Sends an 860 cancelling the order the moment the 856 arrives - after the goods have left - which a supplier must refuse rather than honour. |
 
 Some rules apply whatever the behaviour says, because they are what real
 sellers actually do. The first that fires wins:

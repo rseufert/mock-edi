@@ -347,6 +347,12 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
         ACME is 004010, GLOBEX 005010 (ISA11 carries a repetition separator
         and GS08 says 005010), INITECH has qualifier 01, EURODIS is EDIFACT.
         `no-ack` is checked for saying nothing at all.
+
+        Every partner here is a customer, so the behaviours that belong only
+        to a supplier are skipped: `db.BEHAVIOUR_ROLES` is the record, and
+        setting one of those here would be refused rather than tested (#127).
+        What the mock writes under them is held to the same property by
+        `test_buyer_behaviours.WhatTheyWriteIsValid`.
         """
         from mockedi import db, partners
         from support import GLOBEX, INITECH
@@ -355,6 +361,8 @@ class GeneratedDocumentsAreValid(unittest.TestCase):
         try:
             for partner_id in originals:
                 for index, behaviour in enumerate(db.BEHAVIOURS):
+                    if "customer" not in db.BEHAVIOUR_ROLES[behaviour]:
+                        continue
                     with self.subTest(partner=partner_id, behaviour=behaviour):
                         self._behaviour_run(partner_id, behaviour, index)
         finally:

@@ -45,6 +45,13 @@ FAILED = "failed"
 FOLLOW_UPS = (schema.RESPONSE, schema.DESPATCH, schema.INVOICE)
 
 # What a supplier sends about an order the mock placed, and how to read it.
+
+# The kinds of work a misbehaving *buyer* promises itself when a supplier's
+# document arrives (#127). They name rows in `scheduled` beside the seller's
+# despatch and invoice, so `/_mock/advance` releases them the same way.
+CHANGE_LINE = "buyer-change"
+CANCEL_ORDER = "buyer-cancel"
+
 SUPPLIER_DOCUMENTS = {
     schema.RESPONSE: transactions.read_response,
     schema.CHANGE_RESPONSE: transactions.read_change_response,
@@ -362,6 +369,7 @@ class Pipeline:
             message_report.disagreements.extend(claims.record(
                 self.conn, partner, kind, message.code, message.control,
                 interchange_control, document))
+            self._promise_buyer_change(partner, kind, po_number)
             return po_number
         message_report.segments.append(
             _unknown_order(message, dialect, po_number, partner["id"]))
@@ -600,6 +608,76 @@ class Pipeline:
                 (partner["id"], po_number, kind, db.stamp(due), db.now()))
         self.conn.commit()
 
+    # What a misbehaving buyer does when a supplier's document arrives: the
+    # behaviour that answers it, and the kind of change it promises (#127).
+    BUYER_CHANGES = {
+        "change-after-confirm": (schema.RESPONSE, CHANGE_LINE),
+        "cancel-late": (schema.DESPATCH, CANCEL_ORDER),
+    }
+
+    def _promise_buyer_change(self, partner: Dict[str, Any], kind: str,
+                              po_number: str) -> None:
+        """Promise the 860 a misbehaving buyer sends back at this document.
+
+        A promise rather than a send, for the reason the whole `scheduled`
+        table exists: it is released by `/_mock/advance` like everything else,
+        so a test never sleeps, and the row is written inside the interchange's
+        transaction - a failure later takes the promise with it, instead of
+        leaving the mock owing an 860 for an interchange that never happened.
+
+        Once only. A supplier that corrects its 855, or advises a second
+        consignment, has not earned a second change; a buyer sends one.
+        """
+        wanted = self.BUYER_CHANGES.get(partner["behaviour"])
+        if wanted is None or wanted[0] != kind:
+            return
+        promised = self.conn.execute(
+            "SELECT 1 FROM scheduled WHERE partner = ? AND po_number = ?"
+            " AND kind = ?", (partner["id"], po_number, wanted[1])).fetchone()
+        if promised is not None:
+            return
+        self.conn.execute(
+            "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
+            " VALUES (?,?,?,?,?)",
+            (partner["id"], po_number, wanted[1], db.stamp(self.now()),
+             db.now()))
+
+    def _send_buyer_change(self, row, moment,
+                           receipt: Optional[Receipt] = None) -> None:
+        """Keep one of those promises: write the 860 or ORDCHG and send it.
+
+        It goes through `documents.change_placed`, so the order is changed in
+        the same way a change asked for over `/_mock/purchase/<po>/change`
+        changes it, and the mock's own view of what it asked for stays true.
+        """
+        partner = partners.get(self.conn, row["partner"])
+        if partner is None:
+            return
+        po_number = row["po_number"]
+        order = documents.order_row(self.conn, po_number, partner["id"])
+        if order is None or order["status"] == "cancelled":
+            return
+        if row["kind"] == CANCEL_ORDER:
+            request: Dict[str, Any] = {"cancel": True}
+        else:
+            lines = documents.order_lines(self.conn, po_number, partner["id"])
+            first = next((line for line in lines
+                          if transactions.number(line["quantity"]) > 1), None)
+            if first is None:
+                return
+            request = {"lines": [{"line": first["line"], "action": "change",
+                                  "quantity": str(int(
+                                      transactions.number(first["quantity"]) // 2))}]}
+        try:
+            change = documents.change_placed(self.conn, po_number, partner["id"],
+                                             request, moment)
+        except (documents.Refused, LookupError):
+            return
+        order = documents.order_row(self.conn, po_number, partner["id"])
+        body = transactions.write_change(partner["dialect"], self.us, partner,
+                                         order, change, moment)
+        self._send(partner, schema.CHANGE, body, po_number, receipt, moment)
+
     def _fulfil(self, row, moment, receipt: Optional[Receipt] = None) -> None:
         """Keep one promise: pack the goods, or bill for them.
 
@@ -611,6 +689,10 @@ class Pipeline:
         if partner is None:
             return
         po_number = row["po_number"]
+
+        if row["kind"] in (CHANGE_LINE, CANCEL_ORDER):
+            self._send_buyer_change(row, moment, receipt)
+            return
 
         if row["kind"] == schema.DESPATCH:
             shipment = documents.create_shipment(self.conn, po_number,
@@ -908,6 +990,12 @@ class Pipeline:
             documents.order_lines(self.conn, order["po_number"], partner["id"]), moment)
         queued = self._send(partner, schema.ORDER, body, order["po_number"], None,
                             moment)
+        if partner["behaviour"] == "duplicate-order":
+            # The same order number, sent twice a moment apart: a buyer with a
+            # retry bug, and the mirror of `duplicate-invoice` (#127). The
+            # supplier must fulfil it once.
+            self._send(partner, schema.ORDER, body, order["po_number"], None,
+                       moment, 1000, note="duplicate of the order above")
         self.release(self.now())
         return order, queued
 
