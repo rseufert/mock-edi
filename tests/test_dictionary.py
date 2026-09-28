@@ -234,7 +234,10 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
         more than one name. A Segment does not say its dialect: `schema.py`
         declares every X12 segment before its EDIFACT section, which UNB
         opens, and `test_the_dialect_split_agrees_with_the_sets` holds that
-        to what every set says. The 005010 revisions are left out of the
+        to what every set says. Only for segments a set uses, though: an EDIFACT
+        segment no set uses yet, declared above UNB, would be checked as X12,
+        and a clash it reported would be false - loud, not silent, so the fix
+        is to move the declaration below UNB, not to change this. The 005010 revisions are left out of the
         base set - 005010 widens REF02, which is a version, not a clash - and
         checked as 005010, in place of the segments they revise.
         """
