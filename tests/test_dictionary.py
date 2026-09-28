@@ -266,6 +266,137 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
         self.assertEqual(set(self.declarations("X12")["362"]), {("N2", 1, 10)})
 
 
+class EdifactNamesAreD96A(unittest.TestCase):
+    """Every EDIFACT data element is named as the D.96A directory names it (#172).
+
+    The dictionary declares D:96A:UN, and #167 made its representations
+    agree with that directory. The names were still largely later wording -
+    "Document name code" where D.96A says "Document/message name, coded" -
+    which is a quiet untruth in `GET /_mock/dictionary`, the thing a guide
+    is built against. Taken from the D.96A segment tables at
+    stylusstudio.com/edifact/D96A/ and edifactory.de/edifact/directory/D96A/,
+    which agree on every element here. Service elements (00xx, S0xx) belong
+    to the syntax standard rather than the directory and are not listed;
+    nor is BGM's C106, which D.96A's BGM does not have.
+    """
+    D96A = {
+        "1000": "Document/message name",
+        "1001": "Document/message name, coded",
+        "1004": "Document/message number",
+        "1082": "Line item number",
+        "1131": "Code list qualifier",
+        "1153": "Reference qualifier",
+        "1154": "Reference number",
+        "1156": "Line number",
+        "1218": "Number of originals of document required",
+        "1220": "Number of copies of document required",
+        "1225": "Message function, coded",
+        "1227": "Calculation sequence indicator, coded",
+        "1229": "Action request/notification, coded",
+        "1230": "Allowance or charge number",
+        "1366": "Document/message source",
+        "1373": "Document/message status, coded",
+        "2005": "Date/time/period qualifier",
+        "2009": "Time relation, coded",
+        "2151": "Type of period, coded",
+        "2152": "Number of periods",
+        "2379": "Date/time/period format qualifier",
+        "2380": "Date/time/period",
+        "2475": "Payment time reference, coded",
+        "3035": "Party qualifier",
+        "3036": "Party name",
+        "3039": "Party id. identification",
+        "3042": "Street and number/p.o. box",
+        "3045": "Party name format, coded",
+        "3055": "Code list responsible agency, coded",
+        "3124": "Name and address line",
+        "3127": "Carrier identification",
+        "3128": "Carrier name",
+        "3153": "Communication channel identifier, coded",
+        "3164": "City name",
+        "3207": "Country, coded",
+        "3229": "Country sub-entity identification",
+        "3251": "Postcode identification",
+        "3453": "Language, coded",
+        "4000": "Reference version number",
+        "4276": "Terms of payment",
+        "4277": "Terms of payment identification",
+        "4279": "Payment terms type qualifier",
+        "4343": "Response type, coded",
+        "4347": "Product id. function qualifier",
+        "4405": "Status, coded",
+        "4440": "Free text",
+        "4441": "Free text, coded",
+        "4451": "Text subject qualifier",
+        "4453": "Text function, coded",
+        "4465": "Adjustment reason, coded",
+        "4471": "Settlement, coded",
+        "5004": "Monetary amount",
+        "5025": "Monetary amount type qualifier",
+        "5118": "Price",
+        "5125": "Price qualifier",
+        "5189": "Charge/allowance description, coded",
+        "5284": "Unit price basis",
+        "5375": "Price type, coded",
+        "5387": "Price type qualifier",
+        "5402": "Rate of exchange",
+        "5463": "Allowance or charge qualifier",
+        "6060": "Quantity",
+        "6063": "Quantity qualifier",
+        "6066": "Control value",
+        "6069": "Control qualifier",
+        "6343": "Currency qualifier",
+        "6345": "Currency, coded",
+        "6347": "Currency details qualifier",
+        "6348": "Currency rate base",
+        "6411": "Measure unit qualifier",
+        "7008": "Item description",
+        "7009": "Item description identification",
+        "7064": "Type of packages",
+        "7065": "Type of packages identification",
+        "7075": "Packaging level, coded",
+        "7077": "Item description type, coded",
+        "7081": "Item characteristic, coded",
+        "7140": "Item number",
+        "7143": "Item number type, coded",
+        "7160": "Special service",
+        "7161": "Special services, coded",
+        "7164": "Hierarchical id. number",
+        "7166": "Hierarchical parent id.",
+        "7224": "Number of packages",
+        "8028": "Conveyance reference number",
+        "8051": "Transport stage qualifier",
+        "8066": "Mode of transport",
+        "8067": "Mode of transport, coded",
+        "8178": "Type of means of transport",
+        "8179": "Type of means of transport identification",
+    }
+
+    def test_every_data_element_in_the_directory_segments(self):
+        seen = {}
+
+        def walk(elements):
+            for element in elements:
+                if element.composite:
+                    walk(element.components)
+                elif element.ref in self.D96A:
+                    seen.setdefault(element.ref, set()).add(element.name)
+
+        for (dialect, _code), definition in schema.SETS.items():
+            if dialect != "EDIFACT":
+                continue
+            stack = list(definition.children)
+            while stack:
+                child = stack.pop()
+                if isinstance(child, schema.Use):
+                    walk(child.segment.elements)
+                else:
+                    stack.extend(child.children)
+        self.assertEqual(set(seen), set(self.D96A))
+        self.assertEqual({ref: names for ref, names in seen.items()
+                          if names != {self.D96A[ref]}}, {})
+
+
 class GeneratedDocumentsAreValid(unittest.TestCase):
     """Everything the mock writes passes the checks it applies to what it reads."""
 
