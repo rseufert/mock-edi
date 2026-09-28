@@ -22,7 +22,7 @@ adds to what was shipped and billed.
 
 Each rule is one comparison, names both numbers, and is one function in the
 table for its kind of document. The 855's rules (#126) and the 810's (#152)
-are here; the 856's are #151.
+are all here.
 """
 from __future__ import annotations
 
@@ -56,6 +56,10 @@ class Claim:
     price: Optional[Decimal] = None
     status: str = ""
     reason: str = ""
+    # Set when the item named matches more than one line of the order, so the
+    # claim stays unplaced and `shipped_an_item_two_lines_ordered` reports it
+    # rather than the mock picking one (#151).
+    ambiguous: bool = False
 
 
 @dataclass
@@ -101,7 +105,7 @@ def record(conn, partner: Dict[str, Any], kind: str, code: str, control: str,
     # one, and by its item when it does not.
     for claim in received.claims:
         if not claim.line:
-            claim.line = _line_for_item(received.lines, claim)
+            _place(received.lines, claim)
 
     moment = db.now()
     reference = _reference(kind, document)
@@ -225,12 +229,36 @@ def _reference(kind: str, document) -> str:
     return getattr(document, "seller_order", "")
 
 
-def _line_for_item(lines: Dict[str, Dict[str, Any]], claim: Claim) -> str:
-    for number_, row in lines.items():
-        if (claim.sku and claim.sku == row["sku"]) or (
-                claim.upc and claim.upc == row["upc"]):
-            return number_
-    return ""
+def _lines_for_item(lines: Dict[str, Dict[str, Any]], claim: Claim) -> List[str]:
+    """Every order line the item named could be, by SKU first and then UPC.
+
+    SKU before UPC rather than either-or: an exact SKU match is the stronger
+    statement, and taking whichever came first in the order let a line whose
+    UPC happened to collide win over the line that actually ordered the item.
+    """
+    for field_, ours in (("sku", claim.sku), ("upc", claim.upc)):
+        if not ours:
+            continue
+        found = [number_ for number_, row in lines.items()
+                 if row[field_] and row[field_] == ours]
+        if found:
+            return found
+    return []
+
+
+def _place(lines: Dict[str, Dict[str, Any]], claim: Claim) -> None:
+    """Put an unnumbered claim on its line, or leave it unplaced and say why.
+
+    The same item on two lines - the same SKU twice for two dates or two
+    ship-tos - is ordinary, and nothing in the document says which is meant.
+    Guessing produced a quantity against one line and silence against the
+    other; the claim stays unplaced instead, and a rule reports it.
+    """
+    found = _lines_for_item(lines, claim)
+    if len(found) == 1:
+        claim.line = found[0]
+    else:
+        claim.ambiguous = len(found) > 1
 
 
 def _sum(claims: List[Dict[str, Any]], kind: str) -> str:
@@ -462,12 +490,129 @@ def _billed(claims: List[Dict[str, Any]]) -> Dict[str, Decimal]:
     return out
 
 
+# ---------------------------------------------------------------------------
+# The rules for an 856 or a DESADV: what was sent against what was promised (#151)
+# ---------------------------------------------------------------------------
+
+def _shipped_before(received: Received, line: str) -> Decimal:
+    """What earlier consignments already put on this line."""
+    return sum((number(claim["quantity"])
+                for claim in _earlier(received, schema.DESPATCH)
+                if claim["line"] == line), Decimal("0"))
+
+
+def _confirmed_for(received: Received, line: str) -> Optional[Dict[str, Any]]:
+    """The latest answer for a line, which is what the supplier promised."""
+    answers = [claim for claim in received.earlier
+               if claim["kind"] in ANSWERS and claim["line"] == line]
+    return answers[-1] if answers else None
+
+
+def _consignment(received: Received) -> str:
+    return received.document.shipment_id or received.control
+
+
+def shipped_before_confirmed(received: Received) -> None:
+    """A despatch with no 855 before it: goods sent against nothing promised."""
+    if not [claim for claim in received.earlier if claim["kind"] in ANSWERS]:
+        received.disagree(
+            "shipped-before-confirmed", "", "an 855", "none",
+            "%s %s ships against order %s before any 855 for it"
+            % (received.code, _consignment(received),
+               received.order["po_number"]))
+
+
+def shipped_a_line_not_ordered(received: Received) -> None:
+    """A consignment against a line the order does not have."""
+    for claim in received.claims:
+        if claim.ambiguous or claim.line in received.lines:
+            continue
+        received.disagree(
+            "shipped-unknown-line", claim.line, "", claim.quantity,
+            "%s %s ships %s of %s against line %s, which order %s does not have"
+            % (received.code, _consignment(received),
+               quantity_text(claim.quantity),
+               claim.sku or claim.upc or "an item",
+               claim.line or "(unnumbered)", received.order["po_number"]))
+
+
+def shipped_an_item_two_lines_ordered(received: Received) -> None:
+    """A consignment naming an item, with no line number, that two lines ordered.
+
+    The mock will not choose between them: nothing in the document says which
+    is meant, and putting the quantity on one silently leaves the other short
+    for a reason nobody can see.
+    """
+    for claim in received.claims:
+        if not claim.ambiguous:
+            continue
+        which = ", ".join(_lines_for_item(received.lines, claim))
+        received.disagree(
+            "shipped-ambiguous-item", "", which, claim.sku or claim.upc,
+            "%s %s ships %s of %s with no line number, and order %s has it on "
+            "lines %s, so it is counted against none of them"
+            % (received.code, _consignment(received),
+               quantity_text(claim.quantity), claim.sku or claim.upc or "an item",
+               received.order["po_number"], which))
+
+
+def shipped_more_than_confirmed(received: Received) -> None:
+    """Everything shipped for a line so far, against what the 855 promised.
+
+    Only once something has been confirmed - a despatch before any 855 is
+    `shipped-before-confirmed`, and saying it again per line is noise, which
+    is how #152's `billed_more_than_shipped` treats the same situation. A
+    line confirmed at nothing is the rejected case, and says so.
+    """
+    if not [claim for claim in received.earlier if claim["kind"] in ANSWERS]:
+        return
+    for claim, _row in _known(received):
+        answer = _confirmed_for(received, claim.line)
+        if answer is None:
+            continue
+        confirmed = number(answer["quantity"])
+        shipped = _shipped_before(received, claim.line) + claim.quantity
+        if shipped <= confirmed:
+            continue
+        received.disagree(
+            "shipped-more-than-confirmed", claim.line, confirmed, shipped,
+            "line %s: %s, %s shipped with %s %s"
+            % (claim.line,
+               "confirmed at nothing, refused (%s)" % answer["status"]
+               if confirmed <= 0 and answer["status"] else
+               "confirmed %s" % quantity_text(confirmed),
+               quantity_text(shipped), received.code, _consignment(received)))
+
+
+def shipped_more_than_ordered(received: Received) -> None:
+    """Everything shipped for a line so far, against what the mock asked for.
+
+    Separate from the rule above, and both can fire on one line: *you sent
+    more than you promised* and *you sent more than I asked for* are different
+    sentences to a buyer, and when no 855 ever arrived this is the only one of
+    the two that can be said at all.
+    """
+    for claim, row in _known(received):
+        ordered = number(row["quantity"])
+        shipped = _shipped_before(received, claim.line) + claim.quantity
+        if shipped > ordered:
+            received.disagree(
+                "shipped-more-than-ordered", claim.line, ordered, shipped,
+                "line %s: ordered %s, %s shipped with %s %s"
+                % (claim.line, quantity_text(ordered), quantity_text(shipped),
+                   received.code, _consignment(received)))
+
+
 RULES: Dict[str, List[Callable[[Received], None]]] = {
     schema.RESPONSE: [confirmed_a_line_not_ordered, confirmed_more,
                       confirmed_less, restated_price, substituted_silently],
     schema.CHANGE_RESPONSE: [confirmed_a_line_not_ordered, confirmed_more,
                              confirmed_less, restated_price, substituted_silently],
-    schema.DESPATCH: [],        # #151
+    schema.DESPATCH: [shipped_before_confirmed,
+                      shipped_a_line_not_ordered,
+                      shipped_an_item_two_lines_ordered,
+                      shipped_more_than_confirmed,
+                      shipped_more_than_ordered],
     schema.INVOICE: [billed_before_shipped, invoice_repeated,
                      billed_more_than_shipped, price_not_agreed, total_not_lines,
                      billed_cancelled],
