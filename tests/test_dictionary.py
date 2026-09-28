@@ -221,7 +221,39 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
     told a reader two things.
     """
 
-    def declarations(self, dialect):
+    @staticmethod
+    def every_segment(dialect, version=""):
+        """Every Segment `schema.py` declares for a dialect, reachable or not (#170).
+
+        Walking `schema.SETS` missed the envelope - ISA, GS, GE, IEA, TA1,
+        UNB, UNZ - which no set contains, and the 005010 revisions, which
+        only `schema.REVISIONS` holds. So the module is read instead, and a
+        segment declared tomorrow is covered without anyone adding it here.
+
+        Collected by identity, since LIN_E, E_DTM and friends are bound to
+        more than one name. A Segment does not say its dialect: `schema.py`
+        declares every X12 segment before its EDIFACT section, which UNB
+        opens, and `test_the_dialect_split_agrees_with_the_sets` holds that
+        to what every set says. The 005010 revisions are left out of the
+        base set - 005010 widens REF02, which is a version, not a clash - and
+        checked as 005010, in place of the segments they revise.
+        """
+        order, seen = [], set()
+        for value in vars(schema).values():
+            if isinstance(value, schema.Segment) and id(value) not in seen:
+                seen.add(id(value))
+                order.append(value)
+        cut = next(index for index, segment in enumerate(order)
+                   if segment is schema.UNB)
+        revised = {id(segment) for overrides in schema.REVISIONS.values()
+                   for segment in overrides.values()}
+        chosen = [segment for index, segment in enumerate(order)
+                  if (index < cut) == (dialect == "X12")
+                  and id(segment) not in revised]
+        overrides = schema.REVISIONS.get((dialect, version), {})
+        return [overrides.get(segment.tag, segment) for segment in chosen]
+
+    def declarations(self, dialect, version=""):
         found = {}
 
         def walk(elements, tag):
@@ -233,26 +265,62 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
                         (element.type, element.min_len, element.max_len),
                         set()).add(tag)
 
-        def segments(children):
-            for child in children:
-                if isinstance(child, schema.Use):
-                    yield child.segment
-                else:
-                    yield from segments(child.children)
-
-        for (set_dialect, _code), definition in schema.SETS.items():
-            if set_dialect == dialect:
-                for segment in segments(definition.children):
-                    walk(segment.elements, segment.tag)
+        for segment in self.every_segment(dialect, version):
+            walk(segment.elements, segment.tag)
         return found
 
+    def clashes(self, dialect, version=""):
+        return {ref: ways for ref, ways in self.declarations(dialect, version).items()
+                if len(ways) > 1}
+
     def test_x12(self):
-        self.assertEqual({ref: ways for ref, ways in self.declarations("X12").items()
-                          if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("X12"), {})
+
+    # Temporary (#173): at 005010 element 127 is AN 1/50 wherever it is used,
+    # but REVISIONS widens it only in REF, so BAK, BCA, BCH, TRN, RMR and ADX
+    # keep 004010's 30. When #173 fixes the dictionary this starts passing,
+    # which unittest reports as a failure - remove the marker then.
+    @unittest.expectedFailure
+    def test_x12_005010(self):
+        self.assertEqual(self.clashes("X12", "005010"), {})
 
     def test_edifact(self):
-        self.assertEqual({ref: ways for ref, ways in
-                          self.declarations("EDIFACT").items() if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("EDIFACT"), {})
+
+    def test_the_envelope_is_covered(self):
+        x12_tags = {s.tag for s in self.every_segment("X12")}
+        edifact_tags = {s.tag for s in self.every_segment("EDIFACT")}
+        self.assertLessEqual({"ISA", "GS", "GE", "IEA", "TA1"}, x12_tags)
+        self.assertLessEqual({"UNB", "UNZ"}, edifact_tags)
+        self.assertFalse({"ISA", "GS", "IEA"} & edifact_tags)
+        self.assertFalse({"UNB", "UNZ", "UNH"} & x12_tags)
+
+    def test_every_segment_a_set_uses_is_among_them(self):
+        # Reading the module must reach at least what walking the sets did.
+        for dialect in schema.DIALECTS:
+            checked = {id(s) for s in self.every_segment(dialect)}
+            for (set_dialect, _code), definition in schema.SETS.items():
+                if set_dialect == dialect:
+                    for use, _loop in definition.uses():
+                        self.assertIn(id(use.segment), checked,
+                                      "%s %s" % (dialect, use.tag))
+
+    def test_the_dialect_split_agrees_with_the_sets(self):
+        # The one assumption every_segment makes, held to the sets: a segment
+        # an X12 set uses is on the X12 side of UNB, and so on.
+        for dialect in schema.DIALECTS:
+            mine = {id(s) for s in self.every_segment(dialect)}
+            for (set_dialect, _code), definition in schema.SETS.items():
+                if set_dialect != dialect:
+                    for use, _loop in definition.uses():
+                        self.assertNotIn(id(use.segment), mine,
+                                         "%s filed as %s" % (use.tag, dialect))
+
+    def test_the_005010_revisions_are_checked_as_005010(self):
+        revised = [s for s in self.every_segment("X12", "005010") if s.tag == "REF"]
+        self.assertEqual([s.element(2).max_len for s in revised], [50])
+        base = [s for s in self.every_segment("X12") if s.tag == "REF"]
+        self.assertEqual([s.element(2).max_len for s in base], [30])
 
     def test_what_163_corrected_against_the_directories(self):
         # D.96A: 1131 "Code list qualifier" an..3; 3055 an..3; 3453
