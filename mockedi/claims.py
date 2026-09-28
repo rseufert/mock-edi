@@ -21,8 +21,8 @@ answer for a line is what is confirmed, and every consignment and every bill
 adds to what was shipped and billed.
 
 Each rule is one comparison, names both numbers, and is one function in the
-table for its kind of document. The 855 rules are here (#126); the 856's are
-#151 and the 810's #152, and each adds functions to its list and nothing else.
+table for its kind of document. The 855's rules (#126) and the 810's (#152)
+are here; the 856's are #151.
 """
 from __future__ import annotations
 
@@ -136,7 +136,8 @@ def derive(conn, partner_id: str, po_number: str) -> None:
 
     What is confirmed is the latest answer for the line - an 855 corrected by
     another, or an 865 answering a change - and what shipped and was billed
-    is every consignment and every bill added up.
+    is every consignment and every bill added up - a bill sent twice under
+    one invoice number counting once, since it is the same bill.
     """
     claims = claims_for(conn, partner_id, po_number)
     for row in documents.order_lines(conn, po_number, partner_id):
@@ -150,7 +151,10 @@ def derive(conn, partner_id: str, po_number: str) -> None:
             (latest["quantity"] if latest else "0",
              latest["status"] if latest else "",
              latest["reason"] if latest else "",
-             _sum(mine, schema.DESPATCH), _sum(mine, schema.INVOICE),
+             _sum(mine, schema.DESPATCH),
+             quantity_text(_billed([c for c in mine
+                                    if c["kind"] == schema.INVOICE]).get(
+                 row["line"], Decimal("0"))),
              partner_id, po_number, row["line"]))
 
 
@@ -337,11 +341,134 @@ def _known(received: Received):
             yield claim, row
 
 
+# ---------------------------------------------------------------------------
+# The rules for an 810 or an INVOIC: the three-way match (#152)
+# ---------------------------------------------------------------------------
+
+def _earlier(received: Received, kind: str) -> List[Dict[str, Any]]:
+    return [claim for claim in received.earlier if claim["kind"] == kind]
+
+
+def _repeated(received: Received) -> bool:
+    number_ = received.document.invoice_number
+    return bool(number_) and any(claim["document"] == number_
+                                 for claim in _earlier(received, schema.INVOICE))
+
+
+def billed_before_shipped(received: Received) -> None:
+    """An invoice with no 856 before it: billing for goods not yet advised."""
+    if not _earlier(received, schema.DESPATCH):
+        received.disagree(
+            "billed-before-shipped", "", "an 856", "none",
+            "%s %s bills order %s before any 856 for it"
+            % (received.code, received.document.invoice_number or received.control,
+               received.order["po_number"]))
+
+
+def invoice_repeated(received: Received) -> None:
+    """An invoice number already received for this order: the same bill twice."""
+    if _repeated(received):
+        received.disagree(
+            "invoice-repeated", "", "", received.document.invoice_number,
+            "invoice %s was already received for order %s"
+            % (received.document.invoice_number, received.order["po_number"]))
+
+
+def billed_more_than_shipped(received: Received) -> None:
+    """Per line, everything billed so far against everything shipped.
+
+    Only once something has shipped - an invoice with no 856 before it is
+    `billed-before-shipped`, and saying it again per line is noise - and not
+    for a repeated invoice, which is the same bill rather than more of it.
+    """
+    shipped_claims = _earlier(received, schema.DESPATCH)
+    if not shipped_claims or _repeated(received):
+        return
+    billed_before = _billed(_earlier(received, schema.INVOICE))
+    for claim, _row in _known(received):
+        shipped = sum((number(c["quantity"]) for c in shipped_claims
+                       if c["line"] == claim.line), Decimal("0"))
+        billed = billed_before.get(claim.line, Decimal("0")) + claim.quantity
+        if billed > shipped:
+            received.disagree(
+                "billed-more-than-shipped", claim.line, shipped, billed,
+                "line %s: %s shipped, %s billed with %s %s"
+                % (claim.line, quantity_text(shipped), quantity_text(billed),
+                   received.code, received.document.invoice_number))
+
+
+def price_not_agreed(received: Received) -> None:
+    """A price that is neither what the mock ordered at nor what was confirmed."""
+    answers = [claim for claim in received.earlier if claim["kind"] in ANSWERS]
+    for claim, row in _known(received):
+        if claim.price is None:
+            continue
+        ordered = number(row["ordered_price"], "0.00")
+        confirmed = [number(c["price"], "0.00") for c in answers
+                     if c["line"] == claim.line and c["price"]]
+        agreed = {ordered} | ({confirmed[-1]} if confirmed else set())
+        if claim.price not in agreed:
+            received.disagree(
+                "price-not-agreed", claim.line,
+                " or ".join(sorted(_money(price) for price in agreed)),
+                _money(claim.price),
+                "line %s: billed at %s, ordered at %s%s"
+                % (claim.line, _money(claim.price), _money(ordered),
+                   ", confirmed at %s" % _money(confirmed[-1]) if confirmed else ""))
+
+
+def total_not_lines(received: Received) -> None:
+    """The invoice's own total against the sum of its own lines.
+
+    Where the document states a subtotal - TDS02, or MOA+79 - that is what
+    the lines must add up to; otherwise the total must be the lines plus the
+    tax, as TXI or MOA+124 give it. Allowances and charges (SAC, ALC) are not
+    read, so an invoice that carries one is compared without it.
+    """
+    invoice = received.document
+    lines = invoice.line_total
+    if invoice.subtotal is not None:
+        stated, expected, what = invoice.subtotal, lines, "subtotal"
+    else:
+        stated, expected, what = invoice.total, lines + invoice.tax, "total"
+    if stated != expected:
+        received.disagree(
+            "total-not-lines", "", _money(expected), _money(stated),
+            "%s %s states a %s of %s, but its lines come to %s%s"
+            % (received.code, invoice.invoice_number, what, _money(stated),
+               _money(lines), " plus %s tax" % _money(invoice.tax)
+               if what == "total" and invoice.tax else ""))
+
+
+def billed_cancelled(received: Received) -> None:
+    if received.order["status"] == "cancelled":
+        received.disagree(
+            "billed-cancelled", "", "cancelled", received.document.invoice_number,
+            "%s %s bills order %s, which the mock cancelled"
+            % (received.code, received.document.invoice_number,
+               received.order["po_number"]))
+
+
+def _billed(claims: List[Dict[str, Any]]) -> Dict[str, Decimal]:
+    """What distinct invoices billed per line: a repeated one counts once."""
+    seen, out = set(), {}
+    for claim in claims:
+        key = (claim["document"], claim["line"])
+        if key in seen:
+            continue
+        seen.add(key)
+        out[claim["line"]] = out.get(claim["line"], Decimal("0")) + number(
+            claim["quantity"])
+    return out
+
+
 RULES: Dict[str, List[Callable[[Received], None]]] = {
     schema.RESPONSE: [confirmed_a_line_not_ordered, confirmed_more,
                       confirmed_less, restated_price, substituted_silently],
     schema.CHANGE_RESPONSE: [confirmed_a_line_not_ordered, confirmed_more,
                              confirmed_less, restated_price, substituted_silently],
     schema.DESPATCH: [],        # #151
-    schema.INVOICE: [],         # #152
+    schema.INVOICE: [billed_before_shipped, invoice_repeated,
+                     billed_more_than_shipped, price_not_agreed, total_not_lines,
+                     billed_cancelled],
 }
