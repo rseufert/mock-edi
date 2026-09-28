@@ -640,7 +640,7 @@ ITD = Segment("ITD", "Terms of Sale", (
     _e("351", "Terms Discount Days Due", "N0", 1, 3),
     _e("446", "Terms Net Due Date", "DT", 8, 8),
     _e("386", "Terms Net Days", "N0", 1, 3),
-    _e("362", "Terms Discount Amount", "R", 1, 10),
+    _e("362", "Terms Discount Amount", "N2", 1, 10),
 ), "Payment terms: 2% 10 net 30 and its relatives.", full_width=15)
 
 TXI = Segment("TXI", "Tax Information", (
@@ -660,12 +660,17 @@ SAC = Segment("SAC", "Service, Promotion, Allowance, or Charge Information", (
     _e("610", "Amount", "N2", 1, 15),
 ), full_width=16)
 
+# 004010 carries element 610, Amount, in all four positions; what each one
+# means is its position's. 361, 390, 391 and 362, which this used to declare,
+# are the numbers of an earlier version (#163).
 TDS = Segment("TDS", "Total Monetary Value Summary", (
-    _e("361", "Total Invoice Amount", "N2", 1, 15, MANDATORY),
-    _e("390", "Amount Subject to Terms Discount", "N2", 1, 15),
-    _e("391", "Discounted Amount Due", "N2", 1, 15),
-    _e("362", "Terms Discount Amount", "N2", 1, 15),
-), "The invoice total, as an integer with two implied decimals: 12500 is 125.00.")
+    _e("610", "Amount", "N2", 1, 15, MANDATORY),
+    _e("610", "Amount", "N2", 1, 15),
+    _e("610", "Amount", "N2", 1, 15),
+    _e("610", "Amount", "N2", 1, 15),
+), "The invoice total (TDS01), the amount subject to terms discount (TDS02), "
+   "the amount due if paid by the discount date (TDS03) and the discount "
+   "(TDS04), each an integer with two implied decimals: 12500 is 125.00.")
 
 CAD = Segment("CAD", "Carrier Detail", (
     _e("91", "Transportation Method/Type Code", "ID", 1, 2),
@@ -1290,8 +1295,8 @@ UNS = Segment("UNS", "Section Control", (
 BGM = Segment("BGM", "Beginning of Message", (
     _c("C002", "Document/Message Name", (
         _e("1001", "Document name code", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("1000", "Document name", "AN", 1, 35),
     )),
     _c("C106", "Document/Message Identification", (
@@ -1333,8 +1338,8 @@ NAD = Segment("NAD", "Name and Address", (
        EDIFACT_PARTY_QUALIFIERS),
     _c("C082", "Party Identification Details", (
         _e("3039", "Party identifier", "AN", 1, 35, MANDATORY),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     )),
     _c("C058", "Name and Address", (
         _e("3124", "Name and address description", "AN", 1, 35, MANDATORY),
@@ -1374,8 +1379,8 @@ PAT = Segment("PAT", "Payment Terms Basis", (
        {"1": "Basic", "3": "Fixed date", "20": "Penalty terms", "22": "Discount"}),
     _c("C110", "Payment Terms", (
         _e("4277", "Payment terms description identifier", "AN", 1, 17, MANDATORY),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("4276", "Payment terms description", "AN", 1, 35),
     )),
     _c("C112", "Terms/Time Information", (
@@ -1393,8 +1398,8 @@ LIN_E = Segment("LIN", "Line Item", (
     _c("C212", "Item Number Identification", (
         _e("7140", "Item identifier", "AN", 1, 35),
         _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     )),
 ), "One line, and the item number the parties agreed to identify it by.")
 
@@ -1408,8 +1413,8 @@ PIA = Segment("PIA", "Additional Product ID", (
     _c("C212", "Item Number Identification", (
         _e("7140", "Item identifier", "AN", 1, 35, MANDATORY),
         _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     ), MANDATORY),
 # PIA carries up to five C212s; the one above is the one worth checking, and
 # an article number in PIA03 is not an error for being the second.
@@ -1423,11 +1428,11 @@ IMD = Segment("IMD", "Item Description", (
     _e("7081", "Item characteristic code", "ID", 1, 3),
     _c("C273", "Item Description", (
         _e("7009", "Item description code", "AN", 1, 17),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("7008", "Item description", "AN", 1, 256),
         _e("7008", "Item description", "AN", 1, 256),
-        _e("3453", "Language name code", "AN", 1, 3),
+        _e("3453", "Language, coded", "ID", 1, 3),
     )),
 ))
 
@@ -1488,8 +1493,8 @@ TDT = Segment("TDT", "Transport Information", (
     )),
     _c("C040", "Carrier", (
         _e("3127", "Carrier identifier", "AN", 1, 17),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("3128", "Carrier name", "AN", 1, 35),
     )),
 ))
@@ -1507,8 +1512,8 @@ PAC = Segment("PAC", "Package", (
     )),
     _c("C202", "Package Type", (
         _e("7065", "Package type description code", "AN", 1, 17),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("7064", "Type of packages", "AN", 1, 35),
     )),
 ))
@@ -1586,15 +1591,15 @@ UCD = Segment("UCD", "Data Element Error Indication", (
 DOC = Segment("DOC", "Document/Message Details", (
     _c("C002", "Document/Message Name", (
         _e("1001", "Document name code", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
-        _e("1131", "Code list identification code", "AN", 1, 17),
-        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("1000", "Document name", "AN", 1, 35),
     ), MANDATORY),
     _c("C503", "Document/Message Details", (
         _e("1004", "Document identifier", "AN", 1, 35),
         _e("1373", "Document status code", "ID", 1, 3),
-        _e("1366", "Document source description", "AN", 1, 70),
-        _e("3453", "Language name code", "ID", 1, 3),
+        _e("1366", "Document/message source", "AN", 1, 35),
+        _e("3453", "Language, coded", "ID", 1, 3),
     )),
     _e("3153", "Communication medium type code", "ID", 1, 3),
     _e("1220", "Document copies required quantity", "N0", 1, 2),

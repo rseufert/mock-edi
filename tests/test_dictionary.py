@@ -123,8 +123,8 @@ class EveryWrittenSegmentAgainstTheStandard(unittest.TestCase):
     Each list is compared as far as both it and the dictionary go.
 
     Left out on purpose, because the right answer is not certain enough to
-    pin: TDS (whose element numbers look older than 004010's) and IMD's
-    second position.
+    pin: IMD's second position. TDS was too, until #163 checked it against
+    a published 004010 table: 610 in all four positions.
     """
     X12 = {
         "ST": ("143", "329"), "SE": ("96", "329"),
@@ -143,6 +143,7 @@ class EveryWrittenSegmentAgainstTheStandard(unittest.TestCase):
         "TD5": ("133", "66", "67", "91", "387"),
         "ITD": ("336", "333", "338", "370", "351", "446", "386", "362"),
         "TXI": ("963", "782", "954"),
+        "TDS": ("610", "610", "610", "610"),
         "PID": ("349", "750", "559", "751", "352"),
         "CUR": ("98", "100", "280"),
         "CTT": ("354", "347"),
@@ -208,6 +209,61 @@ def _wrap(dialect, code, body, group, when):
                         "NORTHWIND", "1", "1", group, moment=when)
     return edifact.wrap([edifact.message(code, "1", body, version="D:96A:UN")],
                         "MOCKEDI", "NORTHWIND", "1", moment=when)
+
+
+class EachElementNumberMeansOneThing(unittest.TestCase):
+    """An element number is declared the same way wherever it is used (#163).
+
+    A dictionary serves one version per dialect, and in one version a data
+    element has one representation. When two segments disagreed - 1131 was
+    an..3 in ALC and AN 1..17 in nine composites - the same value was an
+    error in one place and fine in another, and `GET /_mock/dictionary`
+    told a reader two things.
+    """
+
+    def declarations(self, dialect):
+        found = {}
+
+        def walk(elements, tag):
+            for element in elements:
+                if element.composite:
+                    walk(element.components, tag)
+                else:
+                    found.setdefault(element.ref, {}).setdefault(
+                        (element.type, element.min_len, element.max_len),
+                        set()).add(tag)
+
+        def segments(children):
+            for child in children:
+                if isinstance(child, schema.Use):
+                    yield child.segment
+                else:
+                    yield from segments(child.children)
+
+        for (set_dialect, _code), definition in schema.SETS.items():
+            if set_dialect == dialect:
+                for segment in segments(definition.children):
+                    walk(segment.elements, segment.tag)
+        return found
+
+    def test_x12(self):
+        self.assertEqual({ref: ways for ref, ways in self.declarations("X12").items()
+                          if len(ways) > 1}, {})
+
+    def test_edifact(self):
+        self.assertEqual({ref: ways for ref, ways in
+                          self.declarations("EDIFACT").items() if len(ways) > 1}, {})
+
+    def test_what_163_corrected_against_the_directories(self):
+        # D.96A: 1131 "Code list qualifier" an..3; 3055 an..3; 3453
+        # "Language, coded" an..3; DOC's 1366 an..35. 004010: ITD08, 362,
+        # N2 1/10.
+        edifact_ways = self.declarations("EDIFACT")
+        self.assertEqual(set(edifact_ways["1131"]), {("AN", 1, 3)})
+        self.assertEqual(set(edifact_ways["3055"]), {("AN", 1, 3)})
+        self.assertEqual(set(edifact_ways["3453"]), {("ID", 1, 3)})
+        self.assertEqual(set(edifact_ways["1366"]), {("AN", 1, 35)})
+        self.assertEqual(set(self.declarations("X12")["362"]), {("N2", 1, 10)})
 
 
 class GeneratedDocumentsAreValid(unittest.TestCase):
