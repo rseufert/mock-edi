@@ -115,6 +115,16 @@ def _documents(conn, po_number: str, partner_id: str,
             event["delivery"] = _delivery(conn, row)
         if raw:
             event["payload"] = row["payload"] or ""
+        if row["direction"] == "in":
+            # What this document said that the order does not (#126), on the
+            # event that said it rather than in a list of its own.
+            found = db.rows(conn, "SELECT rule, line, expected, found, note"
+                                  " FROM disagreement WHERE partner = ?"
+                                  " AND po_number = ? AND code = ? AND control = ?"
+                                  " ORDER BY id",
+                            (partner_id, po_number, row["code"], row["control"]))
+            if found:
+                event["disagreements"] = found
         event["summary"] = _summarise(event)
         out.append(event)
         if row["ack_at"]:
@@ -257,6 +267,9 @@ def _summarise(event: Dict[str, Any]) -> str:
         line += ", rejected"
     elif event["findings"]:
         line += ", accepted with %d finding(s)" % len(event["findings"])
+    if event.get("disagreements"):
+        line += "; disagrees with the order: %s" % "; ".join(
+            item["note"] for item in event["disagreements"])
     delivery = event.get("delivery") or {}
     if delivery.get("status"):
         line += "; delivery %s" % delivery["status"]

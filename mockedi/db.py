@@ -150,6 +150,46 @@ CREATE TABLE IF NOT EXISTS order_line (
     PRIMARY KEY (partner, po_number, line)
 );
 
+-- What a supplier said about an order the mock placed (#126): one row per
+-- line per document, so a finding can name the document it came from. The
+-- placed order's confirmed, shipped and invoiced are derived from these.
+CREATE TABLE IF NOT EXISTS supplier_claim (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner     TEXT NOT NULL,
+    po_number   TEXT NOT NULL,
+    line        TEXT NOT NULL DEFAULT '',
+    kind        TEXT NOT NULL,
+    code        TEXT NOT NULL DEFAULT '',
+    control     TEXT NOT NULL DEFAULT '',
+    interchange TEXT NOT NULL DEFAULT '',
+    document    TEXT NOT NULL DEFAULT '',
+    status      TEXT NOT NULL DEFAULT '',
+    sku         TEXT NOT NULL DEFAULT '',
+    upc         TEXT NOT NULL DEFAULT '',
+    quantity    TEXT NOT NULL DEFAULT '0',
+    price       TEXT NOT NULL DEFAULT '',
+    reason      TEXT NOT NULL DEFAULT '',
+    at          TEXT NOT NULL
+);
+
+-- Where a supplier's document disagreed with the order, as found when it
+-- arrived. Business findings: none of them ever reached a 997.
+CREATE TABLE IF NOT EXISTS disagreement (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    partner     TEXT NOT NULL,
+    po_number   TEXT NOT NULL,
+    line        TEXT NOT NULL DEFAULT '',
+    rule        TEXT NOT NULL,
+    kind        TEXT NOT NULL,
+    code        TEXT NOT NULL DEFAULT '',
+    control     TEXT NOT NULL DEFAULT '',
+    interchange TEXT NOT NULL DEFAULT '',
+    expected    TEXT NOT NULL DEFAULT '',
+    found       TEXT NOT NULL DEFAULT '',
+    note        TEXT NOT NULL DEFAULT '',
+    at          TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS shipment (
     shipment_id  TEXT PRIMARY KEY,
     po_number    TEXT NOT NULL,
@@ -291,6 +331,8 @@ CREATE INDEX IF NOT EXISTS ix_scheduled_due ON scheduled (done_at, due_at);
 CREATE INDEX IF NOT EXISTS ix_order_number ON purchase_order (po_number);
 CREATE INDEX IF NOT EXISTS ix_shipment_order ON shipment (partner, po_number);
 CREATE INDEX IF NOT EXISTS ix_invoice_order ON invoice (partner, po_number);
+CREATE INDEX IF NOT EXISTS ix_claim_order ON supplier_claim (partner, po_number);
+CREATE INDEX IF NOT EXISTS ix_disagreement_order ON disagreement (partner, po_number);
 CREATE INDEX IF NOT EXISTS ix_interchange_at ON interchange (at);
 """
 
@@ -358,7 +400,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 10
+SCHEMA_VERSION = 11
 
 
 class DatabaseError(Exception):
@@ -415,7 +457,10 @@ def _key_orders_by_partner(conn: sqlite3.Connection) -> List[str]:
 
     A primary key cannot be changed in place, so each is created anew from
     SCHEMA and its rows copied across. Every order had exactly one partner
-    before, so the copy is mechanical: an order line takes its order's.
+    before, so the copy is mechanical: an order line takes its order's. It
+    cannot collide either: the old key was the number alone, so no two orders
+    already shared one. A line whose order is gone is kept, with no partner,
+    rather than dropped by the join.
 
     Keyed on what the table *is* rather than on the version number, because
     a file from before versions were recorded says 0 and has the old key.

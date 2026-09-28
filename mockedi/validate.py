@@ -103,6 +103,28 @@ class EnvelopeFinding:
     severity: str = FATAL
 
 
+@dataclass
+class BusinessFinding:
+    """What a supplier's document says that disagrees with the order (#126).
+
+    Not a syntax finding, and never treated as one: it never enters a 997 or a
+    CONTRL and never changes whether a set is accepted. A buyer who receives a
+    well-formed 856 shipping 100 against a confirmed 90 acknowledges it and
+    takes the dispute elsewhere; a mock that bounced it at the syntax layer
+    would teach a supplier's integration something false.
+    """
+    rule: str                 # e.g. "confirmed-more", stable for a test to match
+    kind: str                 # the document's kind: response, despatch, invoice
+    code: str                 # 855, DESADV...
+    control: str              # the set's own control number, ST02 or UNH 0062
+    po_number: str
+    line: str = ""            # the order line, or "" for the document as a whole
+    expected: str = ""        # what the order (or an earlier document) says
+    found: str = ""           # what this document says
+    note: str = ""            # the sentence, naming both
+    interchange: str = ""     # the envelope's control number
+
+
 # 718 (AK5) set-level codes, as 0085 says them in a UCM, with the service
 # segment at fault: 1 an unknown message type is 14, Value not supported in
 # this position; 2 a missing UNT is 13, Missing; 3 a UNT that quotes another
@@ -135,6 +157,10 @@ class MessageReport:
     # Refused by the partner's translator for no reason in the document: the
     # `reject-ack` behaviour.
     refused: bool = False
+    # Where a supplier's document disagrees with the order. Kept apart from
+    # every list above, which the 997 and CONTRL writers read; nothing that
+    # decides `accepted` or `clean` looks at this one.
+    disagreements: List[BusinessFinding] = field(default_factory=list)
 
     @property
     def findings(self) -> List[SegmentFinding]:

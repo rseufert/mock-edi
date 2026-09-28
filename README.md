@@ -206,6 +206,7 @@ Both are walked through, test by test, in
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
 | Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |
+| Where a supplier disagrees | `GET /_mock/disagreements?partner=&po=` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
@@ -568,9 +569,30 @@ the 997 or CONTRL, at the element holding the order number: with no order
 there is nothing to hold it against. A supplier's 850 is refused as a
 customer's 855 is, as the wrong document for the relationship.
 
-The mock does not yet judge what a supplier says - a confirmation of more than
-was ordered, or an invoice for more than shipped. That comes next, and those
-disagreements will be reported beside the 997, never in it.
+### Where a supplier disagrees
+
+What the supplier says is kept document by document and compared against what
+the mock asked for. Where they disagree is a **business finding, not a syntax
+finding**: the 997 or CONTRL is exactly what it would have been for a document
+that agreed, and the set is accepted. A buyer that receives a well-formed 855
+confirming 120 against an order for 100 acknowledges it and takes the dispute
+up elsewhere, and a mock that bounced it would teach a supplier's integration
+something false.
+
+The rules for an 855, ORDRSP or 865, each one comparison naming both numbers:
+
+| Rule | When |
+| --- | --- |
+| `confirmed-unknown-line` | a line the order does not have |
+| `confirmed-more` | more than was ordered |
+| `confirmed-less` | less than was ordered, a refused line included; the sentence says whether the supplier gave a reason, or claimed `IA` |
+| `price-differs` | a price other than the ordered one, even with `IP` |
+| `substituted` | a different item on the line, without `IS` |
+
+They are reported in four places: the receipt's `disagreements`, beside
+`findings`; `/_mock/orders/<po>`, which for a placed order shows ordered,
+confirmed, shipped and billed per line; the timeline, on the event of the
+document that said it; and `GET /_mock/disagreements?partner=&po=`.
 
 ## One file, several interchanges
 
@@ -903,6 +925,7 @@ mockedi/charsets.py      which character set a document is in, bytes and back
 mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
+mockedi/claims.py        what a supplier says about a placed order, and where it disagrees
 mockedi/timeline.py      one order's whole conversation, in order
 mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out

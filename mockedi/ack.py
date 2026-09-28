@@ -292,4 +292,10 @@ def explain(report: InterchangeReport) -> List[str]:
                 lines.append("  %s: %s" % (where, finding.note))
         for code, note in item.set_errors:
             lines.append("  %s (%s)" % (note, code))
+        for finding in item.disagreements:
+            # Business, not syntax: said as such, so nobody reads one as the
+            # reason a set was rejected.
+            lines.append("  disagrees with the order%s: %s (%s)" % (
+                " at line %s" % finding.line if finding.line else "",
+                finding.note, finding.rule))
     return lines

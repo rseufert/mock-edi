@@ -26,8 +26,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import (ack, charsets, db, documents, edifact, partners, profiles, reconcile, schema,
-               transactions, x12)
+from . import (ack, charsets, claims, db, documents, edifact, partners, profiles,
+               reconcile, schema, transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
@@ -242,7 +242,7 @@ class Pipeline:
                 # Only a supplier's can get here: the role table refused the
                 # same documents from a customer.
                 reference = self._file(partner, message, message_report,
-                                       dialect, receipt)
+                                       dialect, receipt, interchange.control)
             self._record(interchange_id, partner, message, message_report,
                          dialect, reference)
             if (message_report.kind == schema.ORDER and message_report.accepted):
@@ -331,7 +331,7 @@ class Pipeline:
                  "%s at %s" % (interchange.control, partner_id, seen["at"]))]
 
     def _file(self, partner: Dict[str, Any], message, message_report,
-              dialect: str, receipt: Receipt) -> str:
+              dialect: str, receipt: Receipt, interchange_control: str) -> str:
         """Match a supplier's document to the order the mock placed with it.
 
         One that names an order the mock never placed with this supplier is
@@ -339,14 +339,22 @@ class Pipeline:
         because with no order there is nothing to reconcile the document
         against (#116). Returns the PO number to archive it under, or "" for
         a refused one, which is no order's story.
+
+        A document that is filed is also reconciled against the order (#126):
+        where it disagrees goes on `message_report.disagreements`, which
+        nothing that decides the 997 reads.
         """
         kind = message_report.kind
-        po_number = SUPPLIER_DOCUMENTS[kind](message, dialect).po_number
+        document = SUPPLIER_DOCUMENTS[kind](message, dialect)
+        po_number = document.po_number
         order = (documents.order_row(self.conn, po_number, partner["id"])
                  if po_number else None)
         if order is not None and order["direction"] == documents.PLACED:
             receipt.filed.append({"kind": kind, "code": message.code,
                                   "control": message.control, "order": po_number})
+            message_report.disagreements.extend(claims.record(
+                self.conn, partner, kind, message.code, message.control,
+                interchange_control, document))
             return po_number
         message_report.segments.append(
             _unknown_order(message, dialect, po_number, partner["id"]))
