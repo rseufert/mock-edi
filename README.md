@@ -610,6 +610,18 @@ The rules for an 855, ORDRSP or 865, each one comparison naming both numbers:
 | `price-differs` | a price other than the ordered one, even with `IP` |
 | `substituted` | a different item on the line, without `IS` |
 
+And for an 810 or INVOIC, the three-way match against the order, the 855 and
+the 856:
+
+| Rule | When |
+| --- | --- |
+| `billed-before-shipped` | no 856 has arrived for the order |
+| `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
+| `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
+| `total-not-lines` | the subtotal (TDS02, MOA+79) - or, without one, the total less tax - is not the sum of the lines |
+| `invoice-repeated` | an invoice number already received for the order; it is counted once |
+| `billed-cancelled` | the order was cancelled |
+
 They are reported in four places: the receipt's `disagreements`, beside
 `findings`; `/_mock/orders/<po>`, which for a placed order shows ordered,
 confirmed, shipped and billed per line; the timeline, on the event of the

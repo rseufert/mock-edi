@@ -43,7 +43,11 @@ class X12GroupTrailers(MockServerCase):
     def test_a_ge_control_number_that_disagrees_with_gs06_is_ak905_4(self):
         text = x12_order("GE-CONTROL")
         ge = [line for line in text.split("~") if line.strip().startswith("GE*")][0]
-        summary = self.send(text.replace(ge, ge.strip().rsplit("*", 1)[0] + "*999"))
+        # One more than GS06, rather than a fixed 999: GS06 comes from a counter
+        # shared by the whole run, and on the run where it reached 999 a fixed
+        # value agreed with it and the group went through.
+        count, control = ge.strip().split("*")[1:3]
+        summary = self.send(text.replace(ge, "GE*%s*%d" % (count, int(control) + 1)))
         self.assertEqual([q["code"] for q in summary["queued"]], ["997"])
         ak9 = self.document(ACME, "acknowledgment").groups[0].messages[0].find("AK9")
         self.assertEqual((ak9.get(1), ak9.get(5)), ("R", "4"))
