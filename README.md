@@ -617,6 +617,18 @@ The rules for an 855, ORDRSP or 865, each one comparison naming both numbers:
 | `price-differs` | a price other than the ordered one, even with `IP` |
 | `substituted` | a different item on the line, without `IS` |
 
+And for an 856 or DESADV, against the order and the 855, with quantities
+counted across every consignment so far rather than one document at a time,
+because a split delivery is ordinary:
+
+| Rule | When |
+| --- | --- |
+| `shipped-before-confirmed` | no 855 has arrived for the order |
+| `shipped-unknown-line` | a consignment against a line the order does not have |
+| `shipped-ambiguous-item` | a consignment with no line number naming an item the order has on more than one line; it is counted against none of them |
+| `shipped-more-than-confirmed` | more shipped than the latest 855 confirmed, a line confirmed at nothing included |
+| `shipped-more-than-ordered` | more shipped than was ordered; both quantity rules can fire on one line, since exceeding a promise and exceeding an order are different things to say |
+
 And for an 810 or INVOIC, the three-way match against the order, the 855 and
 the 856:
 
