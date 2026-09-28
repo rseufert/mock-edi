@@ -34,19 +34,24 @@ RANK = {"received": 0, "ordered": 1, "promised": 2, "packed": 3,
 PLACED_RANK = dict(RANK, ordered=0, sent=1, received=1, acknowledged=2)
 
 
-def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]]:
-    """The whole conversation about one order, or None if there is no such order."""
-    order = db.one(conn, "SELECT * FROM purchase_order WHERE po_number = ?",
-                   (po_number,))
+def timeline(conn, po_number: str, partner_id: str,
+             raw: bool = False) -> Optional[Dict[str, Any]]:
+    """The whole conversation about one partner's order, or None if there is none.
+
+    Every row is found by the partner as well as the number: another
+    partner's order with the same number is another conversation (#132).
+    """
+    order = db.one(conn, "SELECT * FROM purchase_order WHERE partner = ?"
+                         " AND po_number = ?", (partner_id, po_number))
     if order is None:
         return None
 
     events: List[Dict[str, Any]] = []
-    events.extend(_documents(conn, po_number, raw))
+    events.extend(_documents(conn, po_number, partner_id, raw))
     events.append(_ordered(conn, order))
-    events.extend(_promised(conn, po_number))
-    events.extend(_packed(conn, po_number))
-    events.extend(_invoiced(conn, po_number))
+    events.extend(_promised(conn, po_number, partner_id))
+    events.extend(_packed(conn, po_number, partner_id))
+    events.extend(_invoiced(conn, po_number, partner_id))
     rank = PLACED_RANK if order["direction"] == "placed" else RANK
     events.sort(key=lambda event: (event["at"], rank[event["event"]],
                                    event.pop("_id")))
@@ -55,7 +60,8 @@ def timeline(conn, po_number: str, raw: bool = False) -> Optional[Dict[str, Any]
             "events": events}
 
 
-def _documents(conn, po_number: str, raw: bool) -> List[Dict[str, Any]]:
+def _documents(conn, po_number: str, partner_id: str,
+               raw: bool) -> List[Dict[str, Any]]:
     """The transaction sets about this order, and the receipts for them.
 
     An acknowledgment names the interchange it answers, not the order inside
@@ -73,7 +79,8 @@ def _documents(conn, po_number: str, raw: bool) -> List[Dict[str, Any]]:
                    " i.payload AS payload"
                    " FROM transaction_set t"
                    " LEFT JOIN interchange i ON i.id = t.interchange_id"
-                   " WHERE t.reference = ? ORDER BY t.id", (po_number,))
+                   " WHERE t.partner = ? AND t.reference = ? ORDER BY t.id",
+                   (partner_id, po_number))
     envelopes = {row["envelope"] for row in rows if row["envelope"]}
     if envelopes:
         marks = ",".join("?" * len(envelopes))
@@ -82,9 +89,10 @@ def _documents(conn, po_number: str, raw: bool) -> List[Dict[str, Any]]:
                         " i.control AS envelope, i.payload AS payload"
                         " FROM transaction_set t"
                         " LEFT JOIN interchange i ON i.id = t.interchange_id"
-                        " WHERE t.reference IN (%s) AND t.kind IN"
+                        " WHERE t.partner = ? AND t.reference IN (%s) AND t.kind IN"
                         " ('acknowledgment', 'interchange-acknowledgment')"
-                        " ORDER BY t.id" % marks, tuple(sorted(envelopes)))
+                        " ORDER BY t.id" % marks,
+                        (partner_id,) + tuple(sorted(envelopes)))
 
     out: List[Dict[str, Any]] = []
     for row in rows:
@@ -139,9 +147,9 @@ def _delivery(conn, row) -> Dict[str, Any]:
     """
     sent = db.one(conn,
                   "SELECT status, attempts, last_error, delivered_at, delivery"
-                  " FROM outbound WHERE reference = ? AND code = ?"
+                  " FROM outbound WHERE partner = ? AND reference = ? AND code = ?"
                   " AND set_control = ? ORDER BY id LIMIT 1",
-                  (row["reference"], row["code"], row["control"]))
+                  (row["partner"], row["reference"], row["code"], row["control"]))
     if sent is None:
         return {}
     return {"status": sent["status"], "attempts": sent["attempts"],
@@ -150,8 +158,8 @@ def _delivery(conn, row) -> Dict[str, Any]:
 
 
 def _ordered(conn, order) -> Dict[str, Any]:
-    lines = db.rows(conn, "SELECT * FROM order_line WHERE po_number = ?",
-                    (order["po_number"],))
+    lines = db.rows(conn, "SELECT * FROM order_line WHERE partner = ?"
+                          " AND po_number = ?", (order["partner"], order["po_number"]))
     return {
         "_id": 0,
         "at": order["at"],
@@ -168,7 +176,7 @@ def _ordered(conn, order) -> Dict[str, Any]:
     }
 
 
-def _promised(conn, po_number: str) -> List[Dict[str, Any]]:
+def _promised(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
     """Work the seller took on and had not done yet.
 
     A delay postpones the *work*, not the posting, so a promise is a real
@@ -176,8 +184,8 @@ def _promised(conn, po_number: str) -> List[Dict[str, Any]]:
     about.
     """
     out = []
-    for row in db.rows(conn, "SELECT * FROM scheduled WHERE po_number = ?"
-                             " ORDER BY id", (po_number,)):
+    for row in db.rows(conn, "SELECT * FROM scheduled WHERE partner = ?"
+                             " AND po_number = ? ORDER BY id", (partner_id, po_number)):
         out.append({
             "_id": int(row["id"]),
             "at": row["at"],
@@ -194,11 +202,11 @@ def _promised(conn, po_number: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _packed(conn, po_number: str) -> List[Dict[str, Any]]:
+def _packed(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
     out = []
     for index, row in enumerate(db.rows(
-            conn, "SELECT * FROM shipment WHERE po_number = ? ORDER BY rowid",
-            (po_number,))):
+            conn, "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
+                  " ORDER BY rowid", (partner_id, po_number))):
         lines = db.rows(conn, "SELECT * FROM shipment_line WHERE shipment_id = ?",
                         (row["shipment_id"],))
         out.append({
@@ -219,11 +227,11 @@ def _packed(conn, po_number: str) -> List[Dict[str, Any]]:
     return out
 
 
-def _invoiced(conn, po_number: str) -> List[Dict[str, Any]]:
+def _invoiced(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
     out = []
     for index, row in enumerate(db.rows(
-            conn, "SELECT * FROM invoice WHERE po_number = ? ORDER BY rowid",
-            (po_number,))):
+            conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
+                  " ORDER BY rowid", (partner_id, po_number))):
         out.append({
             "_id": index,
             "at": row["at"],

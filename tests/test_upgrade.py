@@ -100,6 +100,42 @@ ROLE_COLUMN = """,
 DIRECTION_COLUMN = "\n    direction    TEXT NOT NULL DEFAULT 'received',"
 
 
+# Before version 10 an order was keyed by its number alone (#132). Each change
+# is made inside its own table's CREATE, since `shipment` has the same lines.
+PARTNER_KEYS = {
+    "purchase_order": (
+        ("    po_number    TEXT NOT NULL,", "    po_number    TEXT PRIMARY KEY,"),
+        (",\n    PRIMARY KEY (partner, po_number)\n", "\n")),
+    "order_line": (
+        ("    partner       TEXT NOT NULL,\n", ""),
+        ("PRIMARY KEY (partner, po_number, line)", "PRIMARY KEY (po_number, line)")),
+}
+OLD_INDEXES = """
+CREATE INDEX IF NOT EXISTS ix_line_po ON order_line (po_number);
+CREATE INDEX IF NOT EXISTS ix_shipment_po ON shipment (po_number);
+CREATE INDEX IF NOT EXISTS ix_invoice_po ON invoice (po_number);
+"""
+
+
+def schema_before_10(schema=None):
+    schema = db.SCHEMA if schema is None else schema
+    for table, changes in PARTNER_KEYS.items():
+        start = schema.index("CREATE TABLE IF NOT EXISTS %s (" % table)
+        end = schema.index("\n);", start) + 3
+        block = schema[start:end]
+        for new, old in changes:
+            assert new in block, "the order keys moved; rebuild the old schema here"
+            block = block.replace(new, old)
+        schema = schema[:start] + block + schema[end:]
+    return schema
+
+
+def indexes_before_10():
+    return "\n".join(line for line in db.INDEXES.split("\n")
+                     if "ix_order_number" not in line
+                     and "_order ON" not in line) + OLD_INDEXES
+
+
 class From7(FileDatabase):
     """A version 7 file: partners with no role, all of them customers."""
 
@@ -109,9 +145,9 @@ class From7(FileDatabase):
             self.assertIn(column, db.SCHEMA,
                           "a column moved; rebuild the version 7 schema here")
         conn = sqlite3.connect(self.db_path)
-        conn.executescript(db.SCHEMA.replace(ROLE_COLUMN, "\n);")
-                           .replace(DIRECTION_COLUMN, ""))
-        conn.executescript(db.INDEXES)
+        conn.executescript(schema_before_10(
+            db.SCHEMA.replace(ROLE_COLUMN, "\n);").replace(DIRECTION_COLUMN, "")))
+        conn.executescript(indexes_before_10())
         for pid, behaviour in (("ACME", "accept"), ("GLOBEX", "short-ship")):
             conn.execute("INSERT INTO partner (id, name, behaviour)"
                          " VALUES (?, ?, ?)", (pid, pid.title(), behaviour))
@@ -142,9 +178,94 @@ class From7(FileDatabase):
             added = db.upgrade(conn, self.db_path)
         finally:
             conn.close()
-        # Version 8 added the role, and 9 an order's direction.
-        self.assertEqual(added, ["partner.role", "purchase_order.direction"])
+        # Version 8 added the role, 9 an order's direction, and 10 the
+        # partner an order line belongs to.
+        self.assertEqual(sorted(added), ["order_line.partner", "partner.role",
+                                         "purchase_order.direction"])
         self.assertEqual(self.user_version(), db.SCHEMA_VERSION)
+
+
+class From9(FileDatabase):
+    """A version 9 file: orders keyed by their number alone, two partners'."""
+
+    def setUp(self):
+        super().setUp()
+        conn = sqlite3.connect(self.db_path)
+        conn.executescript(schema_before_10())
+        conn.executescript(indexes_before_10())
+        for pid in ("ACME", "GLOBEX"):
+            conn.execute("INSERT INTO partner (id, name) VALUES (?, ?)",
+                         (pid, pid.title()))
+        for po_number, partner, lines in (("PO-A", "ACME", ("1", "2")),
+                                          ("PO-G", "GLOBEX", ("1",))):
+            conn.execute("INSERT INTO purchase_order (po_number, partner, status,"
+                         " total, direction, at) VALUES (?,?,?,?,?,?)",
+                         (po_number, partner, "received", "10.00", "received",
+                          "2026-09-27T00:00:00Z"))
+            for line in lines:
+                conn.execute("INSERT INTO order_line (po_number, line, sku,"
+                             " quantity, confirmed) VALUES (?,?,?,?,?)",
+                             (po_number, line, "WIDGET-001", "5", "5"))
+        conn.execute("PRAGMA user_version = 9")
+        conn.commit()
+        conn.close()
+
+    def upgrade(self):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return db.upgrade(conn, self.db_path)
+        finally:
+            conn.close()
+
+    def rows(self, sql):
+        conn = sqlite3.connect(self.db_path)
+        try:
+            return [tuple(row) for row in conn.execute(sql)]
+        finally:
+            conn.close()
+
+    def test_every_order_and_line_is_carried_across_with_its_partner(self):
+        self.assertEqual(self.upgrade(), ["order_line.partner"])
+        self.assertEqual(self.rows("SELECT partner, po_number, total FROM"
+                                   " purchase_order ORDER BY po_number"),
+                         [("ACME", "PO-A", "10.00"), ("GLOBEX", "PO-G", "10.00")])
+        self.assertEqual(self.rows("SELECT partner, po_number, line, confirmed FROM"
+                                   " order_line ORDER BY po_number, line"),
+                         [("ACME", "PO-A", "1", "5"), ("ACME", "PO-A", "2", "5"),
+                          ("GLOBEX", "PO-G", "1", "5")])
+        self.assertEqual(self.user_version(), db.SCHEMA_VERSION)
+
+    def test_the_key_is_the_partner_and_the_number(self):
+        self.upgrade()
+        keys = {table: sorted((row[5], row[1]) for row in self.rows(
+                    "PRAGMA table_info(%s)" % table) if row[5])
+                for table in ("purchase_order", "order_line")}
+        self.assertEqual(keys, {
+            "purchase_order": [(1, "partner"), (2, "po_number")],
+            "order_line": [(1, "partner"), (2, "po_number"), (3, "line")]})
+
+    def test_the_indexes_on_the_number_alone_are_gone(self):
+        self.upgrade()
+        names = {row[0] for row in self.rows(
+            "SELECT name FROM sqlite_master WHERE type = 'index'")}
+        self.assertFalse(names & {"ix_line_po", "ix_shipment_po", "ix_invoice_po"})
+        self.assertTrue({"ix_order_number", "ix_shipment_order",
+                         "ix_invoice_order"} <= names)
+
+    def test_it_is_done_once(self):
+        self.upgrade()
+        self.assertEqual(self.upgrade(), [])
+
+    def test_and_then_a_second_partner_can_use_the_same_number(self):
+        httpd, _base = self.serve()
+        self.post("/edi", x12_order("PO-A", sender="GLOBEX"),
+                  headers={"Content-Type": "application/edi-x12"})
+        self.assertEqual(sorted(self.rows("SELECT partner FROM purchase_order"
+                                          " WHERE po_number = 'PO-A'")),
+                         [("ACME",), ("GLOBEX",)])
+        self.assertEqual(self.rows("SELECT line FROM order_line WHERE"
+                                   " partner = 'ACME' AND po_number = 'PO-A'"),
+                         [("1",), ("2",)])
 
 
 class FromANewerMock(FileDatabase):
@@ -165,11 +286,11 @@ class FromANewerMock(FileDatabase):
 
 
 class TheVersionMovesWithTheSchema(unittest.TestCase):
-    # The schema as of SCHEMA_VERSION 9. When this fails, the schema has
+    # The schema as of SCHEMA_VERSION 10. When this fails, the schema has
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (9, "f600271da77c0a07")
+    FINGERPRINT = (10, "b6cd5617aee2e2bb")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())

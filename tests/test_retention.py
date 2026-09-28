@@ -113,16 +113,17 @@ class PrunedAtStartup(FileDatabaseCase):
 
 
 class TheLookupsHaveIndexes(unittest.TestCase):
-    def plan(self, conn, sql):
+    def plan(self, conn, sql, params=("ACME", "PO-1")):
         return " ".join(str(row[-1]) for row in conn.execute(
-            "EXPLAIN QUERY PLAN " + sql, ("PO-1",)))
+            "EXPLAIN QUERY PLAN " + sql, params))
 
-    def test_shipments_and_invoices_are_found_by_po_number_without_a_scan(self):
+    def test_shipments_and_invoices_are_found_by_order_without_a_scan(self):
         conn = db.connect(":memory:")
         try:
-            for table, index in (("shipment", "ix_shipment_po"),
-                                 ("invoice", "ix_invoice_po")):
-                plan = self.plan(conn, "SELECT * FROM %s WHERE po_number = ?" % table)
+            for table, index in (("shipment", "ix_shipment_order"),
+                                 ("invoice", "ix_invoice_order")):
+                plan = self.plan(conn, "SELECT * FROM %s WHERE partner = ?"
+                                       " AND po_number = ?" % table)
                 self.assertIn(index, plan)
         finally:
             conn.close()

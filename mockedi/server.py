@@ -584,26 +584,27 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(200, db.rows(conn, "SELECT * FROM catalog ORDER BY sku"))
 
         if head == "orders":
+            if rest:
+                order, refusal = _which_order(conn, rest[0], query)
+                if order is None:
+                    return self._json(*refusal)
             if len(rest) == 2 and rest[1] == "timeline":
                 # Everything that happened to this order, in order. Four
                 # endpoints' worth of rows, sorted, which is what anyone
                 # debugging one was assembling by hand.
-                found = timeline.timeline(conn, rest[0], raw=_flag(query, "raw"))
-                if found is None:
-                    return self._json(404, {"error": "no purchase order %r"
-                                                     % rest[0]})
-                return self._json(200, found)
+                return self._json(200, timeline.timeline(
+                    conn, order["po_number"], order["partner"],
+                    raw=_flag(query, "raw")))
             if rest:
-                order = documents.order_row(conn, rest[0])
-                if order is None:
-                    return self._json(404, {"error": "no purchase order %r" % rest[0]})
-                order["lines"] = documents.order_lines(conn, order["po_number"])
+                key = (order["partner"], order["po_number"])
+                order["lines"] = documents.order_lines(conn, order["po_number"],
+                                                       order["partner"])
                 order["shipments"] = db.rows(
-                    conn, "SELECT * FROM shipment WHERE po_number = ? ORDER BY rowid",
-                    (order["po_number"],))
+                    conn, "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
+                          " ORDER BY rowid", key)
                 order["invoices"] = db.rows(
-                    conn, "SELECT * FROM invoice WHERE po_number = ? ORDER BY rowid",
-                    (order["po_number"],))
+                    conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
+                          " ORDER BY rowid", key)
                 return self._json(200, order)
             return self._json(200, db.rows(
                 conn, "SELECT * FROM purchase_order ORDER BY rowid DESC LIMIT ?",
@@ -756,7 +757,12 @@ class Handler(BaseHTTPRequestHandler):
                         str(payload.get("partner") or ""), payload)
                     status = 201
                 elif len(rest) == 2 and rest[1] == "change":
-                    order, queued = self.mock.pipeline.change_placed(rest[0], payload)
+                    order, refusal = _which_order(conn, rest[0], query,
+                                                  documents.PLACED)
+                    if order is None:
+                        return self._json(*refusal)
+                    order, queued = self.mock.pipeline.change_placed(
+                        rest[0], order["partner"], payload)
                     status = 200
                 else:
                     return self._json(404, {"error": "no route for %s %s"
@@ -768,7 +774,8 @@ class Handler(BaseHTTPRequestHandler):
             except documents.Refused as error:
                 return self._json(400, {"error": str(error),
                                         "problems": error.problems})
-            order["lines"] = documents.order_lines(conn, order["po_number"])
+            order["lines"] = documents.order_lines(conn, order["po_number"],
+                                                   order["partner"])
             order["sent"] = {"id": queued.id, "kind": queued.kind,
                              "code": queued.code, "dueAt": queued.due_at}
             return self._json(status, order)
@@ -1207,6 +1214,33 @@ def _limit(query: Dict[str, List[str]], default: int = 50) -> int:
 def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:
     sql = "SELECT COUNT(*) AS n FROM %s%s" % (table, " WHERE " + where if where else "")
     return int(conn.execute(sql).fetchone()["n"])
+
+
+def _which_order(conn, po_number: str, query, direction: str = ""):
+    """The order a URL names: `(row, None)`, or `(None, (status, body))`.
+
+    A PO number is unique per partner, not to the world (#132), so `?partner=`
+    picks one. Without it the number has to be unambiguous; when two partners
+    hold it the answer is a 409 naming them, rather than a guess.
+    """
+    partner_id = _first(query, "partner")
+    if partner_id:
+        found = [documents.order_row(conn, po_number, partner_id)]
+        found = [row for row in found if row is not None]
+    else:
+        found = documents.orders_numbered(conn, po_number)
+    if direction:
+        found = [row for row in found if row["direction"] == direction]
+    what = "purchase order %r%s" % (po_number, " placed" if direction else "")
+    if not found:
+        return None, (404, {"error": "no %s%s" % (
+            what, " with %s" % partner_id if partner_id else "")})
+    if len(found) > 1:
+        holders = [row["partner"] for row in found]
+        return None, (409, {"error": "%s is held by %s; add ?partner= to say whose"
+                                     % (what, " and ".join(holders)),
+                            "partners": holders})
+    return found[0], None
 
 
 def _json_body(body: bytes) -> Dict[str, Any]:

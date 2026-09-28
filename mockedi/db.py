@@ -107,8 +107,10 @@ CREATE TABLE IF NOT EXISTS transaction_set (
     at             TEXT NOT NULL
 );
 
+-- An order is its partner's number. PO numbers are unique per buyer, not to
+-- the world, and two customers may both send a 4500000042 (#132).
 CREATE TABLE IF NOT EXISTS purchase_order (
-    po_number    TEXT PRIMARY KEY,
+    po_number    TEXT NOT NULL,
     partner      TEXT NOT NULL,
     seller_order TEXT NOT NULL DEFAULT '',
     ordered_on   TEXT NOT NULL DEFAULT '',
@@ -124,10 +126,12 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     ship_to_postal TEXT NOT NULL DEFAULT '',
     ship_to_country TEXT NOT NULL DEFAULT 'US',
     direction    TEXT NOT NULL DEFAULT 'received',
-    at           TEXT NOT NULL
+    at           TEXT NOT NULL,
+    PRIMARY KEY (partner, po_number)
 );
 
 CREATE TABLE IF NOT EXISTS order_line (
+    partner       TEXT NOT NULL,
     po_number     TEXT NOT NULL,
     line          TEXT NOT NULL,
     sku           TEXT NOT NULL DEFAULT '',
@@ -143,7 +147,7 @@ CREATE TABLE IF NOT EXISTS order_line (
     invoiced      TEXT NOT NULL DEFAULT '0',
     reason        TEXT NOT NULL DEFAULT '',
     scheduled_on  TEXT NOT NULL DEFAULT '',
-    PRIMARY KEY (po_number, line)
+    PRIMARY KEY (partner, po_number, line)
 );
 
 CREATE TABLE IF NOT EXISTS shipment (
@@ -284,9 +288,9 @@ CREATE INDEX IF NOT EXISTS ix_ts_kind ON transaction_set (kind, direction);
 CREATE INDEX IF NOT EXISTS ix_ts_ack ON transaction_set (direction, ack_status);
 CREATE INDEX IF NOT EXISTS ix_outbound_status ON outbound (status, due_at);
 CREATE INDEX IF NOT EXISTS ix_scheduled_due ON scheduled (done_at, due_at);
-CREATE INDEX IF NOT EXISTS ix_line_po ON order_line (po_number);
-CREATE INDEX IF NOT EXISTS ix_shipment_po ON shipment (po_number);
-CREATE INDEX IF NOT EXISTS ix_invoice_po ON invoice (po_number);
+CREATE INDEX IF NOT EXISTS ix_order_number ON purchase_order (po_number);
+CREATE INDEX IF NOT EXISTS ix_shipment_order ON shipment (partner, po_number);
+CREATE INDEX IF NOT EXISTS ix_invoice_order ON invoice (partner, po_number);
 CREATE INDEX IF NOT EXISTS ix_interchange_at ON interchange (at);
 """
 
@@ -354,7 +358,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 9
+SCHEMA_VERSION = 10
 
 
 class DatabaseError(Exception):
@@ -393,12 +397,73 @@ def upgrade(conn: sqlite3.Connection, path: str = "") -> List[str]:
             "%s was written by a newer mock-edi (schema version %d; this one "
             "knows %d). Upgrade mock-edi, or start from a new --db file."
             % (path or "the database", found, SCHEMA_VERSION))
+    added = _key_orders_by_partner(conn)
     conn.executescript(SCHEMA)
-    added = _add_missing_columns(conn)
+    added += _add_missing_columns(conn)
     conn.executescript(INDEXES)
     conn.execute("PRAGMA user_version = %d" % SCHEMA_VERSION)
     conn.commit()
     return added
+
+
+# Indexes on the number alone, from before orders were keyed by partner.
+_RETIRED_INDEXES = ("ix_line_po", "ix_shipment_po", "ix_invoice_po")
+
+
+def _key_orders_by_partner(conn: sqlite3.Connection) -> List[str]:
+    """Version 10: rebuild the two tables keyed by the PO number alone (#132).
+
+    A primary key cannot be changed in place, so each is created anew from
+    SCHEMA and its rows copied across. Every order had exactly one partner
+    before, so the copy is mechanical: an order line takes its order's.
+
+    Keyed on what the table *is* rather than on the version number, because
+    a file from before versions were recorded says 0 and has the old key.
+    Columns the old table lacks are left to their defaults, which is what
+    `_add_missing_columns` would have given them, and are reported the way it
+    reports them.
+    """
+    if not _needs_partner_key(conn, "purchase_order"):
+        return []
+    added = []
+    with conn:
+        for table in ("purchase_order", "order_line"):
+            conn.execute("ALTER TABLE %s RENAME TO %s_before_10" % (table, table))
+        for name in _RETIRED_INDEXES:
+            conn.execute("DROP INDEX IF EXISTS %s" % name)
+        for table in ("purchase_order", "order_line"):
+            conn.execute(_create_statement(table))
+            had = _columns(conn, "%s_before_10" % table)
+            added += ["%s.%s" % (table, c) for c in _columns(conn, table)
+                      if c not in had]
+        common = [c for c in _columns(conn, "purchase_order_before_10")
+                  if c in _columns(conn, "purchase_order")]
+        conn.execute("INSERT INTO purchase_order (%s) SELECT %s FROM"
+                     " purchase_order_before_10" % (", ".join(common), ", ".join(common)))
+        common = [c for c in _columns(conn, "order_line_before_10")
+                  if c in _columns(conn, "order_line") and c != "partner"]
+        conn.execute(
+            "INSERT INTO order_line (partner, %s) SELECT COALESCE(o.partner, ''), %s"
+            " FROM order_line_before_10 l LEFT JOIN purchase_order_before_10 o"
+            " ON o.po_number = l.po_number"
+            % (", ".join(common), ", ".join("l.%s" % c for c in common)))
+        for table in ("purchase_order", "order_line"):
+            conn.execute("DROP TABLE %s_before_10" % table)
+    return added
+
+
+def _needs_partner_key(conn: sqlite3.Connection, table: str) -> bool:
+    info = conn.execute("PRAGMA table_info(%s)" % table).fetchall()
+    return bool(info) and not any(row[1] == "partner" and row[5] for row in info)
+
+
+def _columns(conn: sqlite3.Connection, table: str) -> List[str]:
+    return [row[1] for row in conn.execute("PRAGMA table_info(%s)" % table)]
+
+
+def _create_statement(table: str) -> str:
+    start = SCHEMA.index("CREATE TABLE IF NOT EXISTS %s (" % table)
+    return SCHEMA[start:SCHEMA.index("\n);", start) + 3]
 
 
 def _add_missing_columns(conn: sqlite3.Connection) -> List[str]:
@@ -720,10 +785,10 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
             amount = Decimal(prices[sku]) * quantity
             total += amount
             conn.execute(
-                "INSERT INTO order_line (po_number, line, sku, upc, description,"
-                " quantity, uom, price, status, confirmed, shipped, invoiced,"
-                " scheduled_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
-                (po_number, str(index), sku,
+                "INSERT INTO order_line (partner, po_number, line, sku, upc,"
+                " description, quantity, uom, price, status, confirmed, shipped,"
+                " invoiced, scheduled_on) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                (partner, po_number, str(index), sku,
                  conn.execute("SELECT upc FROM catalog WHERE sku = ?",
                               (sku,)).fetchone()["upc"],
                  descriptions[sku], str(quantity), units[sku], prices[sku],

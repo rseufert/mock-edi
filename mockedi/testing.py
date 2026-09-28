@@ -304,13 +304,18 @@ class Mock:
 
     # -- state
 
-    def order(self, po_number: str) -> Dict[str, Any]:
-        return self.expect("GET", "/_mock/orders/" + po_number)
+    def order(self, po_number: str, partner: str = "") -> Dict[str, Any]:
+        """One order. `partner` says whose, when two partners use the number."""
+        return self.expect("GET", "/_mock/orders/%s%s" % (
+            po_number, "?partner=%s" % partner if partner else ""))
 
-    def timeline(self, po_number: str, raw: bool = False) -> Dict[str, Any]:
+    def timeline(self, po_number: str, raw: bool = False,
+                 partner: str = "") -> Dict[str, Any]:
         """Everything that happened to one order, in order."""
+        query = "&".join(item for item in (
+            "raw" if raw else "", "partner=%s" % partner if partner else "") if item)
         return self.expect("GET", "/_mock/orders/%s/timeline%s"
-                           % (po_number, "?raw" if raw else ""))
+                           % (po_number, "?" + query if query else ""))
 
     def partners(self) -> List[Dict[str, Any]]:
         return self.expect("GET", "/_mock/partners")

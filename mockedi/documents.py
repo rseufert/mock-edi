@@ -71,39 +71,22 @@ UNITS_PER_CARTON = 24
 SHORT_SHIP_FRACTION = Decimal("0.8")
 
 
-def belongs_to(order: Optional[Dict[str, Any]],
-               partner: Dict[str, Any]) -> bool:
-    """Whether this stored order is the given partner's.
-
-    The one place that knows a purchase order number is not an identity. Every
-    caller that looks an order up by number alone has to ask this, because
-    `purchase_order` is keyed by the number and a customer can therefore name
-    another customer's order.
-    """
-    if order is None:
-        return False
-    return (order["partner"] or "") == (partner.get("id") or "")
-
-
 def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
                  when: Optional[datetime.datetime] = None) -> Dict[str, Any]:
     """Store an incoming order, decide every line, and return the stored row.
 
-    A repeat of a purchase order number *from the same partner* replaces what
+    A repeat of a purchase order number from the same partner replaces what
     was there.  Real receivers differ - some reject a duplicate, some treat it
     as a change - and the mock takes the forgiving reading so that re-running
     a test does not need the database thrown away first.  `/_mock/orders`
-    shows the one that survived.
-
-    A number another partner holds is a different matter, and the caller has
-    to refuse it before reaching here: replacing it would destroy an order
-    this partner has nothing to do with, along with the work promised for it.
-    `belongs_to` is that check.
+    shows the one that survived.  Another partner's order with the same number
+    is a different order, and untouched.
     """
     moment = when or db.utcnow()
-    seller_order = _existing_seller_order(conn, order.po_number) or str(
+    seller_order = _existing_seller_order(conn, order.po_number, partner["id"]) or str(
         db.next_number(conn, "seller_order"))
-    conn.execute("DELETE FROM order_line WHERE po_number = ?", (order.po_number,))
+    conn.execute("DELETE FROM order_line WHERE partner = ? AND po_number = ?",
+                 (partner["id"], order.po_number))
 
     ship_to = order.ship_to
     decisions = decide(conn, partner, order, moment)
@@ -114,11 +97,11 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
         # one of them, and puts both on everything it sends back.
         item = _catalog(conn, line)
         conn.execute(
-            "INSERT INTO order_line (po_number, line, sku, upc, description,"
-            " quantity, uom, price, ordered_price, status, confirmed, shipped,"
-            " invoiced, reason, scheduled_on)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-            (order.po_number, line.number, (item["sku"] if item else line.sku),
+            "INSERT INTO order_line (partner, po_number, line, sku, upc,"
+            " description, quantity, uom, price, ordered_price, status, confirmed,"
+            " shipped, invoiced, reason, scheduled_on)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            (partner["id"], order.po_number, line.number, (item["sku"] if item else line.sku),
              line.upc or (item["upc"] if item else ""),
              line.description or (item["description"] if item else ""),
              quantity_text(line.quantity), line.uom, db.money(price),
@@ -144,7 +127,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
          ship_to.region or partner["region"], ship_to.postal or partner["postal"],
          ship_to.country or partner["country"], db.now()))
     conn.commit()
-    return order_row(conn, order.po_number)
+    return order_row(conn, order.po_number, partner["id"])
 
 
 class Refused(ValueError):
@@ -173,7 +156,7 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
     moment = when or db.utcnow()
     problems: List[str] = []
     po_number = str(request.get("po_number") or "").strip()
-    if po_number and order_row(conn, po_number) is not None:
+    if po_number and order_row(conn, po_number, partner["id"]) is not None:
         problems.append("purchase order %s already exists; change it with "
                         "/_mock/purchase/%s/change" % (po_number, po_number))
     requested_on = str(request.get("requested_on") or "")
@@ -200,12 +183,12 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
     for row in rows:
         total += (row["quantity"] * row["price"]).quantize(Decimal("0.01"))
         conn.execute(
-            "INSERT INTO order_line (po_number, line, sku, upc, description,"
-            " quantity, uom, price, ordered_price)"
-            " VALUES (?,?,?,?,?,?,?,?,?)",
-            (po_number, row["line"], row["sku"], row["upc"], row["description"],
-             quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
-             db.money(row["price"])))
+            "INSERT INTO order_line (partner, po_number, line, sku, upc,"
+            " description, quantity, uom, price, ordered_price)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?)",
+            (partner["id"], po_number, row["line"], row["sku"], row["upc"],
+             row["description"], quantity_text(row["quantity"]), row["uom"],
+             db.money(row["price"]), db.money(row["price"])))
     conn.execute(
         "INSERT INTO purchase_order (po_number, partner, ordered_on,"
         " requested_on, currency, status, total, ship_to_name, ship_to_id,"
@@ -217,14 +200,14 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
          us.name, us.identifier, us.street, us.city, us.region, us.postal,
          us.country or "US", PLACED, db.now()))
     conn.commit()
-    return order_row(conn, po_number)
+    return order_row(conn, po_number, partner["id"])
 
 
 # The verbs a change request is given in, and the 670 codes they are.
 CHANGE_ACTIONS = {"add": "AI", "change": "CA", "delete": "DI"}
 
 
-def change_placed(conn: sqlite3.Connection, po_number: str,
+def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                   request: Dict[str, Any],
                   when: Optional[datetime.datetime] = None):
     """Change an order the mock placed, and return the change to send.
@@ -236,21 +219,22 @@ def change_placed(conn: sqlite3.Connection, po_number: str,
     """
     from .transactions import CANCEL_PURPOSES, Change, ChangeLine
     moment = when or db.utcnow()
-    order = order_row(conn, po_number)
+    order = order_row(conn, po_number, partner_id)
     if order is None or order["direction"] != PLACED:
         raise LookupError("the mock placed no purchase order %r" % po_number)
     if order["status"] == "cancelled":
         raise Refused(["purchase order %s is already cancelled" % po_number])
-    held = {row["line"]: row for row in order_lines(conn, po_number)}
+    held = {row["line"]: row for row in order_lines(conn, po_number, partner_id)}
     change = Change(po_number=po_number, changed_on=local(moment).date(),
                     ordered_on=_date(order["ordered_on"]),
                     currency=order["currency"],
-                    sequence=str(db.next_number(conn, "purchase_change", po_number)))
+                    sequence=str(db.next_number(conn, "purchase_change",
+                                                "%s/%s" % (partner_id, po_number))))
 
     if request.get("cancel"):
         change.purpose = CANCEL_PURPOSES[0]
         conn.execute("UPDATE purchase_order SET status = 'cancelled'"
-                     " WHERE po_number = ?", (po_number,))
+                     " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
         conn.commit()
         return change
 
@@ -304,30 +288,31 @@ def change_placed(conn: sqlite3.Connection, po_number: str,
 
     for action, row in wanted:
         if action == "DI":
-            conn.execute("DELETE FROM order_line WHERE po_number = ? AND line = ?",
-                         (po_number, row["line"]))
+            conn.execute("DELETE FROM order_line WHERE partner = ? AND po_number = ?"
+                         " AND line = ?", (partner_id, po_number, row["line"]))
         elif action == "AI":
             conn.execute(
-                "INSERT INTO order_line (po_number, line, sku, upc, description,"
-                " quantity, uom, price, ordered_price) VALUES (?,?,?,?,?,?,?,?,?)",
-                (po_number, row["line"], row["sku"], row["upc"], row["description"],
-                 quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
-                 db.money(row["price"])))
+                "INSERT INTO order_line (partner, po_number, line, sku, upc,"
+                " description, quantity, uom, price, ordered_price)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?)",
+                (partner_id, po_number, row["line"], row["sku"], row["upc"],
+                 row["description"], quantity_text(row["quantity"]), row["uom"],
+                 db.money(row["price"]), db.money(row["price"])))
         else:
             conn.execute(
                 "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
-                " ordered_price = ? WHERE po_number = ? AND line = ?",
+                " ordered_price = ? WHERE partner = ? AND po_number = ? AND line = ?",
                 (quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
-                 db.money(row["price"]), po_number, row["line"]))
+                 db.money(row["price"]), partner_id, po_number, row["line"]))
         change.lines.append(ChangeLine(
             number=row["line"], sku=row["sku"], upc=row["upc"],
             description=row["description"], quantity=row["quantity"],
             uom=row["uom"], price=row["price"], action=action))
     total = sum(((number(row["quantity"]) * number(row["price"], "0.00"))
                  .quantize(Decimal("0.01"))
-                 for row in order_lines(conn, po_number)), Decimal("0.00"))
-    conn.execute("UPDATE purchase_order SET total = ? WHERE po_number = ?",
-                 (db.money(total), po_number))
+                 for row in order_lines(conn, po_number, partner_id)), Decimal("0.00"))
+    conn.execute("UPDATE purchase_order SET total = ? WHERE partner = ?"
+                 " AND po_number = ?", (db.money(total), partner_id, po_number))
     conn.commit()
     return change
 
@@ -372,9 +357,10 @@ def _placed_line(conn: sqlite3.Connection, index: int,
     return row, problems
 
 
-def _existing_seller_order(conn: sqlite3.Connection, po_number: str) -> str:
-    row = db.one(conn, "SELECT seller_order FROM purchase_order WHERE po_number = ?",
-                 (po_number,))
+def _existing_seller_order(conn: sqlite3.Connection, po_number: str,
+                           partner_id: str) -> str:
+    row = db.one(conn, "SELECT seller_order FROM purchase_order"
+                       " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     return row["seller_order"] if row else ""
 
 
@@ -473,32 +459,47 @@ def _catalog(conn: sqlite3.Connection, line) -> Optional[Dict[str, Any]]:
 # Reading back
 # ---------------------------------------------------------------------------
 
-def order_row(conn: sqlite3.Connection, po_number: str) -> Optional[Dict[str, Any]]:
-    return db.one(conn, "SELECT * FROM purchase_order WHERE po_number = ?", (po_number,))
+# An order is its partner's number: purchase order numbers are unique per
+# buyer, and two customers may both send a 4500000042. So everything below
+# takes both, and there is no lookup by number alone except
+# `orders_numbered`, which says how many there are.
+
+def order_row(conn: sqlite3.Connection, po_number: str,
+              partner_id: str) -> Optional[Dict[str, Any]]:
+    return db.one(conn, "SELECT * FROM purchase_order WHERE partner = ?"
+                        " AND po_number = ?", (partner_id, po_number))
 
 
-def order_lines(conn: sqlite3.Connection, po_number: str) -> List[Dict[str, Any]]:
+def orders_numbered(conn: sqlite3.Connection, po_number: str) -> List[Dict[str, Any]]:
+    """Every order with this number, whoever's: for a caller that has only it."""
+    return db.rows(conn, "SELECT * FROM purchase_order WHERE po_number = ?"
+                         " ORDER BY partner", (po_number,))
+
+
+def order_lines(conn: sqlite3.Connection, po_number: str,
+                partner_id: str) -> List[Dict[str, Any]]:
     return db.rows(conn,
-                   "SELECT * FROM order_line WHERE po_number = ?"
-                   " ORDER BY CAST(line AS INTEGER), line", (po_number,))
+                   "SELECT * FROM order_line WHERE partner = ? AND po_number = ?"
+                   " ORDER BY CAST(line AS INTEGER), line", (partner_id, po_number))
 
 
 def shipment_row(conn: sqlite3.Connection, shipment_id: str) -> Optional[Dict[str, Any]]:
     return db.one(conn, "SELECT * FROM shipment WHERE shipment_id = ?", (shipment_id,))
 
 
-def latest_shipment(conn: sqlite3.Connection, po_number: str) -> Dict[str, Any]:
-    return db.one(conn, "SELECT * FROM shipment WHERE po_number = ?"
-                        " ORDER BY rowid DESC LIMIT 1", (po_number,)) or {}
+def latest_shipment(conn: sqlite3.Connection, po_number: str,
+                    partner_id: str) -> Dict[str, Any]:
+    return db.one(conn, "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
+                        " ORDER BY rowid DESC LIMIT 1", (partner_id, po_number)) or {}
 
 
-def uninvoiced_shipments(conn: sqlite3.Connection,
-                         po_number: str) -> List[Dict[str, Any]]:
+def uninvoiced_shipments(conn: sqlite3.Connection, po_number: str,
+                         partner_id: str) -> List[Dict[str, Any]]:
     """Consignments no invoice names yet, oldest first."""
     return db.rows(conn,
-                   "SELECT * FROM shipment WHERE po_number = ? AND shipment_id"
-                   " NOT IN (SELECT shipment_id FROM invoice WHERE po_number = ?)"
-                   " ORDER BY rowid", (po_number, po_number))
+                   "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
+                   " AND shipment_id NOT IN (SELECT shipment_id FROM invoice)"
+                   " ORDER BY rowid", (partner_id, po_number))
 
 
 def consignment_lines(conn: sqlite3.Connection,
@@ -521,7 +522,7 @@ def consignment_lines(conn: sqlite3.Connection,
         conn, "SELECT line, quantity FROM shipment_line WHERE shipment_id = ?",
         (shipment_id,))}
     out = []
-    for row in order_lines(conn, shipment["po_number"]):
+    for row in order_lines(conn, shipment["po_number"], shipment["partner"]):
         quantity = carried.get(row["line"]) if carried else (
             row["shipped"] if number(row["shipped"]) > 0 else None)
         if quantity is None:
@@ -536,7 +537,7 @@ def consignment_lines(conn: sqlite3.Connection,
 # The documents that follow an accepted order
 # ---------------------------------------------------------------------------
 
-def create_shipment(conn: sqlite3.Connection, po_number: str,
+def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
                     when: Optional[datetime.datetime] = None) -> Optional[Dict[str, Any]]:
     """Pack what has been confirmed and not yet shipped.
 
@@ -553,14 +554,14 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
     it carried in `shipment_line`.
     """
     moment = when or db.utcnow()
-    order = order_row(conn, po_number)
+    order = order_row(conn, po_number, partner_id)
     if order is None:
         return None
-    lines = order_lines(conn, po_number)
+    lines = order_lines(conn, po_number, partner_id)
 
     if not any(number(row["confirmed"]) > 0 for row in lines):
-        conn.execute("UPDATE purchase_order SET status = 'rejected' WHERE po_number = ?",
-                     (po_number,))
+        conn.execute("UPDATE purchase_order SET status = 'rejected'"
+                     " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
         conn.commit()
         return None
 
@@ -570,14 +571,15 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
     if not shipping:
         # Everything confirmed is already packed. Whoever asked wants the
         # consignment to name, not another one.
-        return latest_shipment(conn, po_number) or None
+        return latest_shipment(conn, po_number, partner_id) or None
 
     units = sum(delta for _row, delta in shipping)
     shipment_id = "SHP%d" % db.next_number(conn, "shipment")
     for row, delta in shipping:
-        conn.execute("UPDATE order_line SET shipped = ? WHERE po_number = ? AND line = ?",
+        conn.execute("UPDATE order_line SET shipped = ? WHERE partner = ?"
+                     " AND po_number = ? AND line = ?",
                      (quantity_text(number(row["shipped"]) + delta),
-                      po_number, row["line"]))
+                      partner_id, po_number, row["line"]))
         conn.execute("INSERT INTO shipment_line (shipment_id, line, quantity)"
                      " VALUES (?,?,?)", (shipment_id, row["line"],
                                          quantity_text(delta)))
@@ -590,8 +592,8 @@ def create_shipment(conn: sqlite3.Connection, po_number: str,
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
          quantity_text(units * 2), db.now()))
-    conn.execute("UPDATE purchase_order SET status = 'shipped' WHERE po_number = ?",
-                 (po_number,))
+    conn.execute("UPDATE purchase_order SET status = 'shipped'"
+                 " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
     return shipment_row(conn, shipment_id)
 
@@ -606,7 +608,8 @@ def _tracking(shipment_id: str) -> str:
     return "1Z999AA1%s" % digits
 
 
-def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = "",
+def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
+                   shipment_id: str = "",
                    when: Optional[datetime.datetime] = None,
                    tax_rate: str = "0") -> Optional[Dict[str, Any]]:
     """Invoice one consignment, at the price the acknowledgment confirmed.
@@ -616,7 +619,7 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
     two consignments is billed twice.
     """
     moment = when or db.utcnow()
-    order = order_row(conn, po_number)
+    order = order_row(conn, po_number, partner_id)
     if order is None:
         return None
     billable = consignment_lines(conn, shipment_id)
@@ -624,12 +627,13 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
         return None
 
     subtotal = Decimal("0.00")
-    current = {row["line"]: row for row in order_lines(conn, po_number)}
+    current = {row["line"]: row for row in order_lines(conn, po_number, partner_id)}
     for row in billable:
         billed = number(row["invoiced"])
-        conn.execute("UPDATE order_line SET invoiced = ? WHERE po_number = ? AND line = ?",
+        conn.execute("UPDATE order_line SET invoiced = ? WHERE partner = ?"
+                     " AND po_number = ? AND line = ?",
                      (quantity_text(number(current[row["line"]]["invoiced"]) + billed),
-                      po_number, row["line"]))
+                      partner_id, po_number, row["line"]))
         subtotal += (billed * number(row["price"], "0.00")).quantize(Decimal("0.01"))
 
     tax = (subtotal * Decimal(tax_rate)).quantize(Decimal("0.01"))
@@ -642,10 +646,11 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, shipment_id: str = 
          local(moment).date().isoformat(), order["currency"], db.money(subtotal),
          db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now()))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
-        conn, "SELECT total FROM invoice WHERE po_number = ?", (po_number,))),
-        Decimal("0.00"))
+        conn, "SELECT total FROM invoice WHERE partner = ? AND po_number = ?",
+        (partner_id, po_number))), Decimal("0.00"))
     conn.execute("UPDATE purchase_order SET status = 'invoiced', total = ?"
-                 " WHERE po_number = ?", (db.money(billed_total), po_number))
+                 " WHERE partner = ? AND po_number = ?",
+                 (db.money(billed_total), partner_id, po_number))
     conn.commit()
     return db.one(conn, "SELECT * FROM invoice WHERE invoice_number = ?",
                   (invoice_number,))
@@ -698,13 +703,11 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     """Apply a change request to an order the mock already holds."""
     from .transactions import ADD, CHANGE_LINE, DELETE, NO_CHANGE
     moment = when or db.utcnow()
-    order = order_row(conn, change.po_number)
-    # A purchase order number does not identify an order: real numbers are
-    # unique per buyer, and two customers may both hold a 4500000042. Until
-    # orders are keyed by partner and number, an order belonging to somebody
-    # else has to look exactly like one that does not exist - in the same
-    # words, so that nothing leaks which numbers are in use.
-    if order is None or not belongs_to(order, partner):
+    # The partner's own order with that number, or none: another partner's
+    # order with the same number is a different order, and not this one's to
+    # change.
+    order = order_row(conn, change.po_number, partner["id"])
+    if order is None:
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
     # A change request is about an order the partner placed *with the mock*,
     # never one the mock placed with it - however the partner's role got to
@@ -715,7 +718,8 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     if order["status"] == "invoiced":
         return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)
 
-    existing = {row["line"]: row for row in order_lines(conn, change.po_number)}
+    existing = {row["line"]: row for row in
+                order_lines(conn, change.po_number, partner["id"])}
 
     if change.cancels:
         shipped = [row for row in existing.values() if number(row["shipped"]) > 0]
@@ -727,11 +731,12 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
         for row in existing.values():
             conn.execute(
                 "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
-                " WHERE po_number = ? AND line = ?",
+                " WHERE partner = ? AND po_number = ? AND line = ?",
                 (REJECTED, "Order cancelled at the buyer's request",
-                 change.po_number, row["line"]))
+                 partner["id"], change.po_number, row["line"]))
         conn.execute("UPDATE purchase_order SET status = 'cancelled', total = ?"
-                     " WHERE po_number = ?", ("0.00", change.po_number))
+                     " WHERE partner = ? AND po_number = ?",
+                     ("0.00", partner["id"], change.po_number))
         conn.commit()
         return ChangeOutcome(change.po_number, APPLIED, "Order cancelled",
                              cancelled=True)
@@ -742,7 +747,7 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
         action = line.action or CHANGE_LINE
 
         if action == DELETE:
-            outcome.lines.append(_delete_line(conn, change, line, row))
+            outcome.lines.append(_delete_line(conn, partner, change, line, row))
             continue
         if action == NO_CHANGE and row is not None:
             outcome.lines.append({"line": line.number, "action": action,
@@ -753,12 +758,12 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
             continue
         outcome.lines.append(_change_line(conn, partner, change, line, row, moment))
 
-    _retotal(conn, change.po_number)
+    _retotal(conn, change.po_number, partner["id"])
     conn.commit()
     return outcome
 
 
-def _delete_line(conn, change, line, row) -> Dict[str, Any]:
+def _delete_line(conn, partner, change, line, row) -> Dict[str, Any]:
     if row is None:
         return {"line": line.number, "action": "DI", "status": REJECTED,
                 "reason": "there is no line %s to delete" % line.number}
@@ -768,9 +773,9 @@ def _delete_line(conn, change, line, row) -> Dict[str, Any]:
                           % (ALREADY_SHIPPED, line.number)}
     conn.execute(
         "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
-        " WHERE po_number = ? AND line = ?",
-        (REJECTED, "Line deleted at the buyer's request", change.po_number,
-         line.number))
+        " WHERE partner = ? AND po_number = ? AND line = ?",
+        (REJECTED, "Line deleted at the buyer's request", partner["id"],
+         change.po_number, line.number))
     return {"line": line.number, "action": "DI", "status": REJECTED,
             "reason": "Line deleted at the buyer's request"}
 
@@ -787,11 +792,11 @@ def _add_line(conn, partner, change, line, moment) -> Dict[str, Any]:
         conn, partner, stand_in, moment)[0]
     item = _catalog(conn, line)
     conn.execute(
-        "INSERT OR REPLACE INTO order_line (po_number, line, sku, upc,"
+        "INSERT OR REPLACE INTO order_line (partner, po_number, line, sku, upc,"
         " description, quantity, uom, price, ordered_price, status, confirmed,"
         " shipped, invoiced, reason, scheduled_on)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
-        (change.po_number, line.number, (item["sku"] if item else line.sku),
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        (partner["id"], change.po_number, line.number, (item["sku"] if item else line.sku),
          line.upc or (item["upc"] if item else ""),
          line.description or (item["description"] if item else ""),
          quantity_text(line.quantity), line.uom, db.money(price),
@@ -833,23 +838,24 @@ def _change_line(conn, partner, change, line, row, moment) -> Dict[str, Any]:
     conn.execute(
         "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
         " ordered_price = ?, status = ?, confirmed = ?, reason = ?,"
-        " scheduled_on = ? WHERE po_number = ? AND line = ?",
+        " scheduled_on = ? WHERE partner = ? AND po_number = ? AND line = ?",
         (quantity_text(wanted), line.uom or row["uom"], db.money(price),
          db.money(line.price or number(row["ordered_price"], "0.00")), status,
          quantity_text(confirmed), reason, scheduled or row["scheduled_on"],
-         change.po_number, line.number))
+         partner["id"], change.po_number, line.number))
     return {"line": line.number, "action": action, "status": status,
             "reason": reason}
 
 
-def _retotal(conn: sqlite3.Connection, po_number: str) -> None:
+def _retotal(conn: sqlite3.Connection, po_number: str, partner_id: str) -> None:
     total = Decimal("0.00")
-    for row in order_lines(conn, po_number):
+    for row in order_lines(conn, po_number, partner_id):
         total += (number(row["confirmed"]) * number(row["price"], "0.00")
                   ).quantize(Decimal("0.01"))
     status = "received" if total > 0 else "cancelled"
-    current = order_row(conn, po_number)
+    current = order_row(conn, po_number, partner_id)
     if current and current["status"] in ("shipped", "invoiced"):
         status = current["status"]
     conn.execute("UPDATE purchase_order SET total = ?, status = ?"
-                 " WHERE po_number = ?", (db.money(total), status, po_number))
+                 " WHERE partner = ? AND po_number = ?",
+                 (db.money(total), status, partner_id, po_number))
