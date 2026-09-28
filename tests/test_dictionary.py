@@ -215,13 +215,19 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
     """An element number is declared the same way wherever it is used (#163).
 
     A dictionary serves one version per dialect, and in one version a data
-    element has one representation. When two segments disagreed - 1131 was
-    an..3 in ALC and AN 1..17 in nine composites - the same value was an
-    error in one place and fine in another, and `GET /_mock/dictionary`
-    told a reader two things.
+    element has one representation *and one name*. When two segments
+    disagreed - 1131 was an..3 in ALC and AN 1..17 in nine composites - the
+    same value was an error in one place and fine in another, and `GET
+    /_mock/dictionary` told a reader two things.
+
+    The name is held to the same rule (#171). 373 was "Purchase Order Date"
+    in BIG03 and "Date" in nine other segments, which invents an element the
+    directory does not have: 373 is Date, and BIG03 means the order's date
+    because of where it sits. What a position means belongs in its segment's
+    description, which is where TDS's four 610s put it.
     """
 
-    def declarations(self, dialect):
+    def declarations(self, dialect, named=False):
         found = {}
 
         def walk(elements, tag):
@@ -229,9 +235,10 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
                 if element.composite:
                     walk(element.components, tag)
                 else:
+                    key = ((element.name,) if named else
+                           (element.type, element.min_len, element.max_len))
                     found.setdefault(element.ref, {}).setdefault(
-                        (element.type, element.min_len, element.max_len),
-                        set()).add(tag)
+                        key, set()).add(tag)
 
         def segments(children):
             for child in children:
@@ -253,6 +260,23 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
     def test_edifact(self):
         self.assertEqual({ref: ways for ref, ways in
                           self.declarations("EDIFACT").items() if len(ways) > 1}, {})
+
+    def test_x12_names(self):
+        self.assertEqual({ref: ways for ref, ways in
+                          self.declarations("X12", named=True).items()
+                          if len(ways) > 1}, {})
+
+    def test_edifact_names(self):
+        self.assertEqual({ref: ways for ref, ways in
+                          self.declarations("EDIFACT", named=True).items()
+                          if len(ways) > 1}, {})
+
+    def test_373_is_date_wherever_it_appears(self):
+        # Checked against two 004010 sources, not memory: a published table
+        # and a vendor's own 004010 implementation guide. BAK04 and BIG01 are
+        # both element 373 named "Date"; what they mean is the position's.
+        self.assertEqual(set(self.declarations("X12", named=True)["373"]),
+                         {("Date",)})
 
     def test_what_163_corrected_against_the_directories(self):
         # D.96A: 1131 "Code list qualifier" an..3; 3055 an..3; 3453
