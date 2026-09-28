@@ -207,6 +207,7 @@ Both are walked through, test by test, in
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
 | Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |
 | Where a supplier disagrees | `GET /_mock/disagreements?partner=&po=` |
+| Remittance advices received | `GET /_mock/remittances?partner=` |
 | Archive | `GET /_mock/documents`, `GET /_mock/interchanges`, `GET /_mock/interchanges/<id>?raw` |
 | Receipts | `GET /_mock/mdns` |
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
@@ -273,6 +274,18 @@ not tied to one invoice, which is part of what was paid - and the `MOA+12`
 after `UNS` against each `DOC`'s `MOA+12`. That is how a remittance still
 claiming an invoice whose payment came back gets caught before a supplier
 starts dunning for it.
+
+Two more findings are about *when*. An 820 whose `BPR16` effective date is
+still ahead of the mock's clock is `remitted-before-settlement`: the payee is
+being told to reconcile cash that has not arrived, and `/_mock/advance` moves
+what counts as early. And an 820 with `BPR03 = D` reverses the advice with the
+same `TRN02` trace - the correction a payer owes once the bank returns a
+payment - so `GET /_mock/remittances` lists that earlier advice as `reversed`
+and names the one that reversed it; a debit for a trace never advised is a
+`reversal-of-nothing`. An advice left `advised` after its payment came back
+is the failure to test for. Both read the 820 only: which REMADV date is the
+value date, and how one REMADV reverses another, vary too much between guides
+to guess.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

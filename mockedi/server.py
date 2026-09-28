@@ -33,8 +33,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, charsets, claims, db, delivery, documents, drop, partners, pipeline,
-               profiles, reconcile, schema, timeline, transactions, validate)
+from . import (as2, charsets, claims, db, delivery, documents, drop, partners,
+               pipeline, profiles, reconcile, remittance, schema, timeline,
+               transactions, validate)
 from .envelope import EdiSyntaxError
 
 JSON = "application/json; charset=utf-8"
@@ -801,6 +802,10 @@ class Handler(BaseHTTPRequestHandler):
                                         conn, _first(query, "partner"),
                                         _first(query, "po"), _limit(query, 1000))])
 
+        if head == "remittances":
+            # Every remittance advice received, and what became of it.
+            return self._json(200, remittance.listing(conn, _first(query, "partner")))
+
         if head == "unacknowledged":
             return self._json(200, reconcile.unacknowledged(
                 conn, _number(query, "older-than"),
@@ -833,7 +838,8 @@ class Handler(BaseHTTPRequestHandler):
             "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
                           "catalog", "orders", "documents", "interchanges",
                           "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
-                          "unacknowledged", "requests", "validate", "reset"]})
+                          "unacknowledged", "remittances", "requests", "validate",
+                          "reset"]})
 
     def _partners(self, method: str, rest: List[str], query, body: bytes):
         conn = self.mock.conn
@@ -1501,6 +1507,7 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/catalog", "What we sell."),
         ("GET", "/_mock/orders", "Purchase orders received and placed, and what became of them."),
         ("GET", "/_mock/disagreements", "Where a supplier disagrees with an order the mock placed, or a remittance with itself."),
+        ("GET", "/_mock/remittances", "Every remittance advice received, and whether a later one reversed it."),
         ("POST", "/_mock/purchase", "Place an order with a supplier: an 850 or ORDERS goes out."),
         ("POST", "/_mock/purchase/{po}/change", "Change or cancel an order the mock placed."),
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
