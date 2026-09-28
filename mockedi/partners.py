@@ -197,6 +197,45 @@ def _check_role_fits(role: str, behaviour: str) -> None:
                   % (behaviour, why, role, ", ".join(behaviours_for(role))))
 
 
+def live_orders(conn: sqlite3.Connection, identifier: str) -> List[str]:
+    """The orders this partner holds that are not over, oldest first."""
+    from .documents import FINISHED           # avoids a cycle at import time
+    rows = conn.execute(
+        "SELECT po_number FROM purchase_order WHERE partner = ?"
+        " AND status NOT IN (%s) ORDER BY at, po_number"
+        % ", ".join("?" * len(FINISHED)), (identifier,) + FINISHED)
+    return [row["po_number"] for row in rows]
+
+
+def _check_role_free_of_orders(conn: sqlite3.Connection, identifier: str,
+                               was: str, now: str) -> None:
+    """Refuse a role change that would disagree with the orders on the books.
+
+    A supplier holds what the mock placed; a customer holds what it received.
+    Every ownership check since #134 reads the pair as one fact, so a role
+    that moves out from under its orders does not produce an error - it
+    produces a mock acting on an order from the wrong side, which is #133's
+    865 cancelling the mock's own purchase order, and scheduled despatches
+    for a partner the mock now buys from.
+
+    Finished orders stay, read-only, as the evidence of what the mock did:
+    nothing will act on them again, so nothing can act on them wrongly.
+    """
+    if was == now:
+        return
+    live = live_orders(conn, identifier)
+    if not live:
+        return
+    raise Invalid(
+        "%s cannot change from %s to %s while it holds %d order%s that "
+        "%s not finished: %s. A partner's role and the direction of its "
+        "orders say the same thing, and the mock would be left acting on "
+        "these from the wrong side. Let them finish, or DELETE the partner "
+        "and POST it again - which says what becomes of its work."
+        % (identifier, was, now, len(live), "" if len(live) == 1 else "s",
+           "is" if len(live) == 1 else "are", ", ".join(live)))
+
+
 def _check_id(identifier: str, dialect: str, limits) -> None:
     if not identifier.strip():
         raise Invalid("a partner needs an id")
@@ -278,6 +317,9 @@ def update(conn: sqlite3.Connection, identifier: str,
     # Either half can change, so the pair is checked as it will stand.
     _check_role_fits(changes.get("role", row["role"]),
                      changes.get("behaviour", row["behaviour"]))
+    if "role" in changes:
+        _check_role_free_of_orders(conn, identifier, row["role"],
+                                   changes["role"])
     if "dialect" in changes and changes["dialect"] != row["dialect"]:
         _check_id(identifier, changes["dialect"], LIMITS[changes["dialect"]])
 

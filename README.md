@@ -354,6 +354,17 @@ that change how the mock answers, or damage what it sends, fit both. The
 mock places orders with a supplier; see [Buying from a
 supplier](#buying-from-a-supplier).
 
+A role change is refused, too, while the partner holds an order that is not
+finished - `invoiced`, `cancelled` or `rejected` - in either direction, and
+the refusal names those orders. A partner's role and the direction of its
+orders say the same thing: a supplier holds what the mock placed, a customer
+what it received, and the mock reads the pair as one fact when it decides
+whose order it is acting on. Let the orders finish, or `DELETE` the partner
+and `POST` it again, which says what becomes of its work. **Orders that are
+already finished stay, read-only, as history** - nothing will act on them
+again, so nothing can act on them wrongly, and they are still the evidence of
+what the mock did.
+
 | Behaviour | Partner | What the partner does |
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |

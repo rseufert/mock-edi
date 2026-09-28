@@ -19,6 +19,8 @@ sys.path.insert(0, HERE)
 
 from support import ACME, EURODIS, MockServerCase, x12_order
 
+NORTHWIND = "NORTHWIND"     # the seeded supplier (#125)
+
 
 class PartnerCase(MockServerCase):
     def patch_partner(self, identifier, body):
@@ -478,3 +480,93 @@ class TheIndexPage(PartnerCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class ChangingARoleWhileOrdersAreLive(PartnerCase):
+    """A partner's role and the direction of its orders must agree (#146).
+
+    Every ownership check since #134 rests on the pair agreeing: a supplier
+    holds what the mock placed, a customer holds what it received. Nothing
+    stopped the role from moving out from under the orders, and the two then
+    describe different worlds - a customer holding a purchase order the mock
+    itself sent, which the seller's change path will happily cancel on its
+    own behalf.
+
+    #133 put a guard in `apply_change` for that one route. This is the same
+    rule at the cause, so the refusal arrives on the PATCH that would break
+    the pair rather than on the 860 that exploits it.
+    """
+
+    # Without a delay a received order is confirmed, shipped and invoiced
+    # before the next request arrives, so it is already finished and the hole
+    # this issue is about cannot be reached. It is reachable exactly when
+    # there is work in flight, which is when it matters.
+    config_kwargs = {"despatch_delay_ms": 3600000, "invoice_delay_ms": 3600000}
+
+    LINES = [{"sku": "W-1", "quantity": "10", "uom": "EA", "price": "1.00"}]
+
+    def purchase(self, po_number):
+        status, _h, data = self.post("/_mock/purchase",
+                                     {"partner": NORTHWIND, "po_number": po_number,
+                                      "lines": self.LINES})
+        self.assertEqual(status, 201, data)
+        return data
+
+    def test_a_supplier_holding_an_order_the_mock_placed_stays_a_supplier(self):
+        self.purchase("PO-LIVE-OUT")
+        status, _h, data = self.patch_partner(NORTHWIND, {"role": "customer"})
+        self.assertRefused(status, data, "PO-LIVE-OUT")
+
+    def test_and_the_role_is_not_changed_by_the_attempt(self):
+        self.purchase("PO-LIVE-OUT-2")
+        self.patch_partner(NORTHWIND, {"role": "customer"})
+        self.assertEqual(self.get("/_mock/partners/" + NORTHWIND)[2]["role"],
+                         "supplier")
+
+    def test_a_customer_holding_an_order_the_mock_received_stays_a_customer(self):
+        self.send(x12_order("PO-LIVE-IN"))
+        status, _h, data = self.patch_partner(ACME, {"role": "supplier"})
+        self.assertRefused(status, data, "PO-LIVE-IN")
+
+    def test_the_refusal_says_which_way_to_change_a_role_that_has_orders(self):
+        self.send(x12_order("PO-LIVE-SAYS"))
+        _s, _h, data = self.patch_partner(ACME, {"role": "supplier"})
+        self.assertIn("DELETE", data["error"])
+
+    def test_every_live_order_is_named_not_only_the_first(self):
+        self.purchase("PO-MANY-1")
+        self.purchase("PO-MANY-2")
+        _s, _h, data = self.patch_partner(NORTHWIND, {"role": "customer"})
+        for po in ("PO-MANY-1", "PO-MANY-2"):
+            self.assertIn(po, data["error"])
+
+    def test_a_finished_order_is_history_and_does_not_hold_the_role(self):
+        # The decision this issue asks for: what is finished stays, read-only,
+        # as the evidence of what the mock did. It cannot be acted on, so it
+        # cannot be acted on wrongly.
+        self.purchase("PO-DONE")
+        status, _h, data = self.post("/_mock/purchase/PO-DONE/change",
+                                     {"cancel": True})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(self.order("PO-DONE")["status"], "cancelled")
+        status, _h, data = self.patch_partner(NORTHWIND, {"role": "customer"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["role"], "customer")
+
+    def test_with_no_orders_at_all_a_supplier_can_still_become_a_customer(self):
+        status, _h, data = self.patch_partner(NORTHWIND, {"role": "customer"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["role"], "customer")
+
+    def test_setting_the_role_it_already_has_is_not_a_change_to_refuse(self):
+        self.purchase("PO-SAME")
+        status, _h, data = self.patch_partner(NORTHWIND, {"role": "supplier"})
+        self.assertEqual(status, 200, data)
+
+    def test_and_live_orders_do_not_freeze_the_rest_of_the_partner(self):
+        # The rule is about the role alone. A partner with orders in flight is
+        # exactly when somebody wants to change its delay or its name.
+        self.purchase("PO-OTHER-FIELDS")
+        status, _h, data = self.patch_partner(NORTHWIND, {"name": "Northwind Ltd"})
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["name"], "Northwind Ltd")
