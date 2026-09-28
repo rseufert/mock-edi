@@ -258,17 +258,13 @@ any guide. A 999 from it would claim a check it never made; the 997 says
 exactly what it did.
 
 **A remittance advice** is sent *to* the mock, as the payee, and answered
-with a 997 or CONTRL like anything else it receives. Two things are refused
-by name beyond the syntax. An 820 whose `BPR01` instructs a bank - `D`, `P`,
-`U` or `X` - is a payment order, a bank's document, and is refused rather than
-half-read; `I` and `C` are the remittance uses. And the total has to be the
-sum of its parts: `BPR02` against the `RMR04` amounts, or the `MOA+12` after
-`UNS` against each `DOC` group's `MOA+12`. An advice that still claims an
-invoice whose payment was rejected is exactly how a supplier ends up dunning
-for an invoice already paid. `MOA+12`, *amount remitted*, is the qualifier
-this mock reads; a guide may name the amounts otherwise, and then the totals
-are not checked rather than guessed at. An advice is filed under its `TRN02`
-trace number, or its `BGM` number.
+with a 997 or CONTRL like anything else it receives. An 820 whose `BPR01`
+instructs a bank - `D`, `P`, `U` or `X` - is a payment order, a bank's
+document, and is refused by name rather than half-read; `I` and `C` are the
+remittance uses. An advice is filed under its `TRN02` trace number, or its
+`BGM` number. Whether its total is the sum of what it says was paid is not a
+syntax question - an advice that disagrees with itself can still be read, and
+is acknowledged - so it is left to the business findings, not the 997.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

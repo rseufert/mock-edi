@@ -2,9 +2,12 @@
 
 The mock sells, so it is the payee: it is *sent* a remittance advice, checks
 it against the same dictionary it checks everything against, and answers
-with a 997 or CONTRL. Beyond the syntax, two things are refused by name: an
-820 used as a payment order - a bank's document - and an advice whose total
-is not the sum of what it says was paid on each invoice.
+with a 997 or CONTRL. Beyond the syntax, one thing is refused by name: an 820
+used as a payment order, a bank's document.
+
+An advice whose total is not the sum of its parts can still be read, so it is
+acknowledged; that disagreement is a business finding for #153's class, not
+a 997 rejection (#116).
 """
 import os
 import sys
@@ -25,14 +28,20 @@ EDIFACT_TYPE = {"Content-Type": "application/edifact"}
 
 def x12_remittance(trace="TR-0001", total="150.00", paid=(("INV8000001", "100.00"),
                                                            ("INV8000002", "50.00")),
-                   handling="I", settles="20260928", sender=ACME, extra_bpr=None):
-    """A remittance-only 820: BPR, TRN, payer and payee, one ENT and an RMR per invoice."""
+                   handling="I", settles="20260928", sender=ACME, extra_bpr=None,
+                   deductions=()):
+    """A remittance-only 820: BPR, TRN, payer and payee, one ENT and an RMR per invoice.
+
+    `deductions` are ENT-level ADXs: an amount and a reason not tied to one
+    invoice, which BPR02 includes and no RMR04 does.
+    """
     bpr = extra_bpr or seg("BPR", handling, total, "C", "NON", "", "", "", "", "",
                            "", "", "", "", "", "", settles)
     body = [bpr, seg("TRN", "1", trace),
             seg("N1", "PR", "Acme Distribution Inc"),
             seg("N1", "PE", "Mock EDI Supply Co"),
             seg("ENT", "1")]
+    body += [seg("ADX", amount, reason) for amount, reason in deductions]
     for invoice, amount in paid:
         body.append(seg("RMR", "IV", invoice, "", amount, amount))
         body.append(seg("DTM", "003", "20260920"))
@@ -43,7 +52,8 @@ def x12_remittance(trace="TR-0001", total="150.00", paid=(("INV8000001", "100.00
 
 
 def edifact_remittance(number="RA-0001", total="150.00",
-                       paid=(("INV8000001", "100.00"), ("INV8000002", "50.00"))):
+                       paid=(("INV8000001", "100.00"), ("INV8000002", "50.00")),
+                       summary=True):
     body = [seg("BGM", ["481"], [number], "9"),
             seg("DTM", ["137", "20260928", "102"]),
             seg("NAD", "PR", ["EURODIS", "", "92"]),
@@ -52,7 +62,9 @@ def edifact_remittance(number="RA-0001", total="150.00",
     for invoice, amount in paid:
         body.append(seg("DOC", ["380"], [invoice]))
         body.append(seg("MOA", ["12", amount]))
-    body += [seg("UNS", "S"), seg("MOA", ["12", total])]
+    body.append(seg("UNS", "S"))
+    if summary:
+        body.append(seg("MOA", ["12", total]))
     return edifact.render(edifact.wrap(
         [edifact.message("REMADV", "1", body, version="D:96A:UN")],
         EURODIS, "MOCKEDI", _next_control(4)), newline=True)
@@ -117,19 +129,23 @@ class AnX12Remittance(MockServerCase):
         self.assertEqual((ack.find("AK3").get(1), ack.find("AK4").get(1)),
                          ("BPR", "16"))
 
-    def test_a_total_that_is_not_the_sum_is_refused_by_name(self):
-        # The run paid two invoices, one payment came back AC04, and the
-        # advice still claims the full total while listing one invoice.
+    def test_a_total_that_does_not_add_up_is_still_acknowledged(self):
+        # Readable, so a 997 says A: the arithmetic is a business finding,
+        # reported beside the acknowledgment rather than in it (#116).
         data = self.send_820(x12_remittance(
             total="150.00", paid=(("INV8000001", "100.00"),)))
-        self.assertFalse(data["accepted"])
-        finding = data["transactionSets"][0]["findings"]
-        self.assertTrue(any("BPR02 says 150.00 was paid" in f and "100.00" in f
-                            for f in finding), finding)
-        ack = self.ack()
-        self.assertEqual(ack.find("AK5").get(1), "R")
-        self.assertEqual((ack.find("AK3").get(1), ack.find("AK4").get(1)),
-                         ("BPR", "2"))
+        self.assertTrue(data["accepted"], data)
+        self.assertEqual(self.ack().find("AK5").get(1), "A")
+
+    def test_a_deduction_not_tied_to_one_invoice_is_part_of_the_payment(self):
+        # 1000.00 invoiced, 50.00 deducted at the ENT level: BPR02 is 950.00
+        # and no RMR04 says so. A correct 820, and the shape an AP system
+        # writes for an unapplied deduction.
+        data = self.send_820(x12_remittance(
+            total="950.00", paid=(("INV-1", "1000.00"),),
+            deductions=(("-50.00", "CS"),)))
+        self.assertTrue(data["accepted"], data)
+        self.assertEqual(data["transactionSets"][0]["findings"], [])
 
     def test_the_totals_may_include_a_credit(self):
         data = self.send_820(x12_remittance(
@@ -177,14 +193,17 @@ class AnEdifactRemittance(MockServerCase):
         _s, _h, rows = self.get("/_mock/documents?direction=in&code=REMADV")
         self.assertEqual([r["reference"] for r in rows], ["RA-CLEAN"])
 
-    def test_a_total_that_is_not_the_sum_is_refused_by_name(self):
+    def test_a_total_that_does_not_add_up_is_still_acknowledged(self):
         data = self.send_remadv(edifact_remittance(
             total="150.00", paid=(("INV8000001", "100.00"),)))
-        self.assertFalse(data["accepted"])
-        self.assertTrue(any("MOA+12 after UNS says 150.00" in f
-                            for f in data["transactionSets"][0]["findings"]))
+        self.assertTrue(data["accepted"], data)
         ucm = self.contrl().find("UCM")
-        self.assertEqual((ucm.comp(2, 1), ucm.get(3)), ("REMADV", "4"))
+        self.assertEqual((ucm.comp(2, 1), ucm.get(3)), ("REMADV", "7"))
+
+    def test_the_summary_amount_may_be_left_out(self):
+        payload = edifact_remittance(summary=False)
+        self.assertNotIn("MOA+12:150.00", payload)
+        self.assertTrue(self.send_remadv(payload)["accepted"])
 
 
 class FromASupplier(MockServerCase):

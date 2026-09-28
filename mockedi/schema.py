@@ -1166,10 +1166,10 @@ EDIFACT_AMOUNT_QUALIFIERS = {  # 5025
     "203": "Line item amount", "79": "Total line items amount",
     "124": "Tax amount", "139": "Total payable amount", "77": "Invoice amount",
     "9": "Amount due/amount payable",
-    # For REMADV. 12 carries what is being paid, per document and in total,
-    # and is what the totals are checked on; 9 and 52 describe the invoice
-    # it pays. Which of the remittance qualifiers a guide uses varies, and 12
-    # is the choice made here - said so, not implied to be the only one.
+    # For REMADV. 12 carries what is being paid, per document and in total;
+    # 9 and 52 describe the invoice it pays. Which of the remittance
+    # qualifiers a guide uses varies, and 12 is the one the mock reads - said
+    # so, not implied to be the only one.
     "12": "Amount remitted", "52": "Discount amount",
 }
 EDIFACT_PRICE_QUALIFIERS = {  # 5125
@@ -1742,7 +1742,9 @@ EDIFACT_REMADV = TransactionSet("REMADV", "Remittance Advice Message", "EDIFACT"
                      Use(FTX, max_use=5)), OPTIONAL, 100),
     ), MANDATORY, 9999),
     Use(UNS, MANDATORY),
-    Use(MOA, MANDATORY, max_use=5),
+    # Optional here: whether D.96A makes the summary MOA mandatory is not
+    # certain enough to refuse a remittance over.
+    Use(MOA, max_use=5),
     Use(UNT, MANDATORY),
 ), version="D:96A:UN",
    purpose="The EDIFACT remittance advice: a DOC group per invoice paid, each "
