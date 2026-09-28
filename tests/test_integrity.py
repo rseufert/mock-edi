@@ -67,7 +67,14 @@ class AFailureHalfwayThrough(MockServerCase):
     The failure is a real one, from SQLite: a trigger that aborts the insert
     of one particular line, which is well after the interchange, its
     transaction sets and the old lines' deletion have all been written.
+
+    The delays keep the first order at `received`, so restating it is still
+    allowed and this reaches the path it is about. Without them the order is
+    invoiced before the second 850 arrives, and #165 refuses that rather than
+    fulfilling it twice - which would leave this asserting nothing.
     """
+
+    config_kwargs = {"despatch_delay_ms": 3600000, "invoice_delay_ms": 3600000}
 
     def setUp(self):
         super().setUp()

@@ -268,13 +268,32 @@ class Pipeline:
                         self._apply_change(
                             partner, transactions.change_from_order(order, held),
                             receipt)
-                    elif known is not None and known["direction"] == documents.PLACED:
-                        # This partner's number for an order the mock placed
-                        # with it when it was a supplier. Recording it would
+                    elif known is not None and (
+                            known["direction"] == documents.PLACED
+                            or (known["status"] != documents.RECEIVED
+                                and not self.config.allow_duplicates)):
+                        # Two ways one number can already be spoken for.
+                        #
+                        # The mock placed an order under it with this partner
+                        # when it was a supplier: recording this one would
                         # replace the mock's own purchase order with one it
-                        # received; the sender is told the number is in use,
-                        # since "pick another number" is the only answer it
-                        # can act on.
+                        # received.
+                        #
+                        # Or this partner's own order under it has been acted
+                        # on - shipped, invoiced, cancelled, refused (#165).
+                        # An order still only `received` may be restated, and
+                        # that is useful; one already fulfilled cannot, because
+                        # replacing it starts the fulfilment again and the mock
+                        # ships and bills the whole order twice. A retry bug
+                        # sends an original a second time, not a change, so
+                        # nothing above catches it.
+                        #
+                        # Refused, rather than accepted and quietly not acted
+                        # on, because "pick another number" is the only answer
+                        # the sender can do anything with. `--allow-duplicates`
+                        # turns that half off with the rest of #44's refusals:
+                        # a flag that says "send me the same thing twice" has
+                        # to mean it.
                         receipt.refusals.append(
                             {"order": order.po_number,
                              "reason": documents.NUMBER_IN_USE})

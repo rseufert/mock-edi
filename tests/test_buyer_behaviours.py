@@ -114,42 +114,47 @@ class DuplicateOrder(BuyerCase):
         self.assertEqual([o["po_number"] for o in orders if o["po_number"] == "PO-D"],
                          ["PO-D"])
 
-    def test_a_real_supplier_fulfils_it_twice_which_is_the_point(self):
-        """Against a real seller, and the seller fails it. See #165.
-
-        This is what the behaviour is for, and the first thing it found was a
-        gap in our own seller: #44 refuses a replayed *interchange*, and the
-        second order is a new interchange with the same PO number, so nothing
-        stops it. The seller answers, ships and bills the whole order twice.
-
-        Asserted as it behaves rather than as it should, because fixing the
-        seller is a change to how it reads a restated 850 and belongs in its
-        own pull request. When #165 lands this test changes with it.
-        """
+    def duplicated(self):
         pair = Pair()
         self.addCleanup(pair.close)
         pair.buyer.expect("PATCH", "/_mock/partners/SELLCO",
                           {"behaviour": "duplicate-order"}, status=200)
         pair.place("PO-2M")
         pair.exchange()
-        self.assertEqual(pair.received(),
-                         ["855", "856", "810", "855", "856", "810"])
-        _s, _h, order = pair.buyer.get("/_mock/orders/PO-2M")
+        return pair, pair.buyer.get("/_mock/orders/PO-2M")[2]
+
+    def test_a_real_supplier_fulfils_it_once(self):
+        """Against a real seller, which refuses the second one (#165).
+
+        This is what the behaviour is for, and when it was written the seller
+        failed it: #44 refuses a replayed *interchange*, and the second order
+        is a fresh interchange restating the same PO number, so it was
+        answered, shipped and billed all over again. The seller now refuses a
+        number it has already acted on, with an 855 - which is the fourth
+        document below.
+        """
+        pair, order = self.duplicated()
+        self.assertEqual(pair.received(), ["855", "856", "810", "855"])
         self.assertEqual([(row["ordered"], row["shipped"], row["billed"])
                           for row in order["reconciliation"]],
-                         [("100", "200", "200"), ("40", "80", "80")])
+                         [("100", "100", "100"), ("40", "40", "40")])
 
-    def test_and_the_buyer_says_so(self):
-        """The half that does work: the buyer notices what the seller did."""
-        pair = Pair()
-        self.addCleanup(pair.close)
-        pair.buyer.expect("PATCH", "/_mock/partners/SELLCO",
-                          {"behaviour": "duplicate-order"}, status=200)
-        pair.place("PO-2M")
-        pair.exchange()
-        _s, _h, order = pair.buyer.get("/_mock/orders/PO-2M")
-        self.assertEqual(sorted({d["rule"] for d in order["disagreements"]}),
-                         ["shipped-more-than-confirmed", "shipped-more-than-ordered"])
+    def test_but_the_refusal_is_read_as_answering_the_whole_order(self):
+        """Asserted as it behaves, not as it should. See #168.
+
+        The refusal is an 855 under the same PO number, so it is the latest
+        answer for the order, and `derive` takes the latest answer as what is
+        confirmed. The buyer ends up believing nothing was confirmed while
+        100 shipped and 100 was billed, which is a wrong picture of a
+        transaction that went right.
+        """
+        _pair, order = self.duplicated()
+        self.assertEqual([row["confirmed"] for row in order["reconciliation"]],
+                         ["0", "0"])
+        self.assertEqual({d["rule"] for d in order["disagreements"]},
+                         {"confirmed-less"})
+        self.assertIn("order number already in use",
+                      order["disagreements"][0]["note"])
 
 
 class ChangeAfterConfirm(BuyerCase):
