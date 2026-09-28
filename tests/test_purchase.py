@@ -235,6 +235,22 @@ def supplier_sends(kind, po_number, sender=NORTHWIND, dialect="X12",
 
 
 class BuyingCase(MockServerCase):
+    def flip_role(self, partner, role):
+        """Put a partner's role out of step with the orders it holds.
+
+        #146 refuses this at the PATCH while the partner holds a live order,
+        so it can no longer be done through the control plane. A database
+        written before that refusal existed can still hold it and the mock
+        opens those in place, so this is the only shape it now arrives in -
+        and writing it here keeps these tests meaning what they say however
+        far along the orders happen to be.
+        """
+        with self.httpd.mock.lock:
+            self.httpd.mock.conn.execute(
+                "UPDATE partner SET role = ? WHERE id = ?", (role, partner))
+            self.httpd.mock.conn.commit()
+        self.assertEqual(self.get("/_mock/partners/" + partner)[2]["role"], role)
+
     def purchase(self, partner=NORTHWIND, **request):
         request.setdefault("lines", LINES)
         return self.post("/_mock/purchase", dict(request, partner=partner))
@@ -408,8 +424,7 @@ class WhatComesBack(BuyingCase):
         # A customer that became a supplier: the orders it sent are still
         # ones the mock received, and nothing it confirms can be filed there.
         self.send(x12_order("PO-WAS-SOLD"))
-        status, _h, data = self.patch("/_mock/partners/ACME", {"role": "supplier"})
-        self.assertEqual(status, 200, data)
+        self.flip_role(ACME, "supplier")
         summary = self.send(supplier_sends(schema.RESPONSE, "PO-WAS-SOLD", ACME))
         self.assertFalse(summary["accepted"])
         self.assertEqual(summary["filed"], [])
@@ -515,11 +530,7 @@ class ASupplierTurnedCustomer(BuyingCase):
         super().setUp()
         self.placed(po_number="PO-FLIP")
         self.before = self.order("PO-FLIP")
-        self.httpd.mock.conn.execute(
-            "UPDATE partner SET role = 'customer' WHERE id = ?", (NORTHWIND,))
-        self.httpd.mock.conn.commit()
-        self.assertEqual(self.get("/_mock/partners/" + NORTHWIND)[2]["role"],
-                         "customer")
+        self.flip_role(NORTHWIND, "customer")
 
     def unchanged(self):
         after = self.order("PO-FLIP")
