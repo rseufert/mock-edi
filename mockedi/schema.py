@@ -469,13 +469,6 @@ REF = Segment("REF", "Reference Identification", (
     _e("352", "Description", "AN", 1, 80),
 ), "A secondary identifier, named by its qualifier.")
 
-# 005010 widened REF02 from 30 to 50.
-REF_005010 = Segment("REF", REF.name, (
-    REF.elements[0],
-    _e("127", "Reference Identification", "AN", 1, 50),
-    REF.elements[2],
-), REF.purpose)
-
 PER = Segment("PER", "Administrative Communications Contact", (
     _e("366", "Contact Function Code", "ID", 2, 2, MANDATORY,
        {"BD": "Buyer Name or Department", "IC": "Information Contact",
@@ -1890,9 +1883,54 @@ for _dialect, _map in SET_FOR_KIND.items():
 VERSIONS = {"X12": ("004010", "005010"), "EDIFACT": ("D:96A:UN",)}
 
 REVISIONS: Dict[Tuple[str, str], Dict[str, Segment]] = {
-    ("X12", "005010"): {"ST": ST_005010, "REF": REF_005010,
-                        "AK1": AK1_005010, "AK2": AK2_005010},
+    ("X12", "005010"): {"ST": ST_005010, "AK1": AK1_005010, "AK2": AK2_005010},
 }
+
+# Where a version changes a data element itself rather than one segment's
+# use of it. The length belongs to the element, so it changes everywhere the
+# element is used: 005010 widened 127 Reference Identification from 1/30 to
+# 1/50 in REF02, BAK08, TRN02, RMR02 and every other position that carries it
+# - not only in REF, which is all a hand-written revision once widened (#173).
+ELEMENT_WIDTHS: Dict[Tuple[str, str], Dict[str, int]] = {
+    ("X12", "005010"): {"127": 50},
+}
+
+
+def _widened(segment: Segment, widths: Dict[str, int]) -> Segment:
+    """`segment` with the named elements' maximum lengths changed, composites too."""
+    def widen(elements: Tuple[Element, ...]) -> Tuple[Element, ...]:
+        out = []
+        for element in elements:
+            if element.composite:
+                out.append(dataclasses.replace(
+                    element, components=widen(element.components)))
+            elif element.ref in widths:
+                out.append(dataclasses.replace(element, max_len=widths[element.ref]))
+            else:
+                out.append(element)
+        return tuple(out)
+    return dataclasses.replace(segment, elements=widen(segment.elements))
+
+
+def _carries(segment: Segment, refs) -> bool:
+    return any(element.ref in refs or any(c.ref in refs for c in element.components)
+               for element in segment.elements)
+
+
+# Derived, not written out: every segment the dialect's sets use that carries
+# a widened element gets a revision, applied over any revision it already has.
+for (_dialect, _version), _widths in ELEMENT_WIDTHS.items():
+    _overrides = REVISIONS.setdefault((_dialect, _version), {})
+    for (_set_dialect, _code), _definition in SETS.items():
+        if _set_dialect != _dialect:
+            continue
+        for _use, _loop in _definition.uses():
+            if _carries(_use.segment, _widths):
+                _base = _overrides.get(_use.tag, _use.segment)
+                _overrides[_use.tag] = _widened(_base, _widths)
+
+# The 005010 REF, by the name it has always had.
+REF_005010 = REVISIONS[("X12", "005010")]["REF"]
 
 _REVISED: Dict[Tuple[str, str, str], TransactionSet] = {}
 
