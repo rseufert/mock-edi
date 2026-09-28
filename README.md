@@ -246,8 +246,10 @@ not a description of them that can go stale.
 is read against the version its group's `GS08` names — an industry suffix such
 as `004010VICS` or `005010X222A1` is the same version — and served that way at
 `/_mock/dictionary/X12/850?version=005010`. The sets are declared at 004010,
-and 005010 is recorded as the segments that differ: `ST03`, `AK103`, `AK203`,
-and `REF02` widened from 30 characters to 50. A group in any other version is
+and 005010 is recorded as what differs: `ST03`, `AK103` and `AK203`, and
+data element 127, *Reference Identification*, widened from 30 characters to
+50 - wherever it is used, since a length belongs to the element: `REF02`,
+`BAK08`, `TRN02`, `RMR02` and the rest. A group in any other version is
 refused in its 997 with `AK905 = 2`, *functional group version not
 supported*, rather than read by rules its sender never used, and a partner
 cannot be set to a version the mock would write on the wire without having
