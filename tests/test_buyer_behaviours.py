@@ -139,18 +139,18 @@ class DuplicateOrder(BuyerCase):
                           for row in order["reconciliation"]],
                          [("100", "100", "100"), ("40", "40", "40")])
 
-    def test_but_the_refusal_is_read_as_answering_the_whole_order(self):
-        """Asserted as it behaves, not as it should. See #168.
-
-        The refusal is an 855 under the same PO number, so it is the latest
-        answer for the order, and `derive` takes the latest answer as what is
-        confirmed. The buyer ends up believing nothing was confirmed while
-        100 shipped and 100 was billed, which is a wrong picture of a
-        transaction that went right.
+    def test_and_the_refusal_does_not_un_confirm_what_already_shipped(self):
+        """#168: the refusal is an 855 on the same number, so it is the
+        latest answer, and it says every line is refused. It cannot take back
+        what an earlier answer confirmed and the supplier shipped against.
         """
         _pair, order = self.duplicated()
         self.assertEqual([row["confirmed"] for row in order["reconciliation"]],
-                         ["0", "0"])
+                         ["100", "40"])
+
+    def test_though_the_buyer_still_reports_what_the_refusal_said(self):
+        """The floor corrects the running total, not the record."""
+        _pair, order = self.duplicated()
         self.assertEqual({d["rule"] for d in order["disagreements"]},
                          {"confirmed-less"})
         self.assertIn("order number already in use",

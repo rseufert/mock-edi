@@ -142,20 +142,45 @@ def derive(conn, partner_id: str, po_number: str) -> None:
     another, or an 865 answering a change - and what shipped and was billed
     is every consignment and every bill added up - a bill sent twice under
     one invoice number counting once, since it is the same bill.
+
+    With one floor: **a later answer cannot un-confirm what an earlier one
+    confirmed and the supplier has already shipped against** (#168). A
+    supplier that refuses a *second* order under a number it has already
+    shipped against sends an 855 that is, on the wire, indistinguishable
+    from one rejecting the order outright - every line `IR` with a reason -
+    so there is nothing to tell them apart by. Taken as the latest answer it
+    said nothing was confirmed while a hundred were shipped and billed,
+    which is a wrong picture of a transaction that went right.
+
+    Note what the floor is *not*: it is not "confirmed is at least what
+    shipped". A supplier that confirms 100 and ships 200 has confirmed 100,
+    and saying otherwise would quietly answer the question
+    `shipped-more-than-confirmed` exists to ask. The floor only stops a
+    later answer taking back an earlier one, and only as far as what has
+    actually shipped.
+
+    It hides nothing either. The claims are all kept, and what the document
+    said is still reported as a disagreement naming both numbers - it is
+    only the running total that stops contradicting itself.
     """
     claims = claims_for(conn, partner_id, po_number)
     for row in documents.order_lines(conn, po_number, partner_id):
         mine = [claim for claim in claims if claim["line"] == row["line"]]
         answers = [claim for claim in mine if claim["kind"] in ANSWERS]
         latest = answers[-1] if answers else None
+        shipped = _sum(mine, schema.DESPATCH)
+        confirmed = number(latest["quantity"]) if latest else Decimal("0")
+        if len(answers) > 1:
+            already = max(number(answer["quantity"]) for answer in answers[:-1])
+            confirmed = max(confirmed, min(number(shipped), already))
         conn.execute(
             "UPDATE order_line SET confirmed = ?, status = ?, reason = ?,"
             " shipped = ?, invoiced = ? WHERE partner = ? AND po_number = ?"
             " AND line = ?",
-            (latest["quantity"] if latest else "0",
+            (quantity_text(confirmed),
              latest["status"] if latest else "",
              latest["reason"] if latest else "",
-             _sum(mine, schema.DESPATCH),
+             shipped,
              quantity_text(_billed([c for c in mine
                                     if c["kind"] == schema.INVOICE]).get(
                  row["line"], Decimal("0"))),
