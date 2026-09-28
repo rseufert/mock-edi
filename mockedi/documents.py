@@ -717,7 +717,8 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     # A change request is about an order the partner placed *with the mock*,
     # never one the mock placed with it - however the partner's role got to
     # where it is. A supplier turned customer is still not the buyer of what
-    # the mock bought from it.
+    # the mock bought from it. A restated 850 arrives here too, so this and
+    # the pipeline's refusal of an 850 on a placed number hold together.
     if order["direction"] == PLACED:
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
     if order["status"] == "invoiced":

@@ -33,7 +33,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, charsets, db, delivery, documents, drop, partners, pipeline,
+from . import (as2, charsets, claims, db, delivery, documents, drop, partners, pipeline,
                profiles, reconcile, schema, timeline, transactions, validate)
 from .envelope import EdiSyntaxError
 
@@ -215,7 +215,8 @@ class Mock:
             for table in ("interchange", "transaction_set", "purchase_order",
                           "order_line", "shipment", "shipment_line", "invoice",
                           "outbound", "scheduled", "mdn", "control_number",
-                          "request_log", "partner_profile",
+                          "request_log", "partner_profile", "supplier_claim",
+                          "disagreement",
                           "partner", "catalog"):
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
@@ -517,6 +518,7 @@ class Handler(BaseHTTPRequestHandler):
             "changed": [c for item in each for c in item["changed"]],
             "refusals": [r for item in each for r in item["refusals"]],
             "filed": [f for item in each for f in item["filed"]],
+            "disagreements": [d for item in each for d in item["disagreements"]],
             "interchanges": each,
         })
         return self._json(200, summary)
@@ -605,6 +607,18 @@ class Handler(BaseHTTPRequestHandler):
                 order["invoices"] = db.rows(
                     conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
                           " ORDER BY rowid", key)
+                if order["direction"] == documents.PLACED:
+                    # What was asked for beside what the supplier said, line by
+                    # line, and where the two disagree (#126).
+                    order["reconciliation"] = [
+                        {"line": row["line"], "sku": row["sku"],
+                         "ordered": row["quantity"], "confirmed": row["confirmed"],
+                         "shipped": row["shipped"], "billed": row["invoiced"],
+                         "status": row["status"]}
+                        for row in order["lines"]]
+                    order["disagreements"] = [
+                        claims.as_json(row) for row in
+                        claims.disagreements(conn, *key)]
                 return self._json(200, order)
             return self._json(200, db.rows(
                 conn, "SELECT * FROM purchase_order ORDER BY rowid DESC LIMIT ?",
@@ -779,6 +793,13 @@ class Handler(BaseHTTPRequestHandler):
             order["sent"] = {"id": queued.id, "kind": queued.kind,
                              "code": queued.code, "dueAt": queued.due_at}
             return self._json(status, order)
+
+        if head == "disagreements":
+            # Only the business findings, for a test that wants nothing else.
+            return self._json(200, [claims.as_json(row) for row in
+                                    claims.disagreements(
+                                        conn, _first(query, "partner"),
+                                        _first(query, "po"), _limit(query, 1000))])
 
         if head == "unacknowledged":
             return self._json(200, reconcile.unacknowledged(
@@ -1279,8 +1300,14 @@ def _interchange_summary(receipt) -> Dict[str, Any]:
         "orders": receipt.orders,
         "transactionSets": [
             {"code": m.code, "control": m.control, "kind": m.kind,
-             "accepted": m.accepted, "findings": _findings(m)}
+             "accepted": m.accepted, "findings": _findings(m),
+             "disagreements": [claims.finding_json(d) for d in m.disagreements]}
             for m in (report.messages if report else [])],
+        # Business findings, beside the syntax ones and never among them: what
+        # a supplier's document says that the order does not (#126).
+        "disagreements": [claims.finding_json(d)
+                          for m in (report.messages if report else [])
+                          for d in m.disagreements],
         "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
                     "dueAt": q.due_at} for q in receipt.queued],
         "acknowledged": receipt.acknowledged,
@@ -1473,6 +1500,7 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/partners", "Who we trade with, and how each misbehaves."),
         ("GET", "/_mock/catalog", "What we sell."),
         ("GET", "/_mock/orders", "Purchase orders received and placed, and what became of them."),
+        ("GET", "/_mock/disagreements", "Where suppliers disagree with orders the mock placed."),
         ("POST", "/_mock/purchase", "Place an order with a supplier: an 850 or ORDERS goes out."),
         ("POST", "/_mock/purchase/{po}/change", "Change or cancel an order the mock placed."),
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
