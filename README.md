@@ -265,7 +265,14 @@ document, and is refused by name rather than half-read; `I` and `C` are the
 remittance uses. An advice is filed under its `TRN02` trace number, or its
 `BGM` number. Whether its total is the sum of what it says was paid is not a
 syntax question - an advice that disagrees with itself can still be read, and
-is acknowledged - so it is left to the business findings, not the 997.
+is acknowledged - so a total that does not add up is a *disagreement* beside
+the 997, with the same shape as a supplier's (`remittance-total-not-parts`),
+in the summary and at `GET /_mock/disagreements`. `BPR02` is checked against
+the `RMR04` amounts plus any `ADX` directly in an `ENT` loop - a deduction
+not tied to one invoice, which is part of what was paid - and the `MOA+12`
+after `UNS` against each `DOC`'s `MOA+12`. That is how a remittance still
+claiming an invoice whose payment came back gets caught before a supplier
+starts dunning for it.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
@@ -959,6 +966,7 @@ mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
 mockedi/claims.py        what a supplier says about a placed order, and where it disagrees
+mockedi/remittance.py    what a remittance advice says that does not add up
 mockedi/timeline.py      one order's whole conversation, in order
 mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out

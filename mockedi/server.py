@@ -1500,7 +1500,7 @@ def _index_page(mock: Mock, base: str) -> str:
         ("GET", "/_mock/partners", "Who we trade with, and how each misbehaves."),
         ("GET", "/_mock/catalog", "What we sell."),
         ("GET", "/_mock/orders", "Purchase orders received and placed, and what became of them."),
-        ("GET", "/_mock/disagreements", "Where suppliers disagree with orders the mock placed."),
+        ("GET", "/_mock/disagreements", "Where a supplier disagrees with an order the mock placed, or a remittance with itself."),
         ("POST", "/_mock/purchase", "Place an order with a supplier: an 850 or ORDERS goes out."),
         ("POST", "/_mock/purchase/{po}/change", "Change or cancel an order the mock placed."),
         ("GET", "/_mock/documents", "Every transaction set, in and out."),
