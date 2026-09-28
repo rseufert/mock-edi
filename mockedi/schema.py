@@ -242,11 +242,13 @@ DATE_QUALIFIER_CODES = {   # 374
     "017": "Estimated Delivery", "035": "Delivered", "037": "Ship Not Before",
     "038": "Ship No Later Than", "068": "Current Schedule Delivery",
     "118": "Requested Pick Up", "137": "Document/Message Date",
+    "003": "Invoice",
 }
 ENTITY_CODES = {           # 98
     "BY": "Buying Party", "SE": "Selling Party", "ST": "Ship To",
     "SF": "Ship From", "BT": "Bill To", "RE": "Party to Receive Remittance",
     "VN": "Vendor", "SU": "Supplier", "MA": "Party for whom Item is Ultimately Intended",
+    "PR": "Payer", "PE": "Payee",
 }
 ID_QUALIFIER_CODES = {     # 66
     "1": "D-U-N-S Number", "2": "Standard Carrier Alpha Code (SCAC)",
@@ -322,6 +324,7 @@ FUNCTIONAL_GROUP_CODES = {  # 479
     "SH": "Ship Notice/Manifest (856)", "IN": "Invoice (810)",
     "PC": "Purchase Order Change Request (860)",
     "CA": "Purchase Order Change Acknowledgment (865)",
+    "RA": "Payment Order/Remittance Advice (820)",
     "FA": "Functional Acknowledgment (997)",
 }
 CURRENCY_CODES = {"USD": "US Dollar", "EUR": "Euro", "GBP": "Pound Sterling",
@@ -672,6 +675,82 @@ CAD = Segment("CAD", "Carrier Detail", (
     _e("387", "Routing", "AN", 1, 35),
 ))
 
+# The 820's remittance-advice use. BPR01 says which use it is: I (remittance
+# information only) or C (payment accompanies the advice) is a remittance a
+# payee may be sent; D, P, U and X instruct a bank, and are refused by name -
+# a bank's document, which mock-bank speaks as pain.001.
+HANDLING_CODES = {         # 305
+    "C": "Payment Accompanies Remittance Advice", "D": "Make Payment Only",
+    "I": "Remittance Information Only", "P": "Prenotification of Future Transfers",
+    "U": "Split Payment and Remittance", "X": "Handling Party's Option to Split",
+}
+REMITTANCE_HANDLING = ("I", "C")
+
+BPR = Segment("BPR", "Beginning Segment for Payment Order/Remittance Advice", (
+    _e("305", "Transaction Handling Code", "ID", 1, 2, MANDATORY, HANDLING_CODES),
+    _e("782", "Monetary Amount", "R", 1, 18, MANDATORY),
+    _e("478", "Credit/Debit Flag Code", "ID", 1, 1, MANDATORY,
+       {"C": "Credit", "D": "Debit"}),
+    _e("591", "Payment Method Code", "ID", 3, 3, MANDATORY,
+       {"ACH": "Automated Clearing House", "BOP": "Financial Institution Option",
+        "CHK": "Check", "FWT": "Federal Reserve Funds/Wire Transfer",
+        "NON": "Non-Payment Data"}),
+    _e("812", "Payment Format Code", "ID", 1, 10, OPTIONAL,
+       {"CCD": "Cash Concentration/Disbursement", "CCP": "CCD Plus Addenda",
+        "CTX": "Corporate Trade Exchange", "PPD": "Prearranged Payment and Deposit"}),
+    _e("506", "(DFI) ID Number Qualifier", "ID", 2, 2),
+    _e("507", "(DFI) Identification Number", "AN", 3, 12),
+    _e("569", "Account Number Qualifier", "ID", 1, 3),
+    _e("508", "Account Number", "AN", 1, 35),
+    _e("509", "Originating Company Identifier", "AN", 10, 10),
+    _e("510", "Originating Company Supplemental Code", "AN", 9, 9),
+    _e("506", "(DFI) ID Number Qualifier", "ID", 2, 2),
+    _e("507", "(DFI) Identification Number", "AN", 3, 12),
+    _e("569", "Account Number Qualifier", "ID", 1, 3),
+    _e("508", "Account Number", "AN", 1, 35),
+    _e("373", "Date", "DT", 8, 8),
+), "The payment: its total, credit or debit, method, and the date it takes "
+   "effect. BPR01 says whether this is a remittance advice or a payment order.",
+   full_width=21)
+
+TRN = Segment("TRN", "Trace", (
+    _e("481", "Trace Type Code", "ID", 1, 2, MANDATORY,
+       {"1": "Current Transaction Trace Numbers"}),
+    _e("127", "Reference Identification", "AN", 1, 30, MANDATORY),
+    _e("509", "Originating Company Identifier", "AN", 10, 10),
+    _e("127", "Reference Identification", "AN", 1, 30),
+), "The trace number that ties the advice to the payment the bank carries.")
+
+ENT = Segment("ENT", "Entity", (
+    _e("554", "Assigned Number", "N0", 1, 6),
+    _e("98", "Entity Identifier Code", "ID", 2, 3, OPTIONAL, ENTITY_CODES),
+    _e("66", "Identification Code Qualifier", "ID", 1, 2, OPTIONAL,
+       ID_QUALIFIER_CODES),
+    _e("67", "Identification Code", "AN", 2, 80),
+), "Groups the remittance detail by the entity it is for.", full_width=9)
+
+RMR = Segment("RMR", "Remittance Advice Accounts Receivable Open Item Reference", (
+    _e("128", "Reference Identification Qualifier", "ID", 2, 3, OPTIONAL,
+       REFERENCE_QUALIFIER_CODES),
+    _e("127", "Reference Identification", "AN", 1, 30),
+    _e("482", "Payment Action Code", "ID", 2, 2),
+    _e("782", "Monetary Amount", "R", 1, 18),
+    _e("782", "Monetary Amount", "R", 1, 18),
+    _e("782", "Monetary Amount", "R", 1, 18),
+    _e("426", "Adjustment Reason Code", "ID", 2, 2),
+    _e("782", "Monetary Amount", "R", 1, 18),
+), "One invoice being paid: RMR02 the invoice (RMR01 IV), RMR04 the amount "
+   "paid, RMR05 the invoice's gross amount, RMR06 any discount taken.")
+
+ADX = Segment("ADX", "Adjustment", (
+    _e("782", "Monetary Amount", "R", 1, 18, MANDATORY),
+    _e("426", "Adjustment Reason Code", "ID", 2, 2, MANDATORY),
+    _e("128", "Reference Identification Qualifier", "ID", 2, 3, OPTIONAL,
+       REFERENCE_QUALIFIER_CODES),
+    _e("127", "Reference Identification", "AN", 1, 30),
+), "An adjustment to what is paid, with its reason code. The mock carries it; "
+   "it does not judge whether the deduction was justified.")
+
 AK1 = Segment("AK1", "Functional Group Response Header", (
     _e("479", "Functional Identifier Code", "ID", 2, 2, MANDATORY, FUNCTIONAL_GROUP_CODES),
     _e("28", "Group Control Number", "N0", 1, 9, MANDATORY),
@@ -975,6 +1054,34 @@ X12_865 = TransactionSet("865", "Purchase Order Change Acknowledgment", "X12", (
    purpose="The seller answers a change request, line by line, in the same "
            "vocabulary the 855 uses.")
 
+X12_820 = TransactionSet("820", "Payment Order/Remittance Advice", "X12", (
+    Use(ST, MANDATORY),
+    Use(BPR, MANDATORY),
+    Use(TRN),
+    Use(CUR),
+    Use(REF, max_use=99),
+    Use(DTM, max_use=99),
+    _address_loop(repeat=10),
+    # As 004010 has it: the remittance detail sits in ENT loops, each holding
+    # the RMR loops for the invoices it pays.
+    Loop("ENT", (
+        Use(ENT, MANDATORY),
+        Loop("ADX", (Use(ADX, MANDATORY), Use(REF, max_use=5),
+                     Use(DTM, max_use=5)), OPTIONAL, 200000),
+        Loop("RMR", (
+            Use(RMR, MANDATORY),
+            Use(REF, max_use=99),
+            Use(DTM, max_use=10),
+            Loop("ADX", (Use(ADX, MANDATORY), Use(REF, max_use=5)),
+                 OPTIONAL, 200000),
+        ), OPTIONAL, 200000),
+    ), OPTIONAL, 200000),
+    Use(SE, MANDATORY),
+), group="RA", version="004010",
+   purpose="The payer says what it paid: the payment in BPR and TRN, and each "
+           "invoice it covers in an RMR. Only the remittance-advice use; an "
+           "820 that instructs a bank is refused by name.")
+
 X12_997 = TransactionSet("997", "Functional Acknowledgment", "X12", (
     Use(ST, MANDATORY),
     Use(AK1, MANDATORY),
@@ -1011,6 +1118,7 @@ DOCUMENT_NAME_CODES = {    # 1001
     "220": "Order", "230": "Purchase order change request",
     "231": "Purchase order response", "351": "Despatch advice",
     "380": "Commercial invoice", "381": "Credit note", "83": "Credit note",
+    "481": "Remittance advice",
 }
 MESSAGE_FUNCTION_CODES = {  # 1225
     "9": "Original", "1": "Cancellation", "4": "Change", "5": "Replace",
@@ -1043,6 +1151,7 @@ EDIFACT_REFERENCE_QUALIFIERS = {  # 1153
 EDIFACT_PARTY_QUALIFIERS = {  # 3035
     "BY": "Buyer", "SU": "Supplier", "DP": "Delivery party", "IV": "Invoicee",
     "CN": "Consignee", "CZ": "Consignor", "SE": "Seller", "SF": "Ship from",
+    "PR": "Payer", "PE": "Payee",
 }
 EDIFACT_ITEM_TYPES = {     # 7143
     "IN": "Buyer's item number", "SA": "Supplier's article number",
@@ -1057,6 +1166,11 @@ EDIFACT_AMOUNT_QUALIFIERS = {  # 5025
     "203": "Line item amount", "79": "Total line items amount",
     "124": "Tax amount", "139": "Total payable amount", "77": "Invoice amount",
     "9": "Amount due/amount payable",
+    # For REMADV. 12 carries what is being paid, per document and in total,
+    # and is what the totals are checked on; 9 and 52 describe the invoice
+    # it pays. Which of the remittance qualifiers a guide uses varies, and 12
+    # is the choice made here - said so, not implied to be the only one.
+    "12": "Amount remitted", "52": "Discount amount",
 }
 EDIFACT_PRICE_QUALIFIERS = {  # 5125
     "AAA": "Calculation net", "AAB": "Calculation gross",
@@ -1466,6 +1580,30 @@ UCD = Segment("UCD", "Data Element Error Indication", (
 # EDIFACT messages (D.96A, the release still most widely traded)
 # ---------------------------------------------------------------------------
 
+DOC = Segment("DOC", "Document/Message Details", (
+    _c("C002", "Document/Message Name", (
+        _e("1001", "Document name code", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
+        _e("1131", "Code list identification code", "AN", 1, 17),
+        _e("3055", "Code list responsible agency code", "AN", 1, 3),
+        _e("1000", "Document name", "AN", 1, 35),
+    ), MANDATORY),
+    _c("C503", "Document/Message Details", (
+        _e("1004", "Document identifier", "AN", 1, 35),
+        _e("1373", "Document status code", "ID", 1, 3),
+        _e("1366", "Document source description", "AN", 1, 70),
+        _e("3453", "Language name code", "ID", 1, 3),
+    )),
+    _e("3153", "Communication medium type code", "ID", 1, 3),
+    _e("1220", "Document copies required quantity", "N0", 1, 2),
+    _e("1218", "Document originals required quantity", "N0", 1, 2),
+), "One document the remittance covers - an invoice, 380, by its number.")
+
+AJT = Segment("AJT", "Adjustment Details", (
+    _e("4465", "Adjustment reason description code", "ID", 1, 3, MANDATORY),
+    _e("1082", "Line item identifier", "AN", 1, 6),
+), "Why what is paid differs from what was invoiced. Carried, not judged.")
+
+
 def _edifact_party_group(repeat: int = 99) -> Loop:
     return Loop("NAD", (
         Use(NAD, MANDATORY),
@@ -1588,6 +1726,29 @@ EDIFACT_INVOIC = TransactionSet("INVOIC", "Invoice Message", "EDIFACT", (
    purpose="The EDIFACT invoice. Every total is a named MOA, where X12 puts them "
            "in fixed positions of TDS.")
 
+EDIFACT_REMADV = TransactionSet("REMADV", "Remittance Advice Message", "EDIFACT", (
+    Use(UNH, MANDATORY),
+    Use(BGM, MANDATORY),
+    Use(E_DTM, max_use=5),
+    Loop("RFF", (Use(RFF, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 5),
+    _edifact_party_group(),
+    Loop("CUX", (Use(CUX, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 9),
+    Loop("DOC", (
+        Use(DOC, MANDATORY),
+        Use(MOA, MANDATORY, max_use=5),
+        Use(E_DTM, max_use=5),
+        Use(RFF, max_use=5),
+        Loop("AJT", (Use(AJT, MANDATORY), Use(MOA, max_use=5),
+                     Use(FTX, max_use=5)), OPTIONAL, 100),
+    ), MANDATORY, 9999),
+    Use(UNS, MANDATORY),
+    Use(MOA, MANDATORY, max_use=5),
+    Use(UNT, MANDATORY),
+), version="D:96A:UN",
+   purpose="The EDIFACT remittance advice: a DOC group per invoice paid, each "
+           "with its MOA+12 amount remitted, and the total in the MOA+12 "
+           "after UNS.")
+
 EDIFACT_CONTRL = TransactionSet("CONTRL", "Syntax and Service Report Message", "EDIFACT", (
     Use(UNH, MANDATORY),
     Use(UCI, MANDATORY),
@@ -1614,6 +1775,7 @@ CHANGE_RESPONSE = "change-response"
 RESPONSE = "response"
 DESPATCH = "despatch"
 INVOICE = "invoice"
+REMITTANCE = "remittance"
 ACKNOWLEDGMENT = "acknowledgment"
 # Not a transaction set: X12's TA1 sits between ISA and IEA on its own and
 # answers for the envelope. It has no counterpart in EDIFACT, where UCI in the
@@ -1621,7 +1783,7 @@ ACKNOWLEDGMENT = "acknowledgment"
 INTERCHANGE_ACKNOWLEDGMENT = "interchange-acknowledgment"
 
 KINDS = (ORDER, CHANGE, CHANGE_RESPONSE, RESPONSE, DESPATCH, INVOICE,
-         ACKNOWLEDGMENT)
+         REMITTANCE, ACKNOWLEDGMENT)
 
 # Which way each kind travels. A buyer sends orders and changes and receives
 # the answers; a seller the reverse. Acknowledgments go both ways. The mock
@@ -1630,16 +1792,19 @@ KINDS = (ORDER, CHANGE, CHANGE_RESPONSE, RESPONSE, DESPATCH, INVOICE,
 SELLER = "seller"
 BUYER = "buyer"
 RECEIVED_BY = {
-    SELLER: frozenset({ORDER, CHANGE, ACKNOWLEDGMENT}),
+    # A seller is told what it has been paid; a buyer pays, and is never sent
+    # a remittance by the supplier it pays.
+    SELLER: frozenset({ORDER, CHANGE, REMITTANCE, ACKNOWLEDGMENT}),
     BUYER: frozenset({RESPONSE, CHANGE_RESPONSE, DESPATCH, INVOICE,
                       ACKNOWLEDGMENT}),
 }
 
 X12_SETS = {s.code: s for s in (X12_850, X12_855, X12_856, X12_810, X12_860,
-                                X12_865, X12_997)}
+                                X12_865, X12_820, X12_997)}
 EDIFACT_SETS = {s.code: s for s in (EDIFACT_ORDERS, EDIFACT_ORDRSP,
                                     EDIFACT_ORDCHG, EDIFACT_DESADV,
-                                    EDIFACT_INVOIC, EDIFACT_CONTRL)}
+                                    EDIFACT_INVOIC, EDIFACT_REMADV,
+                                    EDIFACT_CONTRL)}
 SETS = {("X12", code): s for code, s in X12_SETS.items()}
 SETS.update({("EDIFACT", code): s for code, s in EDIFACT_SETS.items()})
 
@@ -1648,13 +1813,13 @@ DIALECTS = ("X12", "EDIFACT")
 SET_FOR_KIND = {
     "X12": {ORDER: "850", CHANGE: "860", CHANGE_RESPONSE: "865",
             RESPONSE: "855", DESPATCH: "856", INVOICE: "810",
-            ACKNOWLEDGMENT: "997"},
+            REMITTANCE: "820", ACKNOWLEDGMENT: "997"},
     # EDIFACT has no separate change acknowledgment: ORDRSP answers both an
     # ORDERS and an ORDCHG, which is the difference most likely to catch out
     # somebody porting a mapping from X12.
     "EDIFACT": {ORDER: "ORDERS", CHANGE: "ORDCHG", CHANGE_RESPONSE: "ORDRSP",
                 RESPONSE: "ORDRSP", DESPATCH: "DESADV", INVOICE: "INVOIC",
-                ACKNOWLEDGMENT: "CONTRL"},
+                REMITTANCE: "REMADV", ACKNOWLEDGMENT: "CONTRL"},
 }
 # Inverting the map is ambiguous where one code serves two kinds - EDIFACT's
 # ORDRSP is both a response and a change response - so the plain `response` is

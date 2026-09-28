@@ -35,6 +35,7 @@ from __future__ import annotations
 
 import dataclasses
 import re
+from decimal import Decimal, InvalidOperation
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
@@ -295,6 +296,8 @@ def validate_message(message: Message, dialect: str,
     _check_version(message, dialect, definition, report)
     _walk(message, definition, report)
     _check_line_numbers(message, definition, report)
+    if report.kind == schema.REMITTANCE:
+        _check_remittance(message, dialect, definition, report)
     if profile is not None:
         _check_profile(message, definition, profile, report)
 
@@ -559,6 +562,95 @@ def _check_line_numbers(message: Message, definition: schema.TransactionSet,
                      "the standard allows a repeat, but nearly every "
                      "implementation guide does not, and the mock stores "
                      "lines by number" % (number, tag, seen[number]))]))
+
+
+def _check_remittance(message: Message, dialect: str,
+                      definition: schema.TransactionSet,
+                      report: MessageReport) -> None:
+    """The two things a remittance advice has to get right beyond its syntax.
+
+    Its use: an 820 whose BPR01 instructs a bank to pay is a payment order,
+    a bank's document, and the mock is the payee - so it is refused by name
+    rather than half-read. And its arithmetic: the total paid has to be the
+    sum of what it says was paid on each invoice. A payee that accepts an
+    advice listing an invoice whose payment was rejected, with a total that
+    no longer adds up, hides exactly the bug that makes a supplier dun for an
+    invoice already paid. Both are fatal, in the words the line-number check
+    uses: the segment has element errors, and the note says which.
+    """
+    if dialect == "X12":
+        bpr = message.find("BPR")
+        if bpr is None:
+            return                  # missing, and already reported as such
+        handling = bpr.get(1)
+        if handling and handling not in schema.REMITTANCE_HANDLING:
+            _refuse(report, definition, bpr, "BPR", 1,
+                    "BPR01 %s (%s) makes this 820 a payment order, which "
+                    "instructs a bank to pay; the mock is the payee and takes "
+                    "a remittance advice, BPR01 %s. Send a payment order to "
+                    "the bank - mock-bank takes it as pain.001"
+                    % (handling, schema.HANDLING_CODES.get(handling, "unknown"),
+                       " or ".join(schema.REMITTANCE_HANDLING)))
+        paid = [(item, _amount(item.get(4))) for item in message.segments
+                if item.tag == "RMR"]
+        total = _amount(bpr.get(2))
+        if total is None or any(amount is None for _, amount in paid):
+            return                  # a malformed number is its own finding
+        summed = sum((amount for _, amount in paid), Decimal("0"))
+        if total != summed:
+            _refuse(report, definition, bpr, "BPR", 2,
+                    "BPR02 says %s was paid, but the RMR04 amounts of the %d "
+                    "invoice%s it lists add up to %s"
+                    % (total, len(paid), "" if len(paid) == 1 else "s", summed))
+        return
+
+    # EDIFACT: MOA+12 per DOC group, and MOA+12 after UNS for the total.
+    # Only an amount directly in a DOC group counts, not one in its AJT
+    # adjustment group. With no MOA+12 total the arithmetic cannot be done,
+    # and a guide may name its total otherwise; nothing is claimed then.
+    per_document: List[Decimal] = []
+    total_seg = None
+    where = ""
+    for item in message.segments:
+        if item.tag in ("DOC", "AJT", "UNS"):
+            where = item.tag
+        elif item.tag == "MOA" and item.comp(1, 1) == "12":
+            amount = _amount(item.comp(1, 2))
+            if amount is None:
+                return
+            if where == "DOC":
+                per_document.append(amount)
+            elif where == "UNS":
+                total_seg, total = item, amount
+    if total_seg is None:
+        return
+    summed = sum(per_document, Decimal("0"))
+    if total != summed:
+        _refuse(report, definition, total_seg, "MOA", 1,
+                "the MOA+12 after UNS says %s was remitted, but the MOA+12 "
+                "amounts of the %d document%s it lists add up to %s"
+                % (total, len(per_document),
+                   "" if len(per_document) == 1 else "s", summed))
+
+
+def _amount(value: str) -> Optional[Decimal]:
+    try:
+        return Decimal((value or "0").strip() or "0")
+    except (InvalidOperation, ValueError):
+        return None
+
+
+def _refuse(report: MessageReport, definition: schema.TransactionSet, item,
+            tag: str, position: int, note: str) -> None:
+    segment = definition.segment_for(tag)
+    element = segment.element(position) if segment is not None else None
+    report.segments.append(SegmentFinding(
+        tag=tag, position=item.position, loop="", code="8", severity=FATAL,
+        note="%s has data element errors" % tag,
+        elements=[ElementFinding(
+            position=position, component=0,
+            ref=element.ref if element is not None else "", code="7",
+            value=item.get(position), severity=FATAL, note=note)]))
 
 
 def _check_profile(message: Message, definition: schema.TransactionSet,

@@ -1101,7 +1101,7 @@ def _reference_of(message, dialect: str, kind: str) -> str:
     """The document number an inbound transaction set is about."""
     if dialect == "X12":
         for tag, position in (("BEG", 3), ("BCH", 3), ("BAK", 3), ("BIG", 4),
-                              ("BSN", 2)):
+                              ("BSN", 2), ("TRN", 2)):
             found = message.find(tag)
             if found is not None:
                 return found.get(position)
