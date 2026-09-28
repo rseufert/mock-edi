@@ -132,15 +132,24 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
     found = findings(message, dialect, kind, interchange, today)
     if dialect == "X12":
         advice = read(message, dialect)
-        if advice.credit_debit == DEBIT and advice.trace and not _advised(
-                conn, partner["id"], advice.trace):
-            found.append(BusinessFinding(
-                rule=REVERSES_NOTHING, kind=kind, code=message.code,
-                control=message.control, po_number="", expected="",
-                found=advice.trace,
-                note="this 820 debits trace %s (BPR03 D), but no advice for "
-                     "that trace was received to reverse" % advice.trace,
-                interchange=interchange))
+        if advice.credit_debit == DEBIT and advice.trace:
+            credits, debits = _outstanding(conn, partner["id"], advice.trace)
+            if debits > credits:
+                # Nothing left to reverse: no credit for the trace at all, or
+                # every one already taken back - a second reversal of the
+                # same payment is the same mistake as a first of none.
+                found.append(BusinessFinding(
+                    rule=REVERSES_NOTHING, kind=kind, code=message.code,
+                    control=message.control, po_number="",
+                    expected="%d credit advice%s" % (credits,
+                                                     "" if credits == 1 else "s"),
+                    found="%d debits" % debits,
+                    note="this 820 debits trace %s (BPR03 D), but %s"
+                         % (advice.trace,
+                            "no advice for that trace was received to reverse"
+                            if not credits else
+                            "every advice for that trace was already reversed"),
+                    interchange=interchange))
     moment = db.now()
     for finding in found:
         conn.execute(
@@ -155,14 +164,23 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
     return found
 
 
-def _advised(conn, partner_id: str, trace: str) -> bool:
-    """Whether an accepted advice for this trace arrived before this one.
+def _outstanding(conn, partner_id: str, trace: str) -> Tuple[int, int]:
+    """How many credit and debit advices this partner sent for the trace.
 
-    This one is archived already, so an earlier one makes two rows. Not told
-    apart by ST02: a set's control number is 0001 in interchange after
-    interchange, and would make every advice look like this one.
+    The one in hand is archived already, so it is among them. Read from the
+    advices themselves: a row's ST02 cannot tell them apart - it is 0001 in
+    interchange after interchange - and only BPR03 says which way each went.
     """
-    return len(_archived(conn, partner_id, trace)) > 1
+    credits = debits = 0
+    for row in _archived(conn, partner_id, trace):
+        message = _message(conn, row)
+        if message is None or row["dialect"] != "X12":
+            continue
+        if read(message, "X12").credit_debit == DEBIT:
+            debits += 1
+        else:
+            credits += 1
+    return credits, debits
 
 
 def _archived(conn, partner_id: str = "", trace: str = "") -> List[Dict[str, Any]]:
@@ -184,8 +202,10 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
     Read back from the archive rather than kept anywhere of its own. A credit
     advice followed by a debit for the same partner and trace is `reversed`,
     naming the advice that reversed it - the correction a payer owes once a
-    payment comes back (a pacs.004 from the bank). An 820 dated to take
-    effect after it arrived says so in `settledOnArrival`.
+    payment comes back (a pacs.004 from the bank). `settledOnArrival` is
+    whether the advice was judged remitted before settlement when it came -
+    read from that stored finding, so it answers by the mock's clock, as the
+    finding did, rather than by the real one a later advance leaves behind.
     """
     out: List[Dict[str, Any]] = []
     for row in _archived(conn, partner_id):
@@ -193,7 +213,6 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
         if message is None:
             continue
         advice = read(message, row["dialect"])
-        arrived = row["at"][:10]
         out.append({
             "partner": row["partner"], "dialect": row["dialect"],
             "code": row["code"], "control": row["control"], "id": row["id"],
@@ -202,7 +221,7 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
             "creditDebit": advice.credit_debit,
             "settles": advice.settles.isoformat() if advice.settles else "",
             "settledOnArrival": (None if advice.settles is None
-                                 else advice.settles.isoformat() <= arrived),
+                                 else not _was_early(conn, row)),
             "invoices": [{"invoice": invoice,
                           "paid": None if paid is None else str(paid)}
                          for invoice, paid in advice.invoices],
@@ -220,6 +239,16 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
                 # The archive's id: ST02 repeats between interchanges.
                 earlier["reversedBy"] = item["id"]
     return out
+
+
+def _was_early(conn, row: Dict[str, Any]) -> bool:
+    """Whether this archived set was found remitted before settlement."""
+    return db.one(
+        conn, "SELECT 1 AS found FROM disagreement d JOIN interchange i"
+              " ON i.control = d.interchange WHERE d.rule = ? AND d.partner = ?"
+              " AND d.code = ? AND d.control = ? AND i.id = ?",
+        (BEFORE_SETTLEMENT, row["partner"], row["code"], row["control"],
+         row["interchange_id"])) is not None
 
 
 def _message(conn, row: Dict[str, Any]) -> Optional[Message]:

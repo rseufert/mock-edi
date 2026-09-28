@@ -307,6 +307,23 @@ class SentBeforeTheMoneySettles(MockServerCase):
         self.post("/_mock/advance?seconds=%d" % (4 * 86400))
         self.assertEqual(self.rules(self.send(_utc_day(3))), [])
 
+    def settled_on_arrival(self):
+        _s, _h, rows = self.get("/_mock/remittances?partner=" + ACME)
+        return [row["settledOnArrival"] for row in rows]
+
+    def test_the_listing_agrees_with_the_finding(self):
+        self.send(_utc_day(3))
+        self.send(_utc_day(-1))
+        self.assertEqual(self.settled_on_arrival(), [False, True])
+
+    def test_and_keeps_agreeing_after_an_advance(self):
+        # From the review of #164: judged by the real clock, the listing said
+        # early for an advice the mock's advanced clock had found on time.
+        self.post("/_mock/advance?seconds=%d" % (4 * 86400))
+        data = self.send(_utc_day(3))
+        self.assertEqual(self.rules(data), [])
+        self.assertEqual(self.settled_on_arrival(), [True])
+
 
 class ThePaymentCameBack(MockServerCase):
     """#149's second failure: the advice is corrected by a reversal, or it is not."""
@@ -339,12 +356,38 @@ class ThePaymentCameBack(MockServerCase):
         self.send("TR-OTHER", "C")
         self.assertEqual([r["status"] for r in self.listing()], ["advised", "advised"])
 
+    def rules(self, data):
+        return [d["rule"] for d in data["transactionSets"][0]["disagreements"]]
+
     def test_a_reversal_of_nothing_is_found(self):
         data = self.send("TR-NEVER-ADVISED", "D")
         self.assertTrue(data["accepted"])
         [found] = data["transactionSets"][0]["disagreements"]
         self.assertEqual(found["rule"], "reversal-of-nothing")
         self.assertIn("TR-NEVER-ADVISED", found["note"])
+
+    def test_a_second_debit_of_nothing_is_found_too(self):
+        # From the review of #164: an earlier debit is not an advice to reverse.
+        self.assertEqual(self.rules(self.send("TR-DEBITS", "D")),
+                         ["reversal-of-nothing"])
+        self.assertEqual(self.rules(self.send("TR-DEBITS", "D")),
+                         ["reversal-of-nothing"])
+
+    def test_reversing_the_same_payment_twice_is_the_same_mistake(self):
+        self.send("TR-TWICE", "C")
+        self.assertEqual(self.rules(self.send("TR-TWICE", "D")), [])
+        second = self.send("TR-TWICE", "D")
+        self.assertEqual(self.rules(second), ["reversal-of-nothing"])
+        self.assertIn("already reversed",
+                      second["transactionSets"][0]["disagreements"][0]["note"])
+
+    def test_two_payments_under_one_trace_can_each_be_reversed(self):
+        self.send("TR-PAIR", "C")
+        self.send("TR-PAIR", "C")
+        self.assertEqual(self.rules(self.send("TR-PAIR", "D")), [])
+        self.assertEqual(self.rules(self.send("TR-PAIR", "D")), [])
+        self.assertEqual([r["status"] for r in self.listing()],
+                         ["reversed", "reversed", "reversal", "reversal"])
 
 
 class TheListing(MockServerCase):
