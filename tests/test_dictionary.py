@@ -234,7 +234,10 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
         more than one name. A Segment does not say its dialect: `schema.py`
         declares every X12 segment before its EDIFACT section, which UNB
         opens, and `test_the_dialect_split_agrees_with_the_sets` holds that
-        to what every set says. The 005010 revisions are left out of the
+        to what every set says. Only for segments a set uses, though: an EDIFACT
+        segment no set uses yet, declared above UNB, would be checked as X12,
+        and a clash it reported would be false - loud, not silent, so the fix
+        is to move the declaration below UNB, not to change this. The 005010 revisions are left out of the
         base set - 005010 widens REF02, which is a version, not a clash - and
         checked as 005010, in place of the segments they revise.
         """
@@ -276,13 +279,27 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
     def test_x12(self):
         self.assertEqual(self.clashes("X12"), {})
 
-    # Temporary (#173): at 005010 element 127 is AN 1/50 wherever it is used,
-    # but REVISIONS widens it only in REF, so BAK, BCA, BCH, TRN, RMR and ADX
-    # keep 004010's 30. When #173 fixes the dictionary this starts passing,
-    # which unittest reports as a failure - remove the marker then.
-    @unittest.expectedFailure
     def test_x12_005010(self):
+        # An expected failure until #173 widened 127 wherever 005010 uses it.
         self.assertEqual(self.clashes("X12", "005010"), {})
+
+    def test_a_40_character_bak08_is_fine_at_005010_and_not_at_004010(self):
+        from mockedi.envelope import seg
+        seller_order = "S" * 40
+
+        def findings(version):
+            body = [seg("BAK", "00", "AD", "PO-1", "20260924", "", "", "",
+                        seller_order), seg("CTT", "0")]
+            interchange = x12.parse(x12.render(x12.wrap(
+                [x12.message("855", "0001", body)], "ACME", "MOCKEDI", "1", "1",
+                "PR", version=version,
+                interchange_version="00501" if version == "005010" else "00401")))
+            return [e.note for m in validate.validate(interchange).messages
+                    for s in m.segments for e in s.elements]
+
+        self.assertEqual(findings("005010"), [])
+        self.assertTrue(any("BAK08" in note or "long" in note
+                            for note in findings("004010")), findings("004010"))
 
     def test_edifact(self):
         self.assertEqual(self.clashes("EDIFACT"), {})
