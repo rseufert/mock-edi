@@ -152,7 +152,7 @@ def derive(conn, partner_id: str, po_number: str) -> None:
     said nothing was confirmed while a hundred were shipped and billed,
     which is a wrong picture of a transaction that went right.
 
-    Note what the floor is *not*: it is not "confirmed is at least what
+    Note what the floor is *not*. It is not "confirmed is at least what
     shipped". A supplier that confirms 100 and ships 200 has confirmed 100,
     and saying otherwise would quietly answer the question
     `shipped-more-than-confirmed` exists to ask. The floor only stops a
@@ -170,16 +170,28 @@ def derive(conn, partner_id: str, po_number: str) -> None:
         latest = answers[-1] if answers else None
         shipped = _sum(mine, schema.DESPATCH)
         confirmed = number(latest["quantity"]) if latest else Decimal("0")
-        if len(answers) > 1:
-            already = max(number(answer["quantity"]) for answer in answers[:-1])
-            confirmed = max(confirmed, min(number(shipped), already))
+        speaking = latest
+        if latest is not None and len(answers) > 1:
+            # Only what had shipped *before this answer arrived*: a
+            # consignment that comes after a correction was shipped against
+            # the correction, and the correction stands.
+            sent = sum((number(claim["quantity"]) for claim in mine
+                        if claim["kind"] == schema.DESPATCH
+                        and claim["id"] < latest["id"]), Decimal("0"))
+            for answer in answers[:-1]:
+                held = min(sent, number(answer["quantity"]))
+                if held > confirmed:
+                    # That earlier answer still stands for this much, so the
+                    # line's status and reason are its word, not the one that
+                    # tried to take it back.
+                    confirmed, speaking = held, answer
         conn.execute(
             "UPDATE order_line SET confirmed = ?, status = ?, reason = ?,"
             " shipped = ?, invoiced = ? WHERE partner = ? AND po_number = ?"
             " AND line = ?",
             (quantity_text(confirmed),
-             latest["status"] if latest else "",
-             latest["reason"] if latest else "",
+             speaking["status"] if speaking else "",
+             speaking["reason"] if speaking else "",
              shipped,
              quantity_text(_billed([c for c in mine
                                     if c["kind"] == schema.INVOICE]).get(
