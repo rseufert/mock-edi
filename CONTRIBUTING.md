@@ -235,6 +235,10 @@ upgrade. Write it in `CHANGELOG.md` on the `release/0.6.0` branch, then
 `--resume`. Every other stop says what it was doing and what to fix; every
 wait has a limit and names what it was waiting for when it gives up.
 
+It needs git 2.31 or later: older, `git log --first-parent -S` does not look
+at merge commits, so the release commit cannot be found and it stops with
+"no commit on origin/main sets..." rather than tag anything.
+
 It exists because a release done by hand once stopped after the merge:
 `main` said 0.4.0 for several hours with no tag, no release, and 0.3.1 still
 newest on PyPI. `--resume` finishes exactly that state.

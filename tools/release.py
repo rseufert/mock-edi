@@ -170,8 +170,12 @@ class Release:
         return State(
             on_main=main_version == self.version,
             pull_request=self.open_pull_request(),
-            branch=self.git("rev-parse", "--verify", "--quiet",
-                            "refs/heads/" + self.branch, check=False).code == 0,
+            # Locally, or pushed by a run on another machine that stopped
+            # before opening the pull request.
+            branch=(self.git("rev-parse", "--verify", "--quiet",
+                             "refs/heads/" + self.branch, check=False).code == 0
+                    or bool(self.git("ls-remote", "--heads", "origin",
+                                     self.branch, check=False).out.strip())),
             tag=bool(self.git("ls-remote", "--tags", "origin",
                               "refs/tags/" + self.tag).out.strip()),
             github_release=self.gh("release", "view", self.tag, "--json",
@@ -356,8 +360,14 @@ class Release:
             page = self.fetch(PYPI_INDEX)
         except Exception:        # unreachable is "not yet", and the wait says so
             return False
+        # The version and then what ends it - the wheel's "-py3-..." or the
+        # sdist's ".tar.gz" - never a prefix: 0.1.1 is not listed because
+        # 0.1.10 is, and a backport released after a later patch is exactly
+        # when that would pass for done.
         names = {PACKAGE, PACKAGE.replace("-", "_")}
-        return any("%s-%s" % (name, self.version) in page for name in names)
+        return any(re.search(r"%s-%s(?:-|\.tar|\.zip)"
+                             % (re.escape(name), re.escape(self.version)), page)
+                   for name in names)
 
     # -- plumbing
 

@@ -45,6 +45,7 @@ class World:
         self.main_version = "0.5.0"
         self.open_pr = 0
         self.branch = False
+        self.remote_branch = False
         self.tag = False
         self.gh_release = False
         self.pypi = False
@@ -88,6 +89,9 @@ class World:
         if a[0] == "rev-parse":
             return tool.Result(0, {"--abbrev-ref": self.on, "HEAD": self.head,
                                    "origin/main": self.origin}[a[1]])
+        if a[0] == "ls-remote" and "--heads" in a:
+            return tool.Result(0, "def\trefs/heads/release/%s\n" % VERSION
+                               if self.remote_branch else "")
         if a[0] == "ls-remote":
             return tool.Result(0, "abc\trefs/tags/v%s\n" % VERSION if self.tag else "")
         if a[0] == "status":
@@ -146,7 +150,11 @@ class World:
             return tool.Result(0 if self.intro_written else 1, "placeholder")
         return tool.Result(0, "")
 
+    page = None
+
     def fetch(self, url):
+        if self.page is not None:
+            return self.page
         return "<a>mock_edi-%s.tar.gz</a>" % VERSION if self.pypi else "<a>mock_edi-0.5.0.tar.gz</a>"
 
     now = 0.0
@@ -294,6 +302,36 @@ class EveryWaitHasALimit(ReleaseCase):
         stop = self.assertStops(World(pypi_after_publish=False),
                                 "PyPI to list mock-edi 0.6.0")
         self.assertIn("--resume", str(stop))
+
+
+class AskingPyPI(unittest.TestCase):
+    def listed(self, version, page):
+        world = World(page=page)
+        return tool.Release(version, run=world.run, fetch=world.fetch).listed_on_pypi()
+
+    def test_a_later_patch_does_not_count_as_this_one(self):
+        # From the review of #162: 0.1.1 is not on PyPI because 0.1.10 is.
+        page = '<a href="x">mock_edi-0.1.10.tar.gz</a><a>mock_edi-0.1.10-py3-none-any.whl</a>'
+        self.assertFalse(self.listed("0.1.1", page))
+        self.assertTrue(self.listed("0.1.10", page))
+
+    def test_a_wheel_or_an_sdist_counts(self):
+        self.assertTrue(self.listed("0.1.1", "<a>mock_edi-0.1.1-py3-none-any.whl</a>"))
+        self.assertTrue(self.listed("0.1.1", "<a>mock-edi-0.1.1.tar.gz</a>"))
+        self.assertTrue(self.listed("0.1.1", "<a>mock_edi-0.1.1.zip</a>"))
+
+    def test_an_index_that_cannot_be_reached_is_not_yet(self):
+        def down(url):
+            raise OSError("unreachable")
+        world = World()
+        self.assertFalse(tool.Release("0.1.1", run=world.run, fetch=down).listed_on_pypi())
+
+
+class ABranchPushedFromElsewhere(ReleaseCase):
+    def test_it_counts_as_started(self):
+        # A run on another machine pushed release/X.Y.Z and stopped before
+        # opening the pull request.
+        self.assertStops(World(remote_branch=True), "--resume")
 
 
 class TheReleaseNotes(unittest.TestCase):
