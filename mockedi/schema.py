@@ -1171,6 +1171,9 @@ EDIFACT_AMOUNT_QUALIFIERS = {  # 5025
     # qualifiers a guide uses varies, and 12 is the one the mock reads - said
     # so, not implied to be the only one.
     "12": "Amount remitted", "52": "Discount amount",
+    # For an allowance or charge on an INVOIC (#158): 8 is the amount of the
+    # one its ALC group describes, 131 the total of them all.
+    "8": "Allowance or charge amount", "131": "Total charges/allowances",
 }
 EDIFACT_PRICE_QUALIFIERS = {  # 5125
     "AAA": "Calculation net", "AAB": "Calculation gross",
@@ -1604,6 +1607,36 @@ AJT = Segment("AJT", "Adjustment Details", (
 ), "Why what is paid differs from what was invoiced. Carried, not judged.")
 
 
+ALC = Segment("ALC", "Allowance or Charge", (
+    _e("5463", "Allowance or charge qualifier", "ID", 1, 3, MANDATORY,
+       {"A": "Allowance", "C": "Charge", "N": "No allowance or charge"}),
+    _c("C552", "Allowance/Charge Information", (
+        _e("1230", "Allowance or charge number", "AN", 1, 35),
+        _e("5189", "Charge/allowance description, coded", "ID", 1, 3),
+    )),
+    _e("4471", "Settlement, coded", "ID", 1, 3),
+    _e("1227", "Calculation sequence indicator, coded", "ID", 1, 3),
+    _c("C214", "Special Services Identification", (
+        _e("7161", "Special services, coded", "ID", 1, 3),
+        _e("1131", "Code list qualifier", "AN", 1, 3),
+        _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
+        _e("7160", "Special service", "AN", 1, 35),
+        _e("7160", "Special service", "AN", 1, 35),
+    )),
+), "An allowance (A) or a charge (C): freight, a promotion, a handling fee. "
+   "Its amount is the MOA+8 in its group.")
+
+
+def _alc_group(repeat: int = 99) -> Loop:
+    """An allowance or charge, and its amount (#158).
+
+    D.96A's ALC groups hold more - ALI, RFF, QTY, PCD, RTE, TAX - of which
+    the mock reads only the amount, so only the MOA is declared.
+    """
+    return Loop("ALC", (Use(ALC, MANDATORY), Use(MOA, max_use=2)), OPTIONAL,
+                repeat)
+
+
 def _edifact_party_group(repeat: int = 99) -> Loop:
     return Loop("NAD", (
         Use(NAD, MANDATORY),
@@ -1707,6 +1740,7 @@ EDIFACT_INVOIC = TransactionSet("INVOIC", "Invoice Message", "EDIFACT", (
     _edifact_party_group(),
     Loop("CUX", (Use(CUX, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 99),
     Loop("PAT", (Use(PAT, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 10),
+    _alc_group(),
     Loop("LIN", (
         Use(LIN_E, MANDATORY),
         Use(PIA, max_use=25),
@@ -1717,10 +1751,12 @@ EDIFACT_INVOIC = TransactionSet("INVOIC", "Invoice Message", "EDIFACT", (
         Use(FTX, max_use=99),
         Loop("PRI", (Use(PRI, MANDATORY),), OPTIONAL, 25),
         Loop("RFF", (Use(RFF, MANDATORY),), OPTIONAL, 99),
+        _alc_group(),
     ), OPTIONAL, 200000),
     Use(UNS, MANDATORY),
     Use(MOA, max_use=100),
     Use(CNT, max_use=10),
+    _alc_group(15),
     Use(UNT, MANDATORY),
 ), version="D:96A:UN",
    purpose="The EDIFACT invoice. Every total is a named MOA, where X12 puts them "

@@ -418,26 +418,41 @@ def price_not_agreed(received: Received) -> None:
 
 
 def total_not_lines(received: Received) -> None:
-    """The invoice's own total against the sum of its own lines.
+    """The invoice's own totals against the sum of its own lines.
 
-    Where the document states a subtotal - TDS02, or MOA+79 - that is what
-    the lines must add up to; otherwise the total must be the lines plus the
-    tax, as TXI or MOA+124 give it. Allowances and charges (SAC, ALC) are not
-    read, so an invoice that carries one is compared without it.
+    Two comparisons, and at most one finding: EDIFACT's MOA+79 is the total of
+    the line items and must be what they add up to; and the total - TDS01, or
+    MOA+139 - must be the lines plus the invoice's allowances and charges
+    plus its tax (#158). TDS02 is not compared: it is the amount subject to
+    terms discount, which freight, say, is commonly not.
+
+    The total is not judged when it cannot be: an allowance given only as a
+    percentage, or an INVOIC that states no MOA+139.
     """
     invoice = received.document
     lines = invoice.line_total
-    if invoice.subtotal is not None:
-        stated, expected, what = invoice.subtotal, lines, "subtotal"
-    else:
-        stated, expected, what = invoice.total, lines + invoice.tax, "total"
-    if stated != expected:
+    if invoice.line_items_total is not None and invoice.line_items_total != lines:
         received.disagree(
-            "total-not-lines", "", _money(expected), _money(stated),
-            "%s %s states a %s of %s, but its lines come to %s%s"
-            % (received.code, invoice.invoice_number, what, _money(stated),
-               _money(lines), " plus %s tax" % _money(invoice.tax)
-               if what == "total" and invoice.tax else ""))
+            "total-not-lines", "", _money(lines), _money(invoice.line_items_total),
+            "%s %s states its line items come to %s, but its lines come to %s"
+            % (received.code, invoice.invoice_number,
+               _money(invoice.line_items_total), _money(lines)))
+        return
+    if not (invoice.total_stated and invoice.charges_known):
+        return
+    expected = lines + invoice.charges + invoice.tax
+    if invoice.total != expected:
+        parts = ["lines %s" % _money(lines)]
+        if invoice.charges:
+            parts.append("%s %s" % ("charges" if invoice.charges > 0 else "allowances",
+                                    _money(abs(invoice.charges))))
+        if invoice.tax:
+            parts.append("tax %s" % _money(invoice.tax))
+        received.disagree(
+            "total-not-lines", "", _money(expected), _money(invoice.total),
+            "%s %s states a total of %s, but %s come to %s"
+            % (received.code, invoice.invoice_number, _money(invoice.total),
+               ", ".join(parts), _money(expected)))
 
 
 def billed_cancelled(received: Received) -> None:
