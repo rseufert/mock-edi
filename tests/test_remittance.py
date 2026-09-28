@@ -61,9 +61,13 @@ def edifact_remittance(number="RA-0001", total="150.00",
             seg("NAD", "PR", ["EURODIS", "", "92"]),
             seg("NAD", "PE", ["MOCKEDI", "", "92"]),
             seg("CUX", ["2", "EUR", "11"])]
-    for invoice, amount in paid:
+    for invoice, amount, *adjustment in paid:
         body.append(seg("DOC", ["380"], [invoice]))
         body.append(seg("MOA", ["12", amount]))
+        # An AJT group: its reason, and an amount of its own.
+        for reason, adjusted in adjustment:
+            body.append(seg("AJT", reason))
+            body.append(seg("MOA", ["12", adjusted]))
     body.append(seg("UNS", "S"))
     if summary:
         body.append(seg("MOA", ["12", total]))
@@ -250,6 +254,15 @@ class AnEdifactRemittance(MockServerCase):
 
     def test_a_clean_one_has_no_disagreement(self):
         data = self.send_remadv(edifact_remittance())
+        self.assertEqual(data["transactionSets"][0]["disagreements"], [])
+
+    def test_an_adjustments_amount_is_already_in_its_document(self):
+        # 90.00 remitted on the DOC, whose AJT group carries the -10.00 that
+        # explains it. Counting the AJT's MOA+12 again would make 80.00 of a
+        # correct 90.00 total.
+        data = self.send_remadv(edifact_remittance(
+            total="90.00", paid=(("INV8000003", "90.00", ("1", "-10.00")),)))
+        self.assertTrue(data["accepted"], data)
         self.assertEqual(data["transactionSets"][0]["disagreements"], [])
 
     def test_the_summary_amount_may_be_left_out(self):

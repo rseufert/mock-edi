@@ -72,6 +72,7 @@ def _total_not_parts(message: Message,
     group's amounts are already in its DOC's. With no MOA+12 total nothing is
     claimed, since a guide may name its total otherwise.
 
+    An empty amount - an RMR with no RMR04 - counts as nothing paid on it.
     A number that does not parse is the syntax check's to report; nothing is
     claimed about arithmetic that cannot be done.
     """
