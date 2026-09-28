@@ -232,6 +232,7 @@ always a bug: its traceback goes to stderr, even with `-q`.
 | Change acknowledgment | **865** | **ORDRSP** |
 | Despatch advice / ship notice | **856** | **DESADV** |
 | Invoice | **810** | **INVOIC** |
+| Remittance advice, received | **820** | **REMADV** |
 | Syntax acknowledgment | **997** | **CONTRL** |
 
 Both dialects are read and written from one dictionary
@@ -256,6 +257,15 @@ but a 999 reports conformance to an *implementation guide* — the TR3 named in
 `ST03` — and the mock checks documents against the base standard, not against
 any guide. A 999 from it would claim a check it never made; the 997 says
 exactly what it did.
+
+**A remittance advice** is sent *to* the mock, as the payee, and answered
+with a 997 or CONTRL like anything else it receives. An 820 whose `BPR01`
+instructs a bank - `D`, `P`, `U` or `X` - is a payment order, a bank's
+document, and is refused by name rather than half-read; `I` and `C` are the
+remittance uses. An advice is filed under its `TRN02` trace number, or its
+`BGM` number. Whether its total is the sum of what it says was paid is not a
+syntax question - an advice that disagrees with itself can still be read, and
+is acknowledged - so it is left to the business findings, not the 997.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

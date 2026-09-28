@@ -321,6 +321,8 @@ def validate_message(message: Message, dialect: str,
     _check_version(message, dialect, definition, report)
     _walk(message, definition, report)
     _check_line_numbers(message, definition, report)
+    if report.kind == schema.REMITTANCE:
+        _check_remittance(message, dialect, definition, report)
     if profile is not None:
         _check_profile(message, definition, profile, report)
 
@@ -585,6 +587,50 @@ def _check_line_numbers(message: Message, definition: schema.TransactionSet,
                      "the standard allows a repeat, but nearly every "
                      "implementation guide does not, and the mock stores "
                      "lines by number" % (number, tag, seen[number]))]))
+
+
+def _check_remittance(message: Message, dialect: str,
+                      definition: schema.TransactionSet,
+                      report: MessageReport) -> None:
+    """Refuse an 820 that is not a remittance advice at all.
+
+    An 820 whose BPR01 instructs a bank to pay is a payment order: a bank's
+    document, which the mock - the payee - is the wrong party to receive. That
+    is refused by name, as a misdirected set is, rather than half-read.
+
+    Whether the advice's total is the sum of its parts is deliberately *not*
+    checked here. A remittance that disagrees with itself can still be read,
+    and a readable document is acknowledged; the disagreement is a business
+    finding, reported beside the 997 rather than in it (#116), and waits for
+    the class that carries those.
+    """
+    if dialect != "X12":
+        return
+    bpr = message.find("BPR")
+    if bpr is None:
+        return                      # missing, and already reported as such
+    handling = bpr.get(1)
+    if handling and handling not in schema.REMITTANCE_HANDLING:
+        _refuse(report, definition, bpr, "BPR", 1,
+                "BPR01 %s (%s) makes this 820 a payment order, which "
+                "instructs a bank to pay; the mock is the payee and takes "
+                "a remittance advice, BPR01 %s. Send a payment order to "
+                "the bank - mock-bank takes it as pain.001"
+                % (handling, schema.HANDLING_CODES.get(handling, "unknown"),
+                   " or ".join(schema.REMITTANCE_HANDLING)))
+
+
+def _refuse(report: MessageReport, definition: schema.TransactionSet, item,
+            tag: str, position: int, note: str) -> None:
+    segment = definition.segment_for(tag)
+    element = segment.element(position) if segment is not None else None
+    report.segments.append(SegmentFinding(
+        tag=tag, position=item.position, loop="", code="8", severity=FATAL,
+        note="%s has data element errors" % tag,
+        elements=[ElementFinding(
+            position=position, component=0,
+            ref=element.ref if element is not None else "", code="7",
+            value=item.get(position), severity=FATAL, note=note)]))
 
 
 def _check_profile(message: Message, definition: schema.TransactionSet,
