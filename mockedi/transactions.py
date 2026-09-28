@@ -243,6 +243,10 @@ class Despatch:
 class InvoiceLine(Line):
     """One billed line. `quantity` is what was invoiced, not what was ordered."""
     amount_stated: Optional[Decimal] = None
+    # The line's own allowances and charges, net: a charge adds, an allowance
+    # takes away (#158). An X12 line states no amount, so this is how its SAC
+    # reaches `amount`; an EDIFACT line's MOA+203 already includes its ALC.
+    adjustment: Decimal = Decimal("0.00")
 
     @property
     def amount(self) -> Decimal:
@@ -255,7 +259,7 @@ class InvoiceLine(Line):
         """
         if self.amount_stated is not None:
             return self.amount_stated
-        return (self.quantity * self.price).quantize(Decimal("0.01"))
+        return (self.quantity * self.price).quantize(Decimal("0.01")) + self.adjustment
 
 
 @dataclass
@@ -276,6 +280,18 @@ class Invoice:
     discount_pct: Decimal = Decimal("0")
     discount_days: int = 0
     lines: List[InvoiceLine] = field(default_factory=list)
+    # The invoice's own allowances and charges, outside any line, net (#158):
+    # SAC after TDS, or an ALC group before the first LIN or after UNS.
+    charges: Decimal = Decimal("0.00")
+    # False when one of them gave a percentage and no amount, so what the
+    # total should be cannot be worked out.
+    charges_known: bool = True
+    # EDIFACT's MOA+79, the total of the line items. X12 has no equivalent:
+    # TDS02, in `subtotal`, is the amount subject to terms discount, which
+    # need not be the lines' total at all.
+    line_items_total: Optional[Decimal] = None
+    # Whether the document stated a total. An INVOIC may leave out MOA+139.
+    total_stated: bool = True
 
     @property
     def line_total(self) -> Decimal:
@@ -1533,6 +1549,9 @@ def _read_invoice_x12(message: Message) -> Invoice:
             group_by(detail, "IT1", stop=("TDS", "CTT", "SE")), start=1):
         head = block[0]
         ids = _ids(head, 6)
+        adjustment = _sac_total(block[1:])
+        if adjustment is None:
+            invoice.charges_known = False
         invoice.lines.append(InvoiceLine(
             number=head.get(1) or str(index),
             sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
@@ -1541,6 +1560,7 @@ def _read_invoice_x12(message: Message) -> Invoice:
             quantity=number(head.get(2)),
             uom=head.get(3) or "EA",
             price=number(head.get(4), "0.00"),
+            adjustment=adjustment or Decimal("0.00"),
         ))
 
     tds = message.find("TDS")
@@ -1551,10 +1571,36 @@ def _read_invoice_x12(message: Message) -> Invoice:
         invoice.total = _from_implied(tds.get(1))
         if tds.get(2):
             invoice.subtotal = _from_implied(tds.get(2))
+        # Allowances and charges on the invoice as a whole follow TDS.
+        charges = _sac_total(message.body[message.body.index(tds) + 1:])
+        if charges is None:
+            invoice.charges_known = False
+        else:
+            invoice.charges = charges
     for item in message.body:
         if item.tag == "TXI" and item.get(2):
             invoice.tax += number(item.get(2), "0.00")
     return invoice
+
+
+def _sac_total(segments: Sequence[Seg]) -> Optional[Decimal]:
+    """What the SACs among `segments` add up to, net; None if one has no amount.
+
+    SAC01 says which way: C a charge, A an allowance, N neither. SAC05 is the
+    amount, with two implied decimals as every X12 money amount in N2 is. An
+    SAC that gives only a percentage (SAC07) cannot be summed without knowing
+    what it is a percentage of, so it makes the total unknown rather than
+    wrong.
+    """
+    total = Decimal("0.00")
+    for item in segments:
+        if item.tag != "SAC" or item.get(1) not in ("A", "C"):
+            continue
+        if not item.get(5):
+            return None
+        amount = _from_implied(item.get(5))
+        total += amount if item.get(1) == "C" else -amount
+    return total
 
 
 # -- EDIFACT
@@ -1801,6 +1847,10 @@ def _read_invoice_edifact(message: Message) -> Invoice:
             if item.tag == "PRI" and item.comp(1, 2):
                 price = number(item.comp(1, 2), "0.00")
                 break
+        stated = _edifact_moa(block[1:], "203")
+        adjustment = _alc_total(block[1:])
+        if adjustment is None and stated is None:
+            invoice.charges_known = False
         invoice.lines.append(InvoiceLine(
             number=head.get(1) or str(index),
             sku=_pick(ids, SKU_QUALIFIERS) or _spare_sku(ids),
@@ -1809,7 +1859,8 @@ def _read_invoice_edifact(message: Message) -> Invoice:
             quantity=billed,
             uom=_edifact_unit_back(unit),
             price=price,
-            amount_stated=_edifact_moa(block[1:], "203"),
+            amount_stated=stated,
+            adjustment=adjustment or Decimal("0.00"),
         ))
 
     summary = body[len(header):]
@@ -1822,6 +1873,39 @@ def _read_invoice_edifact(message: Message) -> Invoice:
         elif seen_uns:
             tail.append(item)
     invoice.subtotal = _edifact_moa(tail, "79")
+    invoice.line_items_total = invoice.subtotal
     invoice.tax = _edifact_moa(tail, "124") or Decimal("0.00")
-    invoice.total = _edifact_moa(tail, "139") or Decimal("0.00")
+    total = _edifact_moa(tail, "139")
+    invoice.total_stated = total is not None
+    invoice.total = total or Decimal("0.00")
+    # Allowances and charges on the invoice as a whole: an ALC group before
+    # the first LIN, or after UNS.
+    charges = [_alc_total(header), _alc_total(tail)]
+    if None in charges:
+        invoice.charges_known = False
+    else:
+        invoice.charges = sum(charges, Decimal("0.00"))
     return invoice
+
+
+def _alc_total(segments: Sequence[Seg]) -> Optional[Decimal]:
+    """What the ALC groups among `segments` add up to, net; None if one has
+    no MOA+8 amount.
+
+    ALC01 says which way - C a charge, A an allowance, N neither - and the
+    amount is the MOA+8 that follows it in its group, before the next ALC
+    or line.
+    """
+    total = Decimal("0.00")
+    sign: Optional[int] = None
+    waiting = False
+    for item in list(segments) + [seg("LIN")]:
+        if item.tag in ("ALC", "LIN", "UNS"):
+            if waiting:
+                return None
+            sign = {"C": 1, "A": -1}.get(item.get(1)) if item.tag == "ALC" else None
+            waiting = sign is not None
+        elif item.tag == "MOA" and waiting and item.comp(1, 1) == "8":
+            total += sign * number(item.comp(1, 2), "0.00")
+            waiting = False
+    return total

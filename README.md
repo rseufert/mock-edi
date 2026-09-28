@@ -637,7 +637,7 @@ the 856:
 | `billed-before-shipped` | no 856 has arrived for the order |
 | `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
 | `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
-| `total-not-lines` | the subtotal (TDS02, MOA+79) - or, without one, the total less tax - is not the sum of the lines |
+| `total-not-lines` | MOA+79 is not the sum of the lines, or the total (TDS01, MOA+139) is not the lines plus allowances and charges (SAC, ALC) plus tax; not judged when an allowance gives only a percentage |
 | `invoice-repeated` | an invoice number already received for the order; it is counted once |
 | `billed-cancelled` | the order was cancelled |
 
