@@ -26,8 +26,8 @@ import sqlite3
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
-from . import (ack, charsets, claims, db, documents, edifact, partners, profiles,
-               reconcile, schema, transactions, x12)
+from . import (ack, charsets, claims, db, documents, edifact, partners,
+               profiles, reconcile, remittance, schema, transactions, x12)
 from .envelope import EdiSyntaxError, Interchange, Seg, sniff
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
@@ -279,6 +279,13 @@ class Pipeline:
             elif (message_report.kind == schema.CHANGE and message_report.accepted):
                 change = transactions.read_change(message, dialect)
                 self._apply_change(partner, change, receipt)
+            elif (message_report.kind == schema.REMITTANCE
+                  and message_report.accepted):
+                # Acknowledged whatever its arithmetic says: what does not
+                # add up is a business finding, beside the 997 (#156).
+                message_report.disagreements.extend(remittance.record(
+                    self.conn, partner, message, dialect, message_report.kind,
+                    interchange.control))
             elif (message_report.kind == schema.ACKNOWLEDGMENT
                   and not message_report.envelope_rejected):
                 # A receipt for something the mock sent, rather than something

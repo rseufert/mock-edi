@@ -6,8 +6,8 @@ with a 997 or CONTRL. Beyond the syntax, one thing is refused by name: an 820
 used as a payment order, a bank's document.
 
 An advice whose total is not the sum of its parts can still be read, so it is
-acknowledged; that disagreement is a business finding for #153's class, not
-a 997 rejection (#116).
+acknowledged; that disagreement is a business finding beside the 997 (#156),
+never a rejection in it (#116).
 """
 import os
 import sys
@@ -33,7 +33,8 @@ def x12_remittance(trace="TR-0001", total="150.00", paid=(("INV8000001", "100.00
     """A remittance-only 820: BPR, TRN, payer and payee, one ENT and an RMR per invoice.
 
     `deductions` are ENT-level ADXs: an amount and a reason not tied to one
-    invoice, which BPR02 includes and no RMR04 does.
+    invoice, which BPR02 includes and no RMR04 does. An entry of `paid` may
+    carry a third item, an ADX (amount, reason) inside that invoice's RMR loop.
     """
     bpr = extra_bpr or seg("BPR", handling, total, "C", "NON", "", "", "", "", "",
                            "", "", "", "", "", "", settles)
@@ -42,9 +43,10 @@ def x12_remittance(trace="TR-0001", total="150.00", paid=(("INV8000001", "100.00
             seg("N1", "PE", "Mock EDI Supply Co"),
             seg("ENT", "1")]
     body += [seg("ADX", amount, reason) for amount, reason in deductions]
-    for invoice, amount in paid:
+    for invoice, amount, *adjustment in paid:
         body.append(seg("RMR", "IV", invoice, "", amount, amount))
         body.append(seg("DTM", "003", "20260920"))
+        body += [seg("ADX", *item) for item in adjustment]
     control = _next_control(9)
     return x12.render(x12.wrap([x12.message("820", "0001", body)], sender,
                                "MOCKEDI", control, str(int(control)), "RA"),
@@ -129,6 +131,9 @@ class AnX12Remittance(MockServerCase):
         self.assertEqual((ack.find("AK3").get(1), ack.find("AK4").get(1)),
                          ("BPR", "16"))
 
+    def disagreements(self, data):
+        return data["transactionSets"][0]["disagreements"]
+
     def test_a_total_that_does_not_add_up_is_still_acknowledged(self):
         # Readable, so a 997 says A: the arithmetic is a business finding,
         # reported beside the acknowledgment rather than in it (#116).
@@ -136,6 +141,36 @@ class AnX12Remittance(MockServerCase):
             total="150.00", paid=(("INV8000001", "100.00"),)))
         self.assertTrue(data["accepted"], data)
         self.assertEqual(self.ack().find("AK5").get(1), "A")
+        self.assertIsNone(self.ack().find("AK3"))
+
+    def test_and_says_so_beside_the_997(self):
+        # The run paid two invoices, one payment came back AC04, and the
+        # advice still claims the full total while listing one invoice.
+        data = self.send_820(x12_remittance(
+            total="150.00", paid=(("INV8000001", "100.00"),)))
+        [found] = self.disagreements(data)
+        self.assertEqual(found["rule"], "remittance-total-not-parts")
+        self.assertEqual((found["found"], found["expected"]), ("150.00", "100.00"))
+        self.assertIn("BPR02 says 150.00 was paid", found["note"])
+        self.assertEqual(found["order"], "")
+
+    def test_it_is_kept_with_the_other_disagreements(self):
+        self.send_820(x12_remittance(total="150.00", paid=(("INV8000001", "100.00"),)))
+        _s, _h, rows = self.get("/_mock/disagreements?partner=" + ACME)
+        self.assertEqual([(r["rule"], r["kind"], r["code"]) for r in rows],
+                         [("remittance-total-not-parts", "remittance", "820")])
+
+    def test_the_997_is_the_same_as_for_a_clean_one(self):
+        # #126's guard: a disagreement changes nothing a 997 says.
+        def ack_of(payload):
+            self.send_820(payload)
+            ack = self.ack()
+            self.mailbox(ACME, leave=False)
+            return [(item.tag, item.elements) for item in ack.segments
+                    if item.tag not in ("ST", "SE", "AK1")]
+        clean = ack_of(x12_remittance(total="100.00", paid=(("INV-1", "100.00"),)))
+        wrong = ack_of(x12_remittance(total="150.00", paid=(("INV-1", "100.00"),)))
+        self.assertEqual(wrong, clean)
 
     def test_a_deduction_not_tied_to_one_invoice_is_part_of_the_payment(self):
         # 1000.00 invoiced, 50.00 deducted at the ENT level: BPR02 is 950.00
@@ -146,11 +181,21 @@ class AnX12Remittance(MockServerCase):
             deductions=(("-50.00", "CS"),)))
         self.assertTrue(data["accepted"], data)
         self.assertEqual(data["transactionSets"][0]["findings"], [])
+        self.assertEqual(self.disagreements(data), [])
+
+    def test_an_adjustment_inside_an_rmr_is_already_in_its_amount(self):
+        # RMR04 is 90.00 paid on a 100.00 invoice, with the 10.00 discount's
+        # ADX in the RMR loop: counting that ADX again would be wrong.
+        data = self.send_820(x12_remittance(
+            total="90.00", paid=(("INV-2", "90.00", ("-10.00", "01")),)))
+        self.assertTrue(data["accepted"], data)
+        self.assertEqual(self.disagreements(data), [])
 
     def test_the_totals_may_include_a_credit(self):
         data = self.send_820(x12_remittance(
             total="70.00", paid=(("INV8000001", "100.00"), ("CM-1", "-30.00"))))
         self.assertTrue(data["accepted"], data)
+        self.assertEqual(self.disagreements(data), [])
 
     def test_a_payment_order_is_refused_by_name(self):
         for handling in ("D", "P", "U", "X"):
@@ -199,6 +244,13 @@ class AnEdifactRemittance(MockServerCase):
         self.assertTrue(data["accepted"], data)
         ucm = self.contrl().find("UCM")
         self.assertEqual((ucm.comp(2, 1), ucm.get(3)), ("REMADV", "7"))
+        [found] = data["transactionSets"][0]["disagreements"]
+        self.assertEqual((found["found"], found["expected"]), ("150.00", "100.00"))
+        self.assertIn("MOA+12 after UNS says 150.00", found["note"])
+
+    def test_a_clean_one_has_no_disagreement(self):
+        data = self.send_remadv(edifact_remittance())
+        self.assertEqual(data["transactionSets"][0]["disagreements"], [])
 
     def test_the_summary_amount_may_be_left_out(self):
         payload = edifact_remittance(summary=False)
