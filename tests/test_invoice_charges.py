@@ -25,7 +25,7 @@ GOODS = "1250.00"
 
 
 def invoice(dialect, sender, total, line_charges=(), charges=(), subtotal=None,
-            tax="0.00"):
+            tax="0.00", total_stated=True):
     """An 810 or INVOIC for line 1, with allowances and charges put where the
     standards put them. Each charge is `(indicator, amount)`: C or A, and an
     amount, or None for one given only as a percentage."""
@@ -57,6 +57,11 @@ def invoice(dialect, sender, total, line_charges=(), charges=(), subtotal=None,
             body.insert(tds + n, sac(indicator, amount))
         return x12.render(x12.wrap([x12.message(code, "0001", body)], sender,
                                    "MOCKEDI", control, control.lstrip("0"), "IN"))
+
+    if not total_stated:
+        # An INVOIC may leave MOA+139 out; the writer always puts it in.
+        body = [item for item in body
+                if not (item.tag == "MOA" and item.comp(1, 1) == "139")]
 
     def alc(indicator, amount):
         group = [seg("ALC", indicator, ["", "FC"])]
@@ -116,6 +121,12 @@ class Charges(MatchCase):
 class ChargesInEdifact(Charges):
     dialect = "EDIFACT"
 
+    def test_no_total_stated_is_not_a_total_of_nothing(self):
+        # Judged as though it said 0.00, this would be a disagreement.
+        summary = self.billed_with("0.00", charges=[("C", "50.00")],
+                                   total_stated=False)
+        self.assertEqual(summary["disagreements"], [])
+
     def test_the_line_items_total_is_still_checked(self):
         summary = self.billed_with("1300.00", charges=[("C", "50.00")],
                                    subtotal="1300.00")
@@ -159,6 +170,7 @@ class WhatTheReadersMakeOfThem(unittest.TestCase):
         self.assertEqual(read.charges, Decimal("50.00"))
         self.assertEqual(read.line_items_total, Decimal(GOODS))
         self.assertTrue(read.total_stated)
+        self.assertFalse(self.read("EDIFACT", total_stated=False).total_stated)
 
     def test_an_amount_given_only_as_a_percentage(self):
         for dialect in ("X12", "EDIFACT"):
