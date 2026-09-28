@@ -218,6 +218,17 @@ class WhereTheyShow(ReconcilingCase):
                       "confirms 120", received["summary"])
         self.assertTrue(received["accepted"])
 
+    def test_two_answers_each_carry_only_their_own(self):
+        # Both 855s are set 0001, in envelopes of their own: the set's control
+        # number alone cannot tell them apart.
+        self.says([line("1", "WIDGET-001", 100, price="13.10"), AS_ORDERED[1]])
+        _s, _h, data = self.get("/_mock/orders/PO-R/timeline")
+        answers = [e for e in data["events"] if e["event"] == "received"
+                   and e["code"] == "855"]
+        self.assertEqual([e["control"] for e in answers], ["0001", "0001"])
+        self.assertEqual([[d["rule"] for d in e["disagreements"]] for e in answers],
+                         [["confirmed-more"], ["price-differs"]])
+
     def test_their_own_endpoint(self):
         self.placed("PO-OTHER")
         self.says(AS_ORDERED, po_number="PO-OTHER")

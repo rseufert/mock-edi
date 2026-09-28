@@ -118,11 +118,15 @@ def _documents(conn, po_number: str, partner_id: str,
         if row["direction"] == "in":
             # What this document said that the order does not (#126), on the
             # event that said it rather than in a list of its own.
+            # By the envelope as well as the set: a set's own control number
+            # is not unique - writers start every interchange at 0001 - so
+            # two 855s for one order would otherwise share each other's.
             found = db.rows(conn, "SELECT rule, line, expected, found, note"
                                   " FROM disagreement WHERE partner = ?"
                                   " AND po_number = ? AND code = ? AND control = ?"
-                                  " ORDER BY id",
-                            (partner_id, po_number, row["code"], row["control"]))
+                                  " AND interchange = ? ORDER BY id",
+                            (partner_id, po_number, row["code"], row["control"],
+                             row["envelope"] or ""))
             if found:
                 event["disagreements"] = found
         event["summary"] = _summarise(event)
