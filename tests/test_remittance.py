@@ -29,14 +29,14 @@ EDIFACT_TYPE = {"Content-Type": "application/edifact"}
 def x12_remittance(trace="TR-0001", total="150.00", paid=(("INV8000001", "100.00"),
                                                            ("INV8000002", "50.00")),
                    handling="I", settles="20260928", sender=ACME, extra_bpr=None,
-                   deductions=()):
+                   deductions=(), credit_debit="C"):
     """A remittance-only 820: BPR, TRN, payer and payee, one ENT and an RMR per invoice.
 
     `deductions` are ENT-level ADXs: an amount and a reason not tied to one
     invoice, which BPR02 includes and no RMR04 does. An entry of `paid` may
     carry a third item, an ADX (amount, reason) inside that invoice's RMR loop.
     """
-    bpr = extra_bpr or seg("BPR", handling, total, "C", "NON", "", "", "", "", "",
+    bpr = extra_bpr or seg("BPR", handling, total, credit_debit, "NON", "", "", "", "", "",
                            "", "", "", "", "", "", settles)
     body = [bpr, seg("TRN", "1", trace),
             seg("N1", "PR", "Acme Distribution Inc"),
@@ -269,6 +269,109 @@ class AnEdifactRemittance(MockServerCase):
         payload = edifact_remittance(summary=False)
         self.assertNotIn("MOA+12:150.00", payload)
         self.assertTrue(self.send_remadv(payload)["accepted"])
+
+
+def _utc_day(offset=0):
+    """The mock's date, from the same UTC clock it reads, moved by `offset` days."""
+    import datetime
+    day = datetime.datetime.now(datetime.timezone.utc).date()
+    return (day + datetime.timedelta(days=offset)).strftime("%Y%m%d")
+
+
+class SentBeforeTheMoneySettles(MockServerCase):
+    """#149's first failure: an advice the payee reconciles before the cash is there."""
+
+    def send(self, settles):
+        status, _h, data = self.post("/edi", x12_remittance(settles=settles),
+                                     headers=X12_TYPE)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def rules(self, data):
+        return [d["rule"] for d in data["transactionSets"][0]["disagreements"]]
+
+    def test_an_advice_that_takes_effect_later_is_found(self):
+        data = self.send(_utc_day(3))
+        self.assertTrue(data["accepted"])
+        self.assertEqual(self.rules(data), ["remitted-before-settlement"])
+        found = data["transactionSets"][0]["disagreements"][0]
+        self.assertIn("cash that has not arrived", found["note"])
+        ack = self.document(ACME, "acknowledgment").groups[0].messages[0]
+        self.assertEqual(ack.find("AK5").get(1), "A")
+
+    def test_one_that_has_taken_effect_is_not(self):
+        self.assertEqual(self.rules(self.send(_utc_day(0))), [])
+        self.assertEqual(self.rules(self.send(_utc_day(-1))), [])
+
+    def test_the_mocks_clock_decides_so_advance_moves_it(self):
+        self.post("/_mock/advance?seconds=%d" % (4 * 86400))
+        self.assertEqual(self.rules(self.send(_utc_day(3))), [])
+
+
+class ThePaymentCameBack(MockServerCase):
+    """#149's second failure: the advice is corrected by a reversal, or it is not."""
+
+    def send(self, trace, credit_debit, total="150.00"):
+        status, _h, data = self.post("/edi", x12_remittance(
+            trace=trace, credit_debit=credit_debit, total=total), headers=X12_TYPE)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def listing(self):
+        _s, _h, rows = self.get("/_mock/remittances?partner=" + ACME)
+        return rows
+
+    def test_a_reversal_marks_the_advice_it_reverses(self):
+        paid = self.send("TR-RETURNED", "C")
+        reversal = self.send("TR-RETURNED", "D")
+        self.assertEqual(reversal["transactionSets"][0]["disagreements"], [])
+        first, second = self.listing()
+        # Both sets are ST02 0001, as they so often are: the archive id is
+        # what tells them apart.
+        self.assertEqual(paid["transactionSets"][0]["control"],
+                         reversal["transactionSets"][0]["control"])
+        self.assertEqual((first["status"], first["reversedBy"]),
+                         ("reversed", second["id"]))
+        self.assertEqual(second["status"], "reversal")
+
+    def test_an_advice_nothing_reversed_is_still_advised(self):
+        self.send("TR-KEPT", "C")
+        self.send("TR-OTHER", "C")
+        self.assertEqual([r["status"] for r in self.listing()], ["advised", "advised"])
+
+    def test_a_reversal_of_nothing_is_found(self):
+        data = self.send("TR-NEVER-ADVISED", "D")
+        self.assertTrue(data["accepted"])
+        [found] = data["transactionSets"][0]["disagreements"]
+        self.assertEqual(found["rule"], "reversal-of-nothing")
+        self.assertIn("TR-NEVER-ADVISED", found["note"])
+
+
+class TheListing(MockServerCase):
+    def test_it_says_what_each_advice_says(self):
+        self.post("/edi", x12_remittance(trace="TR-LIST", settles="20260928"),
+                  headers=X12_TYPE)
+        self.post("/edi", edifact_remittance(number="RA-LIST"), headers=EDIFACT_TYPE)
+        _s, _h, rows = self.get("/_mock/remittances")
+        x12_row, edifact_row = rows
+        self.assertEqual((x12_row["trace"], x12_row["total"], x12_row["creditDebit"],
+                          x12_row["settles"]), ("TR-LIST", "150.00", "C", "2026-09-28"))
+        self.assertEqual([i["invoice"] for i in x12_row["invoices"]],
+                         ["INV8000001", "INV8000002"])
+        self.assertEqual((edifact_row["trace"], edifact_row["total"]),
+                         ("RA-LIST", "150.00"))
+        self.assertEqual([i["paid"] for i in edifact_row["invoices"]],
+                         ["100.00", "50.00"])
+
+    def test_a_refused_advice_is_not_listed(self):
+        self.post("/edi", x12_remittance(handling="D"), headers=X12_TYPE)
+        _s, _h, rows = self.get("/_mock/remittances")
+        self.assertEqual(rows, [])
+
+    def test_it_is_filtered_by_partner(self):
+        self.post("/edi", x12_remittance(), headers=X12_TYPE)
+        _s, _h, rows = self.get("/_mock/remittances?partner=GLOBEX")
+        self.assertEqual(rows, [])
 
 
 class FromASupplier(MockServerCase):
