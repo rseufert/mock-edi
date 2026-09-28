@@ -211,20 +211,40 @@ because the check that the two agree is only worth having while one of them is.
 The order entries appear in under a heading is editorial too; reorder them in
 the same pass.
 
-**A release is one step, taken by one person.** The release pull request,
-the tag, the GitHub Release and the check that PyPI has it follow each other
-without a pause. If you cannot finish, do not merge the release pull request:
-once it merges, `main` says a version exists, and until the tag is pushed
-nothing else does. That gap was once several hours long.
+**A release is one command.** From a clean checkout of a green `main`:
+
+```bash
+python3 tools/release.py 0.6.0
+```
+
+It refuses a dirty tree, a `main` not level with `origin/main`, a head whose
+CI has not passed, or an open pull request labelled with the version. Then it
+branches `release/0.6.0`, assembles the section, bumps `pyproject.toml`, runs
+both checks and the suite, opens the release pull request, waits for its
+checks, merges it with a merge commit, tags the merge commit, publishes the
+GitHub Release with the section as its notes, waits for the Publish workflow,
+and asks PyPI's index directly until the files are listed.
+
+**When it stops, run it again with `--resume`.** It works out how far it got
+from what exists - the version on `main`, an open `Release 0.6.0` pull
+request, the release branch, the tag, the GitHub Release, the files on PyPI -
+not from anything it wrote down, so it finishes a release that stopped for any
+reason, including one somebody started by hand. It stops on purpose once:
+after assembling the section, for the paragraph saying why anyone should
+upgrade. Write it in `CHANGELOG.md` on the `release/0.6.0` branch, then
+`--resume`. Every other stop says what it was doing and what to fix; every
+wait has a limit and names what it was waiting for when it gives up.
+
+It needs git 2.31 or later: older, `git log --first-parent -S` does not look
+at merge commits, so the release commit cannot be found and it stops with
+"no commit on origin/main sets..." rather than tag anything.
+
+It exists because a release done by hand once stopped after the merge:
+`main` said 0.4.0 for several hours with no tag, no release, and 0.3.1 still
+newest on PyPI. `--resume` finishes exactly that state.
 
 `pyproject.toml` is the only place the version is written; `mockedi.__version__`
 reads it back from the installed package metadata.
-
-```bash
-# bump `version` in pyproject.toml, commit, then:
-git tag v0.2.0 && git push origin v0.2.0
-gh release create v0.2.0 --generate-notes     # or write the notes by hand
-```
 
 Publishing the GitHub Release runs the tests, builds the distributions, checks
 that the tag, `pyproject.toml` and the built wheel agree, and uploads to PyPI
