@@ -712,7 +712,18 @@ A change, a cancellation or a restated 850 is about the sender's own order. One
 naming a number the sender holds no order under is answered exactly as one
 against an order that does not exist, in the same words, because a customer
 has no business learning which numbers its competitors use. The same partner
-may send a number again, and it replaces its own order as it always has.
+may send a number again while the order is still only *received*, and it
+replaces its own order as it always has.
+
+Once that order has been acted on - shipped, invoiced, cancelled or refused -
+the number is spoken for, and a fresh 850 under it is refused with an 855 that
+says *order number already in use*. A buyer with a retry bug sends the order
+again as an **original**, not as a change, so nothing above catches it, and
+replacing an order that has already been fulfilled starts the fulfilment
+again: the mock would ship and bill the whole order twice. A change that
+arrives as a restated 850 still works, because `BEG01` says `04` or `05` and
+that is read as the change it is. `--allow-duplicates` turns this off with
+the rest of the duplicate refusals.
 
 The one number a partner cannot reuse is that of an order the mock placed with
 it as a supplier, should it later become a customer: that order is the mock's

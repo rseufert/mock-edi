@@ -174,3 +174,105 @@ class AcknowledgmentsAreNotThemselvesOutstanding(MockServerCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class RestatingAnOrderAlreadyFulfilled(MockServerCase):
+    """A retry bug sends the order again, not a change (#165).
+
+    #44 refuses a replayed *interchange*. A buyer that retries sends a fresh
+    interchange with the same PO number and `BEG01` still `00`, so neither
+    that rule nor the restatement path catches it, and replacing an order the
+    mock has already fulfilled starts the fulfilment again - it ships and
+    bills the whole order twice.
+
+    The line falls at what has *happened*, not at the purpose code alone: an
+    order still only `received` may be restated, which is how a change may
+    legitimately arrive as an 850, and one already acted on may not.
+    """
+
+    def order_again(self, po_number, control="000000091", **kw):
+        return self.send(x12_order(po_number, control=control,
+                                   group=control[-2:], **kw))
+
+    def test_a_fulfilled_order_cannot_be_restated(self):
+        self.send(x12_order("PO-AGAIN"))
+        self.assertEqual(self.order("PO-AGAIN")["status"], "invoiced")
+        again = self.order_again("PO-AGAIN")
+        self.assertEqual([r["reason"] for r in again["refusals"]],
+                         ["order number already in use"])
+        self.assertEqual(again["orders"], [])
+
+    def test_and_it_is_refused_with_an_855_saying_so(self):
+        # An 855 goes back either way, so the assertion is on what it says:
+        # "pick another number" is the only answer the sender can act on.
+        self.send(x12_order("PO-AGAIN-855"))
+        self.mailbox(ACME, leave=False)
+        self.order_again("PO-AGAIN-855")
+        answers = [row for row in self.mailbox(ACME) if row["code"] == "855"]
+        self.assertEqual(len(answers), 1, self.mailbox(ACME))
+        self.assertIn("order number already in use", answers[0]["payload"])
+
+    def test_and_nothing_is_shipped_or_billed_a_second_time(self):
+        # The point of the whole rule.
+        self.send(x12_order("PO-AGAIN-ONCE"))
+        before = self.order("PO-AGAIN-ONCE")
+        self.order_again("PO-AGAIN-ONCE")
+        after = self.order("PO-AGAIN-ONCE")
+        self.assertEqual(len(after["shipments"]), len(before["shipments"]))
+        self.assertEqual(len(after["invoices"]), len(before["invoices"]))
+        self.assertEqual(after["total"], before["total"])
+
+    def test_in_edifact_too(self):
+        self.send(edifact_order("PO-EDI-AGAIN", sender=EURODIS), headers=EDIFACT)
+        again = self.send(edifact_order("PO-EDI-AGAIN", sender=EURODIS,
+                                        control="00000092"), headers=EDIFACT)
+        self.assertEqual([r["reason"] for r in again["refusals"]],
+                         ["order number already in use"])
+
+    def test_a_change_purpose_is_refused_for_being_a_change_not_a_duplicate(self):
+        # The restatement path still owns BEG01 04, and has its own guard:
+        # an invoiced order cannot be changed either. This rule does not
+        # shadow that one, and the sender is told the accurate reason.
+        self.send(x12_order("PO-CHANGED"))
+        again = self.order_again("PO-CHANGED", purpose="04",
+                                 lines=(("WIDGET-001", 60, "12.50"),))
+        self.assertEqual([r["reason"] for r in again["refusals"]],
+                         ["the order has been invoiced and can no longer be changed"])
+
+
+class RestatingAnOrderNothingHasHappenedTo(MockServerCase):
+    """The half that stays: an order still only received may be restated."""
+
+    config_kwargs = {"despatch_delay_ms": 3600000, "invoice_delay_ms": 3600000}
+
+    def test_it_replaces_the_order_as_it_always_has(self):
+        self.send(x12_order("PO-EARLY"))
+        self.assertEqual(self.order("PO-EARLY")["status"], "received")
+        again = self.send(x12_order("PO-EARLY", control="000000093", group="93",
+                                    lines=(("WIDGET-001", 7, "12.50"),)))
+        self.assertEqual(again["refusals"], [])
+        self.assertEqual(again["orders"], ["PO-EARLY"])
+        self.assertEqual([l["quantity"] for l in self.order("PO-EARLY")["lines"]],
+                         ["7"])
+
+    def test_and_a_change_purpose_is_read_as_the_change_it_is(self):
+        # BEG01 04 says "this restates the order", which is the path this
+        # rule must not disturb.
+        self.send(x12_order("PO-EARLY-CHG"))
+        again = self.send(x12_order("PO-EARLY-CHG", control="000000095",
+                                    group="95", purpose="04",
+                                    lines=(("WIDGET-001", 60, "12.50"),)))
+        self.assertEqual(again["refusals"], [])
+        self.assertEqual(self.order("PO-EARLY-CHG")["lines"][0]["quantity"], "60")
+
+
+class AllowingDuplicatesCoversThisToo(MockServerCase):
+    """A flag that says "send me the same thing twice" has to mean it."""
+
+    config_kwargs = {"allow_duplicates": True}
+
+    def test_a_fulfilled_order_may_still_be_restated(self):
+        self.send(x12_order("PO-DUP-OK"))
+        again = self.send(x12_order("PO-DUP-OK", control="000000094", group="94"))
+        self.assertEqual(again["refusals"], [])
+        self.assertEqual(again["orders"], ["PO-DUP-OK"])
