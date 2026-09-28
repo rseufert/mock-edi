@@ -7,7 +7,9 @@ ORDRSP (#126), the places they surface, and the guard that a flow with
 disagreements is acknowledged exactly as a clean one. The 856's rules are
 #151 and the 810's #152.
 """
+import contextlib
 import datetime
+import io
 import os
 import sys
 import unittest
@@ -22,6 +24,7 @@ from mockedi.transactions import Party
 from mockedi.validate import BusinessFinding, MessageReport
 
 from support import MockServerCase, _next_control, parse
+from test_purchase import supplier_sends
 from test_two_mocks import Pair
 
 NORTHWIND = "NORTHWIND"
@@ -303,6 +306,76 @@ class TwoMocks(unittest.TestCase):
         clean, _order = self.run_flow("accept")
         short, _order = self.run_flow("short-ship")
         self.assertEqual(short.verdicts(), clean.verdicts())
+
+
+class WhatShippedAndWasBilled(ReconcilingCase):
+    """856s and 810s are filed now and judged by #151 and #152.
+
+    What is derived from them is here, because those rules stand on it: every
+    consignment and every bill adds to its line, and a consignment that names
+    an item rather than a line number is put on the line that ordered it.
+    """
+
+    def test_two_consignments_and_a_bill_add_up(self):
+        self.says(AS_ORDERED)
+        for _ in range(2):
+            self.send(supplier_sends(schema.DESPATCH, "PO-R"))
+        self.send(supplier_sends(schema.INVOICE, "PO-R"))
+        first = self.order("PO-R")["reconciliation"][0]
+        self.assertEqual((first["confirmed"], first["shipped"], first["billed"]),
+                         ("100", "200", "100"))
+
+    def test_a_consignment_without_line_numbers_finds_its_line(self):
+        despatch = supplier_sends(schema.DESPATCH, "PO-R")
+        # LIN01 carries the line; an 856 that leaves it out names only the item.
+        numbered = [part for part in despatch.split("~") if part.startswith("\nLIN")
+                    or part.startswith("LIN")]
+        self.assertTrue(numbered)
+        for part in numbered:
+            fields = part.split("*")
+            despatch = despatch.replace(part, "*".join([fields[0], ""] + fields[2:]))
+        self.send(despatch)
+        self.assertEqual(self.order("PO-R")["reconciliation"][0]["shipped"], "100")
+
+
+class AFailureWhileReconciling(ReconcilingCase):
+    """A failure partway through leaves nothing behind (#71's rule, here too).
+
+    `claims.record` commits, and is called inside the interchange. That is
+    safe only because the pipeline's connection holds every commit until the
+    interchange is done; this makes the failure real, from SQLite, after the
+    claims are written, and checks that none of them survive it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.conn = self.httpd.mock.conn
+        with self.httpd.mock.lock:
+            self.conn.execute("CREATE TRIGGER boom BEFORE INSERT ON disagreement"
+                              " BEGIN SELECT RAISE(ABORT, 'boom'); END")
+            self.conn.commit()
+
+    def tearDown(self):
+        with self.httpd.mock.lock:
+            self.conn.execute("DROP TRIGGER IF EXISTS boom")
+            self.conn.commit()
+        super().tearDown()
+
+    def snapshot(self):
+        with self.httpd.mock.lock:
+            return [line for line in self.conn.iterdump()
+                    if "request_log" not in line]
+
+    def test_no_claim_and_no_derived_quantity_survives(self):
+        before = self.snapshot()
+        with contextlib.redirect_stderr(io.StringIO()):
+            status, _h, data = self.post(
+                "/edi", answer("PO-R", [line("1", "WIDGET-001", 120), AS_ORDERED[1]]),
+                headers={"Content-Type": "application/edi-x12"})
+        self.assertEqual(status, 500, data)
+        self.assertIn("boom", data["error"])
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.order("PO-R")["reconciliation"][0]["confirmed"], "0")
 
 
 if __name__ == "__main__":
