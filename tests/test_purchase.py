@@ -500,15 +500,26 @@ class ASupplierTurnedCustomer(BuyingCase):
     because the order is the supplier's. It says nothing when the supplier
     itself becomes a customer. What the mock bought from it is still not an
     order it sold to it, and nothing on the seller's side may touch it.
+
+    #146 closed the way in: the PATCH that flips the role is now refused
+    while the partner holds a live order, so this state can no longer be
+    made through the control plane. It can still be *read*, out of a database
+    a mock without that refusal wrote, and the mock opens those in place. So
+    the flip below is done in the database rather than over HTTP - which is
+    the only way it now arises, and exactly the shape it arrives in. These
+    tests are the second line, and the one that has to hold for a file that
+    is already on disk.
     """
 
     def setUp(self):
         super().setUp()
         self.placed(po_number="PO-FLIP")
         self.before = self.order("PO-FLIP")
-        status, _h, data = self.patch("/_mock/partners/NORTHWIND",
-                                      {"role": "customer"})
-        self.assertEqual(status, 200, data)
+        self.httpd.mock.conn.execute(
+            "UPDATE partner SET role = 'customer' WHERE id = ?", (NORTHWIND,))
+        self.httpd.mock.conn.commit()
+        self.assertEqual(self.get("/_mock/partners/" + NORTHWIND)[2]["role"],
+                         "customer")
 
     def unchanged(self):
         after = self.order("PO-FLIP")

@@ -66,6 +66,11 @@ RECEIVED = "received"
 PLACED = "placed"
 DIRECTIONS = (RECEIVED, PLACED)
 
+# An order in one of these is over: nothing more will be sent for it and
+# nothing more can be done to it. Anything else - including a status added
+# later - is live, so the conservative answer is the default (#146).
+FINISHED = ("invoiced", "cancelled", "rejected")
+
 PRICE_CHANGED = "IP"
 UNITS_PER_CARTON = 24
 SHORT_SHIP_FRACTION = Decimal("0.8")
