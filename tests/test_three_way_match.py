@@ -253,9 +253,14 @@ class TwoMocks(unittest.TestCase):
                              ["100", "40"], dialect)
 
     def test_out_of_order_is_billed_before_shipped(self):
+        # This seller reverses the lot - 810, then 856, then 855 - so the
+        # despatch arrives before anything was confirmed as well. That was
+        # always true of the flow; #151 gave the buyer the rule to say it.
         for dialect in ("X12", "EDIFACT"):
             _pair, order = self.run_flow("out-of-order", dialect)
-            self.assertEqual(self.rules(order), ["billed-before-shipped"], dialect)
+            self.assertEqual(self.rules(order),
+                             ["billed-before-shipped", "shipped-before-confirmed"],
+                             dialect)
             # Then resolved: the 856 arrives, and shipped meets billed.
             self.assertEqual([(r["shipped"], r["billed"])
                               for r in order["reconciliation"]],

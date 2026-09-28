@@ -265,7 +265,14 @@ document, and is refused by name rather than half-read; `I` and `C` are the
 remittance uses. An advice is filed under its `TRN02` trace number, or its
 `BGM` number. Whether its total is the sum of what it says was paid is not a
 syntax question - an advice that disagrees with itself can still be read, and
-is acknowledged - so it is left to the business findings, not the 997.
+is acknowledged - so a total that does not add up is a *disagreement* beside
+the 997, with the same shape as a supplier's (`remittance-total-not-parts`),
+in the summary and at `GET /_mock/disagreements`. `BPR02` is checked against
+the `RMR04` amounts plus any `ADX` directly in an `ENT` loop - a deduction
+not tied to one invoice, which is part of what was paid - and the `MOA+12`
+after `UNS` against each `DOC`'s `MOA+12`. That is how a remittance still
+claiming an invoice whose payment came back gets caught before a supplier
+starts dunning for it.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
@@ -609,6 +616,18 @@ The rules for an 855, ORDRSP or 865, each one comparison naming both numbers:
 | `confirmed-less` | less than was ordered, a refused line included; the sentence says whether the supplier gave a reason, or claimed `IA` |
 | `price-differs` | a price other than the ordered one, even with `IP` |
 | `substituted` | a different item on the line, without `IS` |
+
+And for an 856 or DESADV, against the order and the 855, with quantities
+counted across every consignment so far rather than one document at a time,
+because a split delivery is ordinary:
+
+| Rule | When |
+| --- | --- |
+| `shipped-before-confirmed` | no 855 has arrived for the order |
+| `shipped-unknown-line` | a consignment against a line the order does not have |
+| `shipped-ambiguous-item` | a consignment with no line number naming an item the order has on more than one line; it is counted against none of them |
+| `shipped-more-than-confirmed` | more shipped than the latest 855 confirmed, a line confirmed at nothing included |
+| `shipped-more-than-ordered` | more shipped than was ordered; both quantity rules can fire on one line, since exceeding a promise and exceeding an order are different things to say |
 
 And for an 810 or INVOIC, the three-way match against the order, the 855 and
 the 856:
@@ -959,6 +978,7 @@ mockedi/validate.py      checking a document against the dictionary
 mockedi/ack.py           turning findings into a 997 or a CONTRL
 mockedi/reconcile.py     reading an acknowledgment for something we sent
 mockedi/claims.py        what a supplier says about a placed order, and where it disagrees
+mockedi/remittance.py    what a remittance advice says that does not add up
 mockedi/timeline.py      one order's whole conversation, in order
 mockedi/testing.py       the client a test drives the mock with
 mockedi/transactions.py  business documents in, business documents out

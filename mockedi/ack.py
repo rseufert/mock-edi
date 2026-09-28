@@ -295,7 +295,9 @@ def explain(report: InterchangeReport) -> List[str]:
         for finding in item.disagreements:
             # Business, not syntax: said as such, so nobody reads one as the
             # reason a set was rejected.
-            lines.append("  disagrees with the order%s: %s (%s)" % (
+            # A remittance names no order, and disagrees with itself.
+            lines.append("  disagrees%s%s: %s (%s)" % (
+                " with the order" if finding.po_number else "",
                 " at line %s" % finding.line if finding.line else "",
                 finding.note, finding.rule))
     return lines

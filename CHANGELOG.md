@@ -1055,6 +1055,7 @@ documents a real one sends.
 [#117]: https://github.com/rseufert/mock-edi/issues/117
 [#127]: https://github.com/rseufert/mock-edi/issues/127
 [#149]: https://github.com/rseufert/mock-edi/issues/149
+[#156]: https://github.com/rseufert/mock-edi/issues/156
 
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.5.0...HEAD
 [0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
