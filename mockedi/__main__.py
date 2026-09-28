@@ -154,14 +154,27 @@ def exposure_warning(config) -> str:
             "bind 127.0.0.1." % (config.host or "every interface"))
 
 
+def line_buffer(stream) -> None:
+    """Make a stream deliver each line as it is written.
+
+    Piped or run in a container, a block-buffered stream swallows the banner
+    and the access log until the buffer fills. A stream that cannot be
+    reconfigured - a plain StringIO under a test runner, say - is left as it
+    is rather than being an error at startup.
+    """
+    try:
+        stream.reconfigure(line_buffering=True)
+    except (AttributeError, ValueError):  # pragma: no cover - odd stream
+        pass
+
+
 def main(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    # Line-buffer the output: piped or run in a container, a block-buffered
-    # stdout swallows the banner and the access log until the buffer fills.
-    try:
-        sys.stdout.reconfigure(line_buffering=True)
-    except (AttributeError, ValueError):  # pragma: no cover - odd stdout
-        pass
+    # Both streams: before 3.9 a piped stderr is block-buffered too, and the
+    # exposure warning below is followed by serve_forever, so the buffer is
+    # never filled and the warning never arrives (#136).
+    line_buffer(sys.stdout)
+    line_buffer(sys.stderr)
 
     config = config_from_args(args)
     try:

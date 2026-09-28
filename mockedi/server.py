@@ -1498,6 +1498,19 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
     mock: Mock
 
+    def server_bind(self):
+        # HTTPServer.server_bind reverse-resolves the address it just bound to
+        # fill in `server_name`. Nothing here reads it, and on a host whose
+        # resolver does not answer for 0.0.0.0 that lookup is the whole of a
+        # minute before the port opens - by which time the Dockerfile's health
+        # check, the CI smoke job and testing.Mock.start have all given up and
+        # reported a start that failed for no visible reason (#136). The
+        # address the socket reports is what the lookup was approximating.
+        socketserver.TCPServer.server_bind(self)
+        host, port = self.server_address[:2]
+        self.server_name = host
+        self.server_port = port
+
     def server_close(self):
         # `socketserver` calls this from its own constructor when binding
         # fails, before `make_server` has attached the mock - so asking for
