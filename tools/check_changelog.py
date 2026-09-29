@@ -445,6 +445,27 @@ def release(version: str) -> int:
     return 0
 
 
+MERGE_SUBJECT = re.compile(r"^Merge pull request #(\d+) from \S")
+
+
+def merged_pull_request(subject: str) -> str:
+    """The number of the pull request a merge commit's subject names, or "".
+
+    A push to `main` carries no pull request in its event, so the workflow
+    has no labels to pass and the entry rule fires on a change that was
+    already excused by `no changelog` (#193). The merge commit says which
+    pull request it came from, and this reads it.
+
+    Deliberately narrow. Anything that is not GitHub's own merge subject -
+    a hand-written commit, a revert, "Merge branch 'main'" - returns "", and
+    the caller then has no labels and the check fails as it did before.
+    Failing loudly is the point: a lookup that quietly passed would be worse
+    than the bug it replaces.
+    """
+    match = MERGE_SUBJECT.match(subject.strip())
+    return match.group(1) if match else ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", default="", help="revision to compare against, e.g. origin/main")
@@ -452,7 +473,15 @@ def main() -> int:
     parser.add_argument("--release", metavar="X.Y.Z", default="",
                         help="assemble %s/ into a dated section and delete it"
                              % FRAGMENTS)
+    parser.add_argument("--merged-pull-request", metavar="SUBJECT", default="",
+                        help="print the pull request number a merge commit's"
+                             " subject names, and nothing else")
     args = parser.parse_args()
+    if args.merged_pull_request:
+        found = merged_pull_request(args.merged_pull_request)
+        if found:
+            print(found)
+        return 0
     if args.release:
         return release(args.release)
     labels = [label.strip() for label in args.labels.split(",") if label.strip()]

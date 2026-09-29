@@ -249,3 +249,76 @@ class TheRealReleaseRoundTrips(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TheMergeCommitAPushCameFrom(unittest.TestCase):
+    """Reading a pull request number off a merge subject (#193).
+
+    A push to `main` carries no pull request in its event, so the workflow
+    has no labels and `no changelog` excuses nothing - which turned `main`
+    red on a correctly labelled refactor. The merge commit names the pull
+    request, and this is the parsing, kept here rather than in a `sed` in
+    the workflow because its failure mode is silence.
+    """
+
+    def test_githubs_own_merge_subject(self):
+        self.assertEqual(
+            tool.merged_pull_request(
+                "Merge pull request #191 from rseufert/refactor/route-table"),
+            "191")
+
+    def test_the_number_is_taken_whole(self):
+        # Not the first digit, and not the issue number in a branch name.
+        self.assertEqual(
+            tool.merged_pull_request(
+                "Merge pull request #1234 from rseufert/fix/5678-thing"),
+            "1234")
+
+    def test_surrounding_whitespace_does_not_matter(self):
+        self.assertEqual(
+            tool.merged_pull_request(
+                "  Merge pull request #7 from a/b\n"), "7")
+
+    def test_what_must_not_match(self):
+        # Each of these would give the wrong labels, or labels from the
+        # wrong pull request. Returning nothing makes the check fail, which
+        # is the safe direction.
+        for subject in (
+                "Merge branch 'main' into feat/order-key",
+                'Revert "Merge pull request #191 from rseufert/x"',
+                "Put the 860's and 865's dates where 004010 says",
+                "Merge pull request #191",          # no branch: not the form
+                "Merge pull request from rseufert/x",
+                "See merge pull request #191 from rseufert/x",
+                "",
+        ):
+            self.assertEqual(tool.merged_pull_request(subject), "",
+                             "matched %r" % subject)
+
+    def test_the_flag_prints_the_number_and_nothing_else(self):
+        import io
+        import contextlib
+        said = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["check_changelog.py", "--merged-pull-request",
+                    "Merge pull request #191 from rseufert/x"]
+        try:
+            with contextlib.redirect_stdout(said):
+                code = tool.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual((code, said.getvalue()), (0, "191\n"))
+
+    def test_and_prints_nothing_for_a_subject_it_does_not_know(self):
+        import io
+        import contextlib
+        said = io.StringIO()
+        argv = sys.argv
+        sys.argv = ["check_changelog.py", "--merged-pull-request",
+                    "Merge branch 'main' into x"]
+        try:
+            with contextlib.redirect_stdout(said):
+                code = tool.main()
+        finally:
+            sys.argv = argv
+        self.assertEqual((code, said.getvalue()), (0, ""))
