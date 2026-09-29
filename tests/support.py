@@ -257,12 +257,17 @@ def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS
 def x12_change(po_number="4500000001", lines=(("1", "CA", 60, "12.50"),),
                sender=ACME, receiver="MOCKEDI", control=None,
                group=None, purpose="04", sequence="1",
-               ordered_on="20260924", qualifier="VP", skus=None):
-    """An 860. Each line is `(line_number, change_code, quantity, price)`."""
+               ordered_on="20260924", changed_on="20260925",
+               qualifier="VP", skus=None):
+    """An 860. Each line is `(line_number, change_code, quantity, price)`.
+
+    BCH06 is the order's date and BCH11 the change's, as 004010 says; BCH10
+    is the acknowledgment's, so an 860 leaves it empty (#178).
+    """
     control = control or _next_control(9)
     group = group or control.lstrip("0") or "1"
-    body = [seg("BCH", purpose, "SA", po_number, "", sequence, "20260925", "",
-                "", "", ordered_on)]
+    body = [seg("BCH", purpose, "SA", po_number, "", sequence, ordered_on, "",
+                "", "", "", changed_on)]
     names = skus or {}
     for number, action, quantity, price in lines:
         body.append(seg("POC", number, action, str(quantity), "", "EA",
