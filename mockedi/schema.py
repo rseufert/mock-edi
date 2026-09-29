@@ -1135,7 +1135,10 @@ MESSAGE_FUNCTION_CODES = {  # 1225
 RESPONSE_TYPE_CODES = {    # 4343 - the verdict an ORDRSP carries
     "AB": "Message acknowledgement",
     "AC": "Acknowledge - with detail and change",
-    "AI": "Acknowledge - with detail, no change",
+    # D.96A's own names. AI is not X12's AD: "with detail, no change" is
+    # 4343's AD too, and AI acknowledges only the changes (#181).
+    "AD": "Acknowledge - with detail, no change",
+    "AI": "Acknowledge only changes",
     "AP": "Accepted",
     "RE": "Rejected",
 }

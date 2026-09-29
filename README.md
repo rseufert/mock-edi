@@ -402,7 +402,7 @@ what the mock did.
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
 | `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
-| `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RJ`). |
+| `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
 | `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
 | `duplicate-invoice` | customer | Sends the invoice twice with the same invoice number, as a partner with a retry bug does. |
 | `strict` | customer or supplier | Rejects a transaction set for any finding, not only a fatal one. |

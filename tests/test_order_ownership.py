@@ -145,7 +145,7 @@ class TwoCustomersOneNumber(OwnedCase):
     def test_the_second_is_answered_as_any_order_is(self):
         self.second()
         message = self.document(GLOBEX, "response").groups[0].messages[0]
-        self.assertNotEqual(message.find("BAK").get(2), "RJ")
+        self.assertNotEqual(message.find("BAK").get(2), "RD")
         # Decided under GLOBEX's own behaviour, short-ship: 6 of the 7.
         self.assertEqual([(item.get(1), item.get(2)) for item in message.segments
                           if item.tag == "ACK"], [("IQ", "6")])
