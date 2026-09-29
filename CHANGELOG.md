@@ -1011,6 +1011,7 @@ documents a real one sends.
 [#152]: https://github.com/rseufert/mock-edi/issues/152
 [#158]: https://github.com/rseufert/mock-edi/issues/158
 [#163]: https://github.com/rseufert/mock-edi/issues/163
+[#172]: https://github.com/rseufert/mock-edi/issues/172
 [#141]: https://github.com/rseufert/mock-edi/issues/141
 [#29]: https://github.com/rseufert/mock-edi/issues/29
 [#30]: https://github.com/rseufert/mock-edi/issues/30

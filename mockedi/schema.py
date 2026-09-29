@@ -1287,125 +1287,125 @@ UNS = Segment("UNS", "Section Control", (
 
 BGM = Segment("BGM", "Beginning of Message", (
     _c("C002", "Document/Message Name", (
-        _e("1001", "Document name code", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
+        _e("1001", "Document/message name, coded", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
-        _e("1000", "Document name", "AN", 1, 35),
+        _e("1000", "Document/message name", "AN", 1, 35),
     )),
     _c("C106", "Document/Message Identification", (
-        _e("1004", "Document identifier", "AN", 1, 35),
+        _e("1004", "Document/message number", "AN", 1, 35),
         _e("1056", "Version identifier", "AN", 1, 9),
         _e("1060", "Revision identifier", "AN", 1, 6),
     )),
-    _e("1225", "Message function code", "ID", 1, 3, OPTIONAL, MESSAGE_FUNCTION_CODES),
-    _e("4343", "Response type code", "ID", 1, 3, OPTIONAL, RESPONSE_TYPE_CODES),
+    _e("1225", "Message function, coded", "ID", 1, 3, OPTIONAL, MESSAGE_FUNCTION_CODES),
+    _e("4343", "Response type, coded", "ID", 1, 3, OPTIONAL, RESPONSE_TYPE_CODES),
 ), "What kind of document this is, its number, and - in a response - the verdict.")
 
 E_DTM = Segment("DTM", "Date/Time/Period", (
     _c("C507", "Date/Time/Period", (
-        _e("2005", "Date or time or period function code qualifier", "ID", 1, 3,
+        _e("2005", "Date/time/period qualifier", "ID", 1, 3,
            MANDATORY, EDIFACT_DATE_QUALIFIERS),
-        _e("2380", "Date or time or period value", "AN", 1, 35),
-        _e("2379", "Date or time or period format code", "ID", 1, 3, OPTIONAL,
+        _e("2380", "Date/time/period", "AN", 1, 35),
+        _e("2379", "Date/time/period format qualifier", "ID", 1, 3, OPTIONAL,
            EDIFACT_DATE_FORMATS),
     ), MANDATORY),
 ), "A date, its meaning and its format - EDIFACT states the format explicitly.")
 
 RFF = Segment("RFF", "Reference", (
     _c("C506", "Reference", (
-        _e("1153", "Reference code qualifier", "ID", 1, 3, MANDATORY,
+        _e("1153", "Reference qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_REFERENCE_QUALIFIERS),
         # an..35 in D.96A, which is the directory these messages declare.
         # 70 is D01B's, and accepting a 40-character reference here means a
         # translator that only knows D.96A rejects what the mock waved
         # through - the lie discovered in production.
-        _e("1154", "Reference identifier", "AN", 1, 35),
-        _e("1156", "Document line identifier", "AN", 1, 6),
-        _e("4000", "Reference version identifier", "AN", 1, 35),
+        _e("1154", "Reference number", "AN", 1, 35),
+        _e("1156", "Line number", "AN", 1, 6),
+        _e("4000", "Reference version number", "AN", 1, 35),
         _e("1060", "Revision identifier", "AN", 1, 6),
     ), MANDATORY),
 ))
 
 NAD = Segment("NAD", "Name and Address", (
-    _e("3035", "Party function code qualifier", "ID", 1, 3, MANDATORY,
+    _e("3035", "Party qualifier", "ID", 1, 3, MANDATORY,
        EDIFACT_PARTY_QUALIFIERS),
     _c("C082", "Party Identification Details", (
-        _e("3039", "Party identifier", "AN", 1, 35, MANDATORY),
+        _e("3039", "Party id. identification", "AN", 1, 35, MANDATORY),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     )),
     _c("C058", "Name and Address", (
-        _e("3124", "Name and address description", "AN", 1, 35, MANDATORY),
+        _e("3124", "Name and address line", "AN", 1, 35, MANDATORY),
     )),
     _c("C080", "Party Name", (
         _e("3036", "Party name", "AN", 1, 35, MANDATORY),
         _e("3036", "Party name", "AN", 1, 35),
-        _e("3045", "Party name format code", "AN", 1, 3),
+        _e("3045", "Party name format, coded", "AN", 1, 3),
     )),
     _c("C059", "Street", (
-        _e("3042", "Street and number or post office box identifier", "AN", 1, 35, MANDATORY),
-        _e("3042", "Street and number or post office box identifier", "AN", 1, 35),
+        _e("3042", "Street and number/p.o. box", "AN", 1, 35, MANDATORY),
+        _e("3042", "Street and number/p.o. box", "AN", 1, 35),
     )),
     _e("3164", "City name", "AN", 1, 35),
     _e("3229", "Country sub-entity identification", "AN", 1, 9),
-    _e("3251", "Postal identification code", "AN", 1, 17),
-    _e("3207", "Country identifier", "AN", 1, 3),
+    _e("3251", "Postcode identification", "AN", 1, 17),
+    _e("3207", "Country, coded", "AN", 1, 3),
 ), "A party and its address, in one segment - where X12 uses N1/N3/N4.")
 
 CUX = Segment("CUX", "Currencies", (
     _c("C504", "Currency Details", (
-        _e("6347", "Currency usage code qualifier", "ID", 1, 3, MANDATORY,
+        _e("6347", "Currency details qualifier", "ID", 1, 3, MANDATORY,
            {"2": "Reference currency", "3": "Target currency", "4": "Invoicing currency"}),
-        _e("6345", "Currency identification code", "ID", 3, 3, OPTIONAL, CURRENCY_CODES),
-        _e("6343", "Currency type code qualifier", "ID", 1, 3),
+        _e("6345", "Currency, coded", "ID", 3, 3, OPTIONAL, CURRENCY_CODES),
+        _e("6343", "Currency qualifier", "ID", 1, 3),
         _e("6348", "Currency rate base", "N0", 1, 4),
     )),
     _c("C504", "Currency Details", (
-        _e("6347", "Currency usage code qualifier", "ID", 1, 3, MANDATORY),
-        _e("6345", "Currency identification code", "ID", 3, 3),
+        _e("6347", "Currency details qualifier", "ID", 1, 3, MANDATORY),
+        _e("6345", "Currency, coded", "ID", 3, 3),
     )),
-    _e("5402", "Currency exchange rate", "R", 1, 12),
+    _e("5402", "Rate of exchange", "R", 1, 12),
 ))
 
 PAT = Segment("PAT", "Payment Terms Basis", (
-    _e("4279", "Payment terms type code qualifier", "ID", 1, 3, MANDATORY,
+    _e("4279", "Payment terms type qualifier", "ID", 1, 3, MANDATORY,
        {"1": "Basic", "3": "Fixed date", "20": "Penalty terms", "22": "Discount"}),
     _c("C110", "Payment Terms", (
-        _e("4277", "Payment terms description identifier", "AN", 1, 17, MANDATORY),
+        _e("4277", "Terms of payment identification", "AN", 1, 17, MANDATORY),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
-        _e("4276", "Payment terms description", "AN", 1, 35),
+        _e("4276", "Terms of payment", "AN", 1, 35),
     )),
     _c("C112", "Terms/Time Information", (
-        _e("2475", "Payment time reference code", "ID", 1, 3, MANDATORY),
-        _e("2009", "Time relation code", "ID", 1, 3),
-        _e("2151", "Type of period code", "ID", 1, 3),
+        _e("2475", "Payment time reference, coded", "ID", 1, 3, MANDATORY),
+        _e("2009", "Time relation, coded", "ID", 1, 3),
+        _e("2151", "Type of period, coded", "ID", 1, 3),
         _e("2152", "Number of periods", "N0", 1, 3),
     )),
 ))
 
 LIN_E = Segment("LIN", "Line Item", (
-    _e("1082", "Line item identifier", "AN", 1, 6),
-    _e("1229", "Action request/notification description code", "ID", 1, 3,
+    _e("1082", "Line item number", "AN", 1, 6),
+    _e("1229", "Action request/notification, coded", "ID", 1, 3,
        OPTIONAL, EDIFACT_LINE_ACTIONS),
     _c("C212", "Item Number Identification", (
-        _e("7140", "Item identifier", "AN", 1, 35),
-        _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
+        _e("7140", "Item number", "AN", 1, 35),
+        _e("7143", "Item number type, coded", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     )),
 ), "One line, and the item number the parties agreed to identify it by.")
 
 PIA = Segment("PIA", "Additional Product ID", (
-    _e("4347", "Product identifier code qualifier", "ID", 1, 3, MANDATORY,
+    _e("4347", "Product id. function qualifier", "ID", 1, 3, MANDATORY,
        {"1": "Additional identification", "5": "Product identification"}),
     # C212 as LIN declares it, rather than the shorter version this segment
     # used to carry: a composite is one thing in the standard, and the two
     # definitions disagreeing meant PIA02's last two components went
     # unchecked while LIN03's were checked.
     _c("C212", "Item Number Identification", (
-        _e("7140", "Item identifier", "AN", 1, 35, MANDATORY),
-        _e("7143", "Item type identification code", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
+        _e("7140", "Item number", "AN", 1, 35, MANDATORY),
+        _e("7143", "Item number type, coded", "ID", 1, 3, OPTIONAL, EDIFACT_ITEM_TYPES),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
     ), MANDATORY),
@@ -1415,12 +1415,12 @@ PIA = Segment("PIA", "Additional Product ID", (
    full_width=6)
 
 IMD = Segment("IMD", "Item Description", (
-    _e("7077", "Description format code", "ID", 1, 3, OPTIONAL,
+    _e("7077", "Item description type, coded", "ID", 1, 3, OPTIONAL,
        {"A": "Free-form short description", "B": "Code and text", "C": "Code (from industry list)",
         "E": "Free-form", "F": "Free-form"}),
-    _e("7081", "Item characteristic code", "ID", 1, 3),
+    _e("7081", "Item characteristic, coded", "ID", 1, 3),
     _c("C273", "Item Description", (
-        _e("7009", "Item description code", "AN", 1, 17),
+        _e("7009", "Item description identification", "AN", 1, 17),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("7008", "Item description", "AN", 1, 256),
@@ -1431,40 +1431,40 @@ IMD = Segment("IMD", "Item Description", (
 
 QTY = Segment("QTY", "Quantity", (
     _c("C186", "Quantity Details", (
-        _e("6063", "Quantity type code qualifier", "ID", 1, 3, MANDATORY,
+        _e("6063", "Quantity qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_QUANTITY_QUALIFIERS),
         _e("6060", "Quantity", "R", 1, 35, MANDATORY),
-        _e("6411", "Measurement unit code", "AN", 1, 8),
+        _e("6411", "Measure unit qualifier", "AN", 1, 8),
     ), MANDATORY),
 ), "A quantity, named by what kind it is - ordered, confirmed, despatched, invoiced.")
 
 PRI = Segment("PRI", "Price Details", (
     _c("C509", "Price Information", (
-        _e("5125", "Price code qualifier", "ID", 1, 3, MANDATORY, EDIFACT_PRICE_QUALIFIERS),
-        _e("5118", "Price amount", "R", 1, 15),
-        _e("5375", "Price type code", "ID", 1, 3),
-        _e("5387", "Price specification code", "ID", 1, 3),
-        _e("5284", "Unit price basis quantity", "R", 1, 9),
-        _e("6411", "Measurement unit code", "AN", 1, 8),
+        _e("5125", "Price qualifier", "ID", 1, 3, MANDATORY, EDIFACT_PRICE_QUALIFIERS),
+        _e("5118", "Price", "R", 1, 15),
+        _e("5375", "Price type, coded", "ID", 1, 3),
+        _e("5387", "Price type qualifier", "ID", 1, 3),
+        _e("5284", "Unit price basis", "R", 1, 9),
+        _e("6411", "Measure unit qualifier", "AN", 1, 8),
     )),
 ))
 
 MOA = Segment("MOA", "Monetary Amount", (
     _c("C516", "Monetary Amount", (
-        _e("5025", "Monetary amount type code qualifier", "ID", 1, 3, MANDATORY,
+        _e("5025", "Monetary amount type qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_AMOUNT_QUALIFIERS),
         _e("5004", "Monetary amount", "R", 1, 35),
-        _e("6345", "Currency identification code", "ID", 3, 3),
-        _e("6343", "Currency type code qualifier", "ID", 1, 3),
-        _e("4405", "Status description code", "ID", 1, 3),
+        _e("6345", "Currency, coded", "ID", 3, 3),
+        _e("6343", "Currency qualifier", "ID", 1, 3),
+        _e("4405", "Status, coded", "ID", 1, 3),
     ), MANDATORY),
 ), "An amount, named by what it is an amount of - unlike X12's positional TDS.")
 
 FTX = Segment("FTX", "Free Text", (
-    _e("4451", "Text subject code qualifier", "ID", 1, 3, MANDATORY, EDIFACT_TEXT_QUALIFIERS),
-    _e("4453", "Free text function code", "ID", 1, 3),
+    _e("4451", "Text subject qualifier", "ID", 1, 3, MANDATORY, EDIFACT_TEXT_QUALIFIERS),
+    _e("4453", "Text function, coded", "ID", 1, 3),
     _c("C107", "Text Reference", (
-        _e("4441", "Free text description code", "AN", 1, 17, MANDATORY),
+        _e("4441", "Free text, coded", "AN", 1, 17, MANDATORY),
     )),
     _c("C108", "Text Literal", (
         _e("4440", "Free text", "AN", 1, 512, MANDATORY),
@@ -1473,19 +1473,19 @@ FTX = Segment("FTX", "Free Text", (
 ), "Prose. In a response it carries the reason a line was changed or refused.")
 
 TDT = Segment("TDT", "Transport Information", (
-    _e("8051", "Transport stage code qualifier", "ID", 1, 3, MANDATORY,
+    _e("8051", "Transport stage qualifier", "ID", 1, 3, MANDATORY,
        {"20": "Main carriage transport", "10": "Pre-carriage", "30": "On-carriage"}),
-    _e("8028", "Means of transport journey identifier", "AN", 1, 17),
+    _e("8028", "Conveyance reference number", "AN", 1, 17),
     _c("C220", "Mode of Transport", (
-        _e("8067", "Transport mode name code", "ID", 1, 3),
-        _e("8066", "Transport mode name", "AN", 1, 17),
+        _e("8067", "Mode of transport, coded", "ID", 1, 3),
+        _e("8066", "Mode of transport", "AN", 1, 17),
     )),
     _c("C228", "Transport Means", (
-        _e("8179", "Transport means description code", "AN", 1, 8),
-        _e("8178", "Transport means description", "AN", 1, 17),
+        _e("8179", "Type of means of transport identification", "AN", 1, 8),
+        _e("8178", "Type of means of transport", "AN", 1, 17),
     )),
     _c("C040", "Carrier", (
-        _e("3127", "Carrier identifier", "AN", 1, 17),
+        _e("3127", "Carrier identification", "AN", 1, 17),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("3128", "Carrier name", "AN", 1, 35),
@@ -1493,18 +1493,18 @@ TDT = Segment("TDT", "Transport Information", (
 ))
 
 CPS = Segment("CPS", "Consignment Packing Sequence", (
-    _e("7164", "Hierarchical structure level identifier", "AN", 1, 12, MANDATORY),
-    _e("7166", "Hierarchical structure parent identifier", "AN", 1, 12),
-    _e("7075", "Packaging level code", "ID", 1, 3),
+    _e("7164", "Hierarchical id. number", "AN", 1, 12, MANDATORY),
+    _e("7166", "Hierarchical parent id.", "AN", 1, 12),
+    _e("7075", "Packaging level, coded", "ID", 1, 3),
 ), "The despatch advice's answer to HL: a packing hierarchy by parent pointer.")
 
 PAC = Segment("PAC", "Package", (
-    _e("7224", "Package quantity", "N0", 1, 8),
+    _e("7224", "Number of packages", "N0", 1, 8),
     _c("C531", "Packaging Details", (
-        _e("7075", "Packaging level code", "ID", 1, 3),
+        _e("7075", "Packaging level, coded", "ID", 1, 3),
     )),
     _c("C202", "Package Type", (
-        _e("7065", "Package type description code", "AN", 1, 17),
+        _e("7065", "Type of packages identification", "AN", 1, 17),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("7064", "Type of packages", "AN", 1, 35),
@@ -1513,11 +1513,11 @@ PAC = Segment("PAC", "Package", (
 
 CNT = Segment("CNT", "Control Total", (
     _c("C270", "Control", (
-        _e("6069", "Control total type code qualifier", "ID", 1, 3, MANDATORY,
+        _e("6069", "Control qualifier", "ID", 1, 3, MANDATORY,
            {"1": "Algebraic total of quantity values", "2": "Number of line items in message",
             "4": "Number of lines in message", "11": "Total quantity"}),
-        _e("6066", "Control total quantity", "R", 1, 18, MANDATORY),
-        _e("6411", "Measurement unit code", "AN", 1, 8),
+        _e("6066", "Control value", "R", 1, 18, MANDATORY),
+        _e("6411", "Measure unit qualifier", "AN", 1, 8),
     ), MANDATORY),
 ))
 
@@ -1583,25 +1583,25 @@ UCD = Segment("UCD", "Data Element Error Indication", (
 
 DOC = Segment("DOC", "Document/Message Details", (
     _c("C002", "Document/Message Name", (
-        _e("1001", "Document name code", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
+        _e("1001", "Document/message name, coded", "ID", 1, 3, OPTIONAL, DOCUMENT_NAME_CODES),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
-        _e("1000", "Document name", "AN", 1, 35),
+        _e("1000", "Document/message name", "AN", 1, 35),
     ), MANDATORY),
     _c("C503", "Document/Message Details", (
-        _e("1004", "Document identifier", "AN", 1, 35),
-        _e("1373", "Document status code", "ID", 1, 3),
+        _e("1004", "Document/message number", "AN", 1, 35),
+        _e("1373", "Document/message status, coded", "ID", 1, 3),
         _e("1366", "Document/message source", "AN", 1, 35),
         _e("3453", "Language, coded", "ID", 1, 3),
     )),
-    _e("3153", "Communication medium type code", "ID", 1, 3),
-    _e("1220", "Document copies required quantity", "N0", 1, 2),
-    _e("1218", "Document originals required quantity", "N0", 1, 2),
+    _e("3153", "Communication channel identifier, coded", "ID", 1, 3),
+    _e("1220", "Number of copies of document required", "N0", 1, 2),
+    _e("1218", "Number of originals of document required", "N0", 1, 2),
 ), "One document the remittance covers - an invoice, 380, by its number.")
 
 AJT = Segment("AJT", "Adjustment Details", (
-    _e("4465", "Adjustment reason description code", "ID", 1, 3, MANDATORY),
-    _e("1082", "Line item identifier", "AN", 1, 6),
+    _e("4465", "Adjustment reason, coded", "ID", 1, 3, MANDATORY),
+    _e("1082", "Line item number", "AN", 1, 6),
 ), "Why what is paid differs from what was invoiced. Carried, not judged.")
 
 
