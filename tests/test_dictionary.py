@@ -227,7 +227,42 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
     description, which is where TDS's four 610s put it.
     """
 
-    def declarations(self, dialect, named=False):
+    @staticmethod
+    def every_segment(dialect, version=""):
+        """Every Segment `schema.py` declares for a dialect, reachable or not (#170).
+
+        Walking `schema.SETS` missed the envelope - ISA, GS, GE, IEA, TA1,
+        UNB, UNZ - which no set contains, and the 005010 revisions, which
+        only `schema.REVISIONS` holds. So the module is read instead, and a
+        segment declared tomorrow is covered without anyone adding it here.
+
+        Collected by identity, since LIN_E, E_DTM and friends are bound to
+        more than one name. A Segment does not say its dialect: `schema.py`
+        declares every X12 segment before its EDIFACT section, which UNB
+        opens, and `test_the_dialect_split_agrees_with_the_sets` holds that
+        to what every set says. Only for segments a set uses, though: an EDIFACT
+        segment no set uses yet, declared above UNB, would be checked as X12,
+        and a clash it reported would be false - loud, not silent, so the fix
+        is to move the declaration below UNB, not to change this. The 005010 revisions are left out of the
+        base set - 005010 widens REF02, which is a version, not a clash - and
+        checked as 005010, in place of the segments they revise.
+        """
+        order, seen = [], set()
+        for value in vars(schema).values():
+            if isinstance(value, schema.Segment) and id(value) not in seen:
+                seen.add(id(value))
+                order.append(value)
+        cut = next(index for index, segment in enumerate(order)
+                   if segment is schema.UNB)
+        revised = {id(segment) for overrides in schema.REVISIONS.values()
+                   for segment in overrides.values()}
+        chosen = [segment for index, segment in enumerate(order)
+                  if (index < cut) == (dialect == "X12")
+                  and id(segment) not in revised]
+        overrides = schema.REVISIONS.get((dialect, version), {})
+        return [overrides.get(segment.tag, segment) for segment in chosen]
+
+    def declarations(self, dialect, version="", named=False):
         found = {}
 
         def walk(elements, tag):
@@ -240,36 +275,83 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
                     found.setdefault(element.ref, {}).setdefault(
                         key, set()).add(tag)
 
-        def segments(children):
-            for child in children:
-                if isinstance(child, schema.Use):
-                    yield child.segment
-                else:
-                    yield from segments(child.children)
-
-        for (set_dialect, _code), definition in schema.SETS.items():
-            if set_dialect == dialect:
-                for segment in segments(definition.children):
-                    walk(segment.elements, segment.tag)
+        for segment in self.every_segment(dialect, version):
+            walk(segment.elements, segment.tag)
         return found
 
+    def clashes(self, dialect, version="", named=False):
+        return {ref: ways for ref, ways in
+                self.declarations(dialect, version, named).items()
+                if len(ways) > 1}
+
     def test_x12(self):
-        self.assertEqual({ref: ways for ref, ways in self.declarations("X12").items()
-                          if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("X12"), {})
+
+    def test_x12_005010(self):
+        # An expected failure until #173 widened 127 wherever 005010 uses it.
+        self.assertEqual(self.clashes("X12", "005010"), {})
+
+    def test_a_40_character_bak08_is_fine_at_005010_and_not_at_004010(self):
+        from mockedi.envelope import seg
+        seller_order = "S" * 40
+
+        def findings(version):
+            body = [seg("BAK", "00", "AD", "PO-1", "20260924", "", "", "",
+                        seller_order), seg("CTT", "0")]
+            interchange = x12.parse(x12.render(x12.wrap(
+                [x12.message("855", "0001", body)], "ACME", "MOCKEDI", "1", "1",
+                "PR", version=version,
+                interchange_version="00501" if version == "005010" else "00401")))
+            return [e.note for m in validate.validate(interchange).messages
+                    for s in m.segments for e in s.elements]
+
+        self.assertEqual(findings("005010"), [])
+        self.assertTrue(any("BAK08" in note or "long" in note
+                            for note in findings("004010")), findings("004010"))
 
     def test_edifact(self):
-        self.assertEqual({ref: ways for ref, ways in
-                          self.declarations("EDIFACT").items() if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("EDIFACT"), {})
+
+    def test_the_envelope_is_covered(self):
+        x12_tags = {s.tag for s in self.every_segment("X12")}
+        edifact_tags = {s.tag for s in self.every_segment("EDIFACT")}
+        self.assertLessEqual({"ISA", "GS", "GE", "IEA", "TA1"}, x12_tags)
+        self.assertLessEqual({"UNB", "UNZ"}, edifact_tags)
+        self.assertFalse({"ISA", "GS", "IEA"} & edifact_tags)
+        self.assertFalse({"UNB", "UNZ", "UNH"} & x12_tags)
+
+    def test_every_segment_a_set_uses_is_among_them(self):
+        # Reading the module must reach at least what walking the sets did.
+        for dialect in schema.DIALECTS:
+            checked = {id(s) for s in self.every_segment(dialect)}
+            for (set_dialect, _code), definition in schema.SETS.items():
+                if set_dialect == dialect:
+                    for use, _loop in definition.uses():
+                        self.assertIn(id(use.segment), checked,
+                                      "%s %s" % (dialect, use.tag))
+
+    def test_the_dialect_split_agrees_with_the_sets(self):
+        # The one assumption every_segment makes, held to the sets: a segment
+        # an X12 set uses is on the X12 side of UNB, and so on.
+        for dialect in schema.DIALECTS:
+            mine = {id(s) for s in self.every_segment(dialect)}
+            for (set_dialect, _code), definition in schema.SETS.items():
+                if set_dialect != dialect:
+                    for use, _loop in definition.uses():
+                        self.assertNotIn(id(use.segment), mine,
+                                         "%s filed as %s" % (use.tag, dialect))
+
+    def test_the_005010_revisions_are_checked_as_005010(self):
+        revised = [s for s in self.every_segment("X12", "005010") if s.tag == "REF"]
+        self.assertEqual([s.element(2).max_len for s in revised], [50])
+        base = [s for s in self.every_segment("X12") if s.tag == "REF"]
+        self.assertEqual([s.element(2).max_len for s in base], [30])
 
     def test_x12_names(self):
-        self.assertEqual({ref: ways for ref, ways in
-                          self.declarations("X12", named=True).items()
-                          if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("X12", named=True), {})
 
     def test_edifact_names(self):
-        self.assertEqual({ref: ways for ref, ways in
-                          self.declarations("EDIFACT", named=True).items()
-                          if len(ways) > 1}, {})
+        self.assertEqual(self.clashes("EDIFACT", named=True), {})
 
     def test_373_is_date_wherever_it_appears(self):
         # Checked against two 004010 sources, not memory: a published table
@@ -288,6 +370,137 @@ class EachElementNumberMeansOneThing(unittest.TestCase):
         self.assertEqual(set(edifact_ways["3453"]), {("ID", 1, 3)})
         self.assertEqual(set(edifact_ways["1366"]), {("AN", 1, 35)})
         self.assertEqual(set(self.declarations("X12")["362"]), {("N2", 1, 10)})
+
+
+class EdifactNamesAreD96A(unittest.TestCase):
+    """Every EDIFACT data element is named as the D.96A directory names it (#172).
+
+    The dictionary declares D:96A:UN, and #167 made its representations
+    agree with that directory. The names were still largely later wording -
+    "Document name code" where D.96A says "Document/message name, coded" -
+    which is a quiet untruth in `GET /_mock/dictionary`, the thing a guide
+    is built against. Taken from the D.96A segment tables at
+    stylusstudio.com/edifact/D96A/ and edifactory.de/edifact/directory/D96A/,
+    which agree on every element here. Service elements (00xx, S0xx) belong
+    to the syntax standard rather than the directory and are not listed;
+    nor is BGM's C106, which D.96A's BGM does not have.
+    """
+    D96A = {
+        "1000": "Document/message name",
+        "1001": "Document/message name, coded",
+        "1004": "Document/message number",
+        "1082": "Line item number",
+        "1131": "Code list qualifier",
+        "1153": "Reference qualifier",
+        "1154": "Reference number",
+        "1156": "Line number",
+        "1218": "Number of originals of document required",
+        "1220": "Number of copies of document required",
+        "1225": "Message function, coded",
+        "1227": "Calculation sequence indicator, coded",
+        "1229": "Action request/notification, coded",
+        "1230": "Allowance or charge number",
+        "1366": "Document/message source",
+        "1373": "Document/message status, coded",
+        "2005": "Date/time/period qualifier",
+        "2009": "Time relation, coded",
+        "2151": "Type of period, coded",
+        "2152": "Number of periods",
+        "2379": "Date/time/period format qualifier",
+        "2380": "Date/time/period",
+        "2475": "Payment time reference, coded",
+        "3035": "Party qualifier",
+        "3036": "Party name",
+        "3039": "Party id. identification",
+        "3042": "Street and number/p.o. box",
+        "3045": "Party name format, coded",
+        "3055": "Code list responsible agency, coded",
+        "3124": "Name and address line",
+        "3127": "Carrier identification",
+        "3128": "Carrier name",
+        "3153": "Communication channel identifier, coded",
+        "3164": "City name",
+        "3207": "Country, coded",
+        "3229": "Country sub-entity identification",
+        "3251": "Postcode identification",
+        "3453": "Language, coded",
+        "4000": "Reference version number",
+        "4276": "Terms of payment",
+        "4277": "Terms of payment identification",
+        "4279": "Payment terms type qualifier",
+        "4343": "Response type, coded",
+        "4347": "Product id. function qualifier",
+        "4405": "Status, coded",
+        "4440": "Free text",
+        "4441": "Free text, coded",
+        "4451": "Text subject qualifier",
+        "4453": "Text function, coded",
+        "4465": "Adjustment reason, coded",
+        "4471": "Settlement, coded",
+        "5004": "Monetary amount",
+        "5025": "Monetary amount type qualifier",
+        "5118": "Price",
+        "5125": "Price qualifier",
+        "5189": "Charge/allowance description, coded",
+        "5284": "Unit price basis",
+        "5375": "Price type, coded",
+        "5387": "Price type qualifier",
+        "5402": "Rate of exchange",
+        "5463": "Allowance or charge qualifier",
+        "6060": "Quantity",
+        "6063": "Quantity qualifier",
+        "6066": "Control value",
+        "6069": "Control qualifier",
+        "6343": "Currency qualifier",
+        "6345": "Currency, coded",
+        "6347": "Currency details qualifier",
+        "6348": "Currency rate base",
+        "6411": "Measure unit qualifier",
+        "7008": "Item description",
+        "7009": "Item description identification",
+        "7064": "Type of packages",
+        "7065": "Type of packages identification",
+        "7075": "Packaging level, coded",
+        "7077": "Item description type, coded",
+        "7081": "Item characteristic, coded",
+        "7140": "Item number",
+        "7143": "Item number type, coded",
+        "7160": "Special service",
+        "7161": "Special services, coded",
+        "7164": "Hierarchical id. number",
+        "7166": "Hierarchical parent id.",
+        "7224": "Number of packages",
+        "8028": "Conveyance reference number",
+        "8051": "Transport stage qualifier",
+        "8066": "Mode of transport",
+        "8067": "Mode of transport, coded",
+        "8178": "Type of means of transport",
+        "8179": "Type of means of transport identification",
+    }
+
+    def test_every_data_element_in_the_directory_segments(self):
+        seen = {}
+
+        def walk(elements):
+            for element in elements:
+                if element.composite:
+                    walk(element.components)
+                elif element.ref in self.D96A:
+                    seen.setdefault(element.ref, set()).add(element.name)
+
+        for (dialect, _code), definition in schema.SETS.items():
+            if dialect != "EDIFACT":
+                continue
+            stack = list(definition.children)
+            while stack:
+                child = stack.pop()
+                if isinstance(child, schema.Use):
+                    walk(child.segment.elements)
+                else:
+                    stack.extend(child.children)
+        self.assertEqual(set(seen), set(self.D96A))
+        self.assertEqual({ref: names for ref, names in seen.items()
+                          if names != {self.D96A[ref]}}, {})
 
 
 class GeneratedDocumentsAreValid(unittest.TestCase):
