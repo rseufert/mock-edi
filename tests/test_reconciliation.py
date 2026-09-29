@@ -391,3 +391,81 @@ class AFailureWhileReconciling(ReconcilingCase):
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)
+
+
+class AnAnswerCannotTakeBackWhatShipped(ReconcilingCase):
+    """#168's floor, and the three cases that decide its shape.
+
+    A later answer cannot un-confirm what an earlier one confirmed and the
+    supplier has already shipped against. It is deliberately not the blunter
+    rule "confirmed is at least what shipped", which would quietly answer the
+    question `shipped-more-than-confirmed` exists to ask.
+    """
+
+    def shipped(self, rows=None):
+        return self.send(supplier_sends(schema.DESPATCH, "PO-R"))
+
+    def confirmed_now(self):
+        return [row["confirmed"] for row in self.order("PO-R")["reconciliation"]]
+
+    def test_a_later_refusal_does_not_undo_a_shipped_confirmation(self):
+        self.says(AS_ORDERED)
+        self.shipped()
+        self.says([line("1", "WIDGET-001", 0, status="IR", reason="withdrawn",
+                        ordered=100),
+                   line("2", "BRKT-050", 0, status="IR", reason="withdrawn",
+                        price="4.15", ordered=40)])
+        self.assertEqual(self.confirmed_now()[0], "100")
+
+    def test_but_it_only_holds_as_far_as_what_shipped(self):
+        # Nothing shipped, so nothing is held: a supplier withdrawing an
+        # order it has not yet acted on has withdrawn it.
+        self.says(AS_ORDERED)
+        self.says([line("1", "WIDGET-001", 0, status="IR", reason="withdrawn",
+                        ordered=100),
+                   line("2", "BRKT-050", 0, status="IR", reason="withdrawn",
+                        price="4.15", ordered=40)])
+        self.assertEqual(self.confirmed_now(), ["0", "0"])
+
+    def test_and_over_shipping_does_not_confirm_itself(self):
+        # The blunt version of this rule would say 200 here, and hide the
+        # very thing #151's shipped-more-than-confirmed is for.
+        self.says(AS_ORDERED)
+        self.shipped()
+        self.shipped()
+        order = self.order("PO-R")["reconciliation"][0]
+        self.assertEqual((order["confirmed"], order["shipped"]), ("100", "200"))
+
+    def test_a_consignment_after_a_correction_counts_for_the_correction(self):
+        """Found in review: "already shipped against" means *already*.
+
+        855 confirms 100, a second corrects it to 50, and only then does an
+        856 ship 100. Nothing had shipped when the correction arrived, so the
+        correction stands - and the order has to agree with the 856's own
+        finding, which was judged against 50.
+        """
+        self.says(AS_ORDERED)
+        self.says([line("1", "WIDGET-001", 50), AS_ORDERED[1]])
+        summary = self.send(supplier_sends(schema.DESPATCH, "PO-R"))
+        self.assertEqual(self.confirmed_now()[0], "50")
+        self.assertEqual([(d["rule"], d["expected"]) for d in
+                          summary["disagreements"]],
+                         [("shipped-more-than-confirmed", "50")])
+
+    def test_the_line_speaks_with_the_answer_that_still_stands(self):
+        """A row cannot say both "confirmed 100" and "refused"."""
+        self.says(AS_ORDERED)
+        self.shipped()
+        self.says([line("1", "WIDGET-001", 0, status="IR", reason="withdrawn",
+                        ordered=100),
+                   line("2", "BRKT-050", 0, status="IR", reason="withdrawn",
+                        price="4.15", ordered=40)])
+        first = self.order("PO-R")["reconciliation"][0]
+        self.assertEqual((first["confirmed"], first["status"]), ("100", "IA"))
+
+    def test_a_first_answer_is_never_floored(self):
+        # With one answer there is nothing to take back, whatever shipped.
+        self.shipped()
+        self.says([line("1", "WIDGET-001", 0, status="IR", reason="none left",
+                        ordered=100), AS_ORDERED[1]])
+        self.assertEqual(self.confirmed_now()[0], "0")
