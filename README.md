@@ -1023,7 +1023,8 @@ mockedi/server.py        HTTP: the handler, the mock's state, and the control pl
 mockedi/routes/__init__.py  the route table every endpoint registers with
 mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
 mockedi/routes/index.py     the index page
-mockedi/routes/control.py   /_mock, handed to the handler until #182 moves it
+mockedi/routes/control.py   health, state, reset; the rest of /_mock until #182 moves it
+mockedi/routes/validate.py  /_mock/validate and the dictionary served as data
 ```
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how they fit together;

@@ -34,15 +34,12 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (charsets, claims, db, delivery, documents, drop, partners,
-               pipeline, profiles, reconcile, remittance, routes, schema,
-               timeline, transactions, validate)
-from .envelope import EdiSyntaxError
+from . import (claims, db, delivery, documents, drop, partners, pipeline,
+               profiles, reconcile, remittance, routes, timeline, transactions)
 from .routes import BadQuery
 from .routes import first as _first, flag as _flag, json_body as _json_body
 from .routes import limit as _limit, number as _number, split as _split
 from .routes import segments as _segments
-from .routes.transport import findings as _findings
 
 JSON = "application/json; charset=utf-8"
 TEXT = "text/plain; charset=utf-8"
@@ -318,7 +315,10 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
     # What a route reads: the method it is answered as (GET for a HEAD), the
-    # query and the body of the request being answered.
+    # query and the body of the request being answered. They are the
+    # handler's, which answers one request at a time on its own connection's
+    # thread and sets them afresh for each; nothing on another thread - the
+    # courier, the drop poller - may read them.
     method = ""
     query: Dict[str, List[str]] = {}
     body = b""
@@ -394,53 +394,6 @@ class Handler(BaseHTTPRequestHandler):
         head = parts[0] if parts else ""
         rest = parts[1:]
         conn = self.mock.conn
-
-        if head == "health":
-            return self._json(200, {
-                "status": "ok", "as2Id": self.config.as2_id,
-                "started": db.stamp(self.mock.started),
-                "partners": _count(conn, "partner"),
-                "queued": _count(conn, "outbound", "status = 'ready'"),
-            })
-
-        if head == "state":
-            return self._json(200, {
-                "as2Id": self.config.as2_id,
-                "database": self.config.db_path,
-                "counts": {name: _count(conn, name) for name in (
-                    "partner", "catalog", "interchange", "transaction_set",
-                    "purchase_order", "order_line", "shipment", "invoice",
-                    "outbound", "scheduled", "mdn")},
-                "scheduled": {
-                    "waiting": _count(conn, "scheduled", "done_at = ''"),
-                    "done": _count(conn, "scheduled", "done_at != ''")},
-                "queue": {status: _count(conn, "outbound", "status = '%s'" % status)
-                          for status in ("pending", "ready", "delivered",
-                                         "collected", "failed")},
-                "delays": {
-                    "acknowledgment": self.config.ack_delay_ms,
-                    "response": self.config.response_delay_ms,
-                    "despatch": self.config.despatch_delay_ms,
-                    "invoice": self.config.invoice_delay_ms},
-                "courierFailures": list(self.mock.courier.failures[-10:]),
-                "retention": {
-                    "keepRequests": self.config.keep_requests,
-                    "retentionDays": self.config.retention_days,
-                    "pruned": dict(self.mock.pruned)},
-            })
-
-        if head == "behaviours":
-            return self._json(200, partners.BEHAVIOURS)
-
-        if head == "dictionary":
-            profile = None
-            partner_id = _first(query, "partner")
-            if partner_id:
-                if partners.get(conn, partner_id) is None:
-                    return self._json(404, {"error": "no partner %r" % partner_id})
-                profile = profiles.load(conn, partner_id)
-            return self._json(200, _dictionary(rest, _first(query, "version"),
-                                               profile))
 
         if head == "partners":
             return self._partners(method, rest, query, body)
@@ -679,22 +632,6 @@ class Handler(BaseHTTPRequestHandler):
                       " disposition, mic, mode, url, status, at FROM mdn"
                       " ORDER BY id DESC LIMIT ?", (_limit(query),)))
 
-        if head == "requests":
-            return self._json(200, db.rows(
-                conn, "SELECT * FROM request_log ORDER BY id DESC LIMIT ?",
-                (_limit(query),)))
-
-        if head == "validate":
-            if method != "POST":
-                return self._text(405, "POST an interchange to validate it")
-            return self._validate_only(body, _first(query, "partner"))
-
-        if head == "reset":
-            if method != "POST":
-                return self._text(405, "POST to reset")
-            self.mock.reset()
-            return self._json(200, {"reset": True})
-
         return self._json(404, {
             "error": "no control endpoint %r" % head,
             "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
@@ -778,57 +715,6 @@ class Handler(BaseHTTPRequestHandler):
             removed = profiles.remove(conn, identifier)
             return self._json(200 if removed else 404, {"deleted": removed})
         return self._text(405, "GET, PUT or DELETE a partner's profile")
-
-    def _validate_only(self, body: bytes, partner_id: str = "") -> Tuple[int, int]:
-        """Check an interchange and say what is wrong, changing nothing.
-
-        The mock's validator, without the trading partner attached: useful
-        while writing a mapping, when what you want is the findings and not
-        four documents in a mailbox.
-        """
-        from . import edifact, x12
-        from .envelope import sniff
-        http_charset = charsets.from_content_type(self.headers.get("Content-Type", ""))
-        view = body.decode(charsets.BYTES)
-        try:
-            dialect = sniff(view)
-            parts = x12.split(view) if dialect == "X12" else edifact.split(view)
-            texts = []
-            for part in parts:
-                raw = part.encode(charsets.BYTES)
-                texts.append(charsets.decode(
-                    raw, charsets.declared(dialect, raw, http_charset)))
-            interchanges = [x12.parse(text) if dialect == "X12"
-                            else edifact.parse(text) for text in texts]
-        except EdiSyntaxError as error:
-            return self._json(422, {"parsed": False, "error": str(error)})
-        # `?partner=ACME` applies that partner's guide as well, which is the
-        # check worth running before sending it anything.
-        profile = profiles.load(self.mock.conn, partner_id) if partner_id else None
-        reports = [validate.validate(item, profile=profile) for item in interchanges]
-        interchange, report = interchanges[0], reports[0]
-        from . import ack
-        return self._json(200, {
-            "parsed": True,
-            "dialect": dialect,
-            "sender": interchange.sender,
-            "receiver": interchange.receiver,
-            "control": interchange.control,
-            "clean": all(item.clean for item in reports),
-            "groupCode": report.group_code,
-            # As with the plain endpoint: the keys beside this one describe the
-            # first interchange, and this describes each of them.
-            "interchanges": [
-                {"control": item.control, "sender": item.sender,
-                 "receiver": item.receiver, "clean": each.clean,
-                 "explain": ack.explain(each)}
-                for item, each in zip(interchanges, reports)],
-            "messages": [
-                {"code": m.code, "control": m.control, "kind": m.kind,
-                 "accepted": m.accepted, "findings": _findings(m)}
-                for m in report.messages],
-            "explain": ack.explain(report),
-        })
 
     # -- responses
 
@@ -1043,11 +929,6 @@ class Handler(BaseHTTPRequestHandler):
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:
-    sql = "SELECT COUNT(*) AS n FROM %s%s" % (table, " WHERE " + where if where else "")
-    return int(conn.execute(sql).fetchone()["n"])
-
-
 def _which_order(conn, po_number: str, query, direction: str = ""):
     """The order a URL names: `(row, None)`, or `(None, (status, body))`.
 
@@ -1105,74 +986,6 @@ def _document_params(query: Dict[str, List[str]]) -> List[str]:
     return [_first(query, name) for name in
             ("direction", "partner", "kind", "code", "reference")
             if _first(query, name)]
-
-
-def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
-    """The dictionary, served as data.
-
-    Everything the mock validates against is derived from `schema.py`, so
-    publishing it is not documentation that can go stale - it is the rules
-    themselves.  A mapping tool can read this instead of a PDF.
-
-    `?version=005010` serves a set as that version has it; without it, the
-    set as declared. `?partner=ACME` serves it as that partner's guide
-    narrows it, and names the guide.
-    """
-    if not rest:
-        return {
-            "dialects": list(schema.DIALECTS),
-            "versions": {dialect: list(versions)
-                         for dialect, versions in schema.VERSIONS.items()},
-            "transactionSets": [
-                {"dialect": item.dialect, "code": item.code, "name": item.name,
-                 "kind": schema.kind_of(item.dialect, item.code),
-                 "group": item.group, "version": item.version,
-                 "purpose": item.purpose,
-                 "segments": list(item.known_tags())}
-                for item in schema.SETS.values()],
-        }
-    dialect = rest[0].upper()
-    if len(rest) == 1:
-        return {"dialect": dialect,
-                "transactionSets": sorted(code for d, code in schema.SETS
-                                          if d == dialect)}
-    if version and not schema.supports(dialect, version):
-        return {"error": "no %s dictionary at version %s; this mock speaks %s"
-                         % (dialect, version,
-                            " and ".join(schema.VERSIONS.get(dialect, ())))}
-    definition = schema.lookup(dialect, rest[1].upper(), version)
-    if definition is None:
-        return {"error": "no transaction set %s/%s" % (dialect, rest[1])}
-    narrowed = profile.narrow(definition) if profile is not None else None
-    guide = profile.label if narrowed is not None else None
-    definition = narrowed or definition
-    return {
-        "dialect": definition.dialect, "code": definition.code,
-        "name": definition.name, "purpose": definition.purpose,
-        "group": definition.group, "version": definition.version,
-        "profile": guide,
-        "segments": [
-            {"tag": use.tag, "name": use.segment.name, "requirement": use.req,
-             "maxUse": use.max_use, "loop": loop.id if loop else "",
-             "purpose": use.segment.purpose,
-             # `width` is how wide the standard makes the segment; the
-             # elements below are the ones this mock checks. Where they differ,
-             # the positions in between are carried and not validated - so a
-             # guide that uses one of them is not wrong, it is untested.
-             "width": use.segment.width,
-             "checkedTo": len(use.segment.elements),
-             "elements": [
-                 {"position": position, "ref": element.ref, "name": element.name,
-                  "type": element.type, "requirement": element.req,
-                  "length": "%d/%d" % (element.min_len, element.max_len),
-                  "codes": sorted(element.codes) if element.codes else None,
-                  "components": [
-                      {"ref": c.ref, "name": c.name, "requirement": c.req,
-                       "codes": sorted(c.codes) if c.codes else None}
-                      for c in element.components] or None}
-                 for position, element in enumerate(use.segment.elements, start=1)]}
-            for use, loop in definition.uses()],
-    }
 
 
 # ---------------------------------------------------------------------------
