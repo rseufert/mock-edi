@@ -1019,7 +1019,11 @@ mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
 mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
-mockedi/server.py        HTTP: AS2, /edi, and the control plane
+mockedi/server.py        HTTP: the handler, the mock's state, and the control plane
+mockedi/routes/__init__.py  the route table every endpoint registers with
+mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
+mockedi/routes/index.py     the index page
+mockedi/routes/control.py   /_mock, handed to the handler until #182 moves it
 ```
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how they fit together;
@@ -1041,7 +1045,7 @@ suite says so.
 
 Add a segment or a transaction set in `schema.py` and it is parsed, validated
 and published in `/_mock/dictionary` without touching anything else. Add a
-*behaviour* in `documents.decide()`. Add an endpoint in `server.py`.
+*behaviour* in `documents.decide()`. Add an endpoint in `mockedi/routes/`.
 [CONTRIBUTING.md](CONTRIBUTING.md) says where each kind of change goes and what
 a good pull request carries.
 

@@ -13,14 +13,16 @@ Three ways in, on purpose:
 The control plane is the part that makes failures reproducible.  Telling a
 partner to short-ship is one PATCH; getting a real trading partner to do it on
 demand is a support ticket and a fortnight.
+
+Which function answers which path is the route table's business, in
+`mockedi.routes`; this module reads the request, authenticates it, holds the
+lock while a route runs, and logs the answer.
 """
 from __future__ import annotations
 
-import dataclasses
 import datetime
 import hmac
 import json
-import math
 import random
 import socketserver
 import sqlite3
@@ -28,15 +30,19 @@ import sys
 import threading
 import time
 import traceback
-import urllib.parse
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (as2, charsets, claims, db, delivery, documents, drop, partners,
-               pipeline, profiles, reconcile, remittance, schema, timeline,
-               transactions, validate)
+from . import (charsets, claims, db, delivery, documents, drop, partners,
+               pipeline, profiles, reconcile, remittance, routes, schema,
+               timeline, transactions, validate)
 from .envelope import EdiSyntaxError
+from .routes import BadQuery
+from .routes import first as _first, flag as _flag, json_body as _json_body
+from .routes import limit as _limit, number as _number, split as _split
+from .routes import segments as _segments
+from .routes.transport import findings as _findings
 
 JSON = "application/json; charset=utf-8"
 TEXT = "text/plain; charset=utf-8"
@@ -311,24 +317,29 @@ class Handler(BaseHTTPRequestHandler):
             self.send_header("Connection", "close")
         self.end_headers()
 
+    # What a route reads: the method it is answered as (GET for a HEAD), the
+    # query and the body of the request being answered.
+    method = ""
+    query: Dict[str, List[str]] = {}
+    body = b""
     _head = False
 
     def _handle(self, method: str) -> None:
         started = time.time()
-        path, query = _split(self.path)
+        path, self.query = _split(self.path)
         self._head = method == "HEAD"
         self._begin_log(method, path)
-        route_method = "GET" if self._head else method
+        self.method = "GET" if self._head else method
         status = 500
         written = 0
-        body = b""
+        self.body = b""
         try:
-            body = self._read_body()
+            self.body = self._read_body()
         except BodyError as error:
             self.close_connection = True
             status, written = self._text(error.status, str(error))
             return
-        self._bytes_in = len(body)
+        self._bytes_in = len(self.body)
         try:
             if self.config.latency_ms:
                 time.sleep(self.config.latency_ms / 1000.0)
@@ -341,7 +352,7 @@ class Handler(BaseHTTPRequestHandler):
                     500, "injected failure (--error-rate %s)" % self.config.error_rate)
             else:
                 with self.mock.lock:
-                    status, written = self._route(route_method, path, query, body)
+                    status, written = self._route(self.method, path)
         except BrokenPipeError:          # pragma: no cover - client hung up
             return
         except BadQuery as error:
@@ -366,163 +377,14 @@ class Handler(BaseHTTPRequestHandler):
             # sent. See _log_before_answering.
             self._log_before_answering(status, written)
 
-    def _route(self, method: str, path: str, query: Dict[str, List[str]],
-               body: bytes) -> Tuple[int, int]:
-        if path in ("/as2", "/as2/", "/as2/receive"):
-            if method != "POST":
-                return self._text(405, "POST an interchange here")
-            return self._as2_inbound(body)
-        if path in ("/as2/mdn", "/as2/mdn/"):
-            if method != "POST":
-                return self._text(405, "POST an MDN here")
-            return self._as2_mdn(body)
-        if path in ("/edi", "/edi/"):
-            if method != "POST":
-                return self._text(405, "POST an interchange here")
-            return self._plain_inbound(body, query)
-        if path.startswith("/_mock"):
-            return self._control(method, path, query, body)
-        if path in ("/", "/index.html"):
-            return self._html(200, _index_page(self.mock, self._base()))
-        return self._json(404, {"error": "no route for %s %s" % (method, path),
-                                "try": ["/as2", "/edi", "/_mock/health", "/"]})
-
-    # -- inbound
-
-    def _as2_inbound(self, body: bytes) -> Tuple[int, int]:
-        inbound = as2.read(self.headers)
-        if not inbound.receiver and not inbound.sender:
-            return self._text(400, "this endpoint expects AS2 headers; POST to "
-                                   "/edi for a plain interchange")
-
-        if inbound.secured:
-            # Said plainly rather than mangled: see the note in as2.py.
-            return self._mdn(inbound, body, as2.UNSUPPORTED,
-                             "This mock does not implement S/MIME. Send the "
-                             "payload unsigned and unencrypted, or use an AS2 "
-                             "gateway in front of it.")
-        if (self.config.strict_receiver and inbound.receiver
-                and inbound.receiver != self.config.as2_id):
-            return self._mdn(inbound, body, as2.ERROR,
-                             "AS2-To is %r; this mock answers to %r."
-                             % (inbound.receiver, self.config.as2_id))
-        if inbound.async_url and not delivery.permitted(inbound.async_url,
-                                                        self.config.deliver_to):
-            # `/as2` cannot require authentication and still be AS2, so
-            # `Receipt-Delivery-Option` is a URL an unauthenticated sender
-            # chose. With --deliver-to set, one outside it is refused here
-            # rather than posted to - and refused in an MDN the sender gets
-            # now, because the address it named is the one we will not use.
-            return self._mdn(dataclasses.replace(inbound, async_url=""),
-                             body, as2.FAILED,
-                             "Receipt-Delivery-Option names %s, which is not a "
-                             "host this mock is allowed to post to. It was "
-                             "started with --deliver-to, and the MDN is "
-                             "returned here instead." % inbound.async_url)
-        if inbound.wants_signed_receipt:
-            # RFC 4130: a receiver that cannot produce the signed receipt the
-            # sender required answers with a failure, not with an unsigned
-            # success the sender has already said it will not accept. The
-            # interchange is not read, for the same reason a refused envelope
-            # is not: the sender has to send it again knowing the terms.
-            return self._mdn(inbound, body, as2.FAILED,
-                             "This mock does not sign: it has no S/MIME and no "
-                             "certificate, and a signature it cannot produce is "
-                             "not one it will pretend to. Ask for "
-                             "signed-receipt-protocol=optional, or put a real "
-                             "AS2 gateway in front of it.")
-
-        mic = as2.mic(body, inbound.micalg) if body else ""
-        receipts = self.mock.pipeline.receive(
-            body, transport="as2", message_id=inbound.message_id, mic=mic,
-            charset=charsets.from_content_type(self.headers.get("Content-Type", "")))
-        if not any(receipt.ok for receipt in receipts):
-            return self._mdn(inbound, body, as2.ERROR, receipts[0].error)
-
-        # One MDN answers the whole payload, so it is only "processed" when
-        # every interchange in it was: a file half of which was refused has
-        # not been processed, whatever the other half did.
-        explanation = _delivery_text(receipts)
-        disposition = (as2.PROCESSED if all(r.accepted for r in receipts)
-                       else as2.ERROR)
-        return self._mdn(inbound, body, disposition, explanation)
-
-    def _mdn(self, inbound: as2.Inbound, body: bytes, disposition: str,
-             explanation: str) -> Tuple[int, int]:
-        """Answer an AS2 POST: an MDN now, an MDN later, or neither."""
-        if not self.config.mdn or not inbound.wants_mdn:
-            return self._text(200, explanation)
-
-        headers, payload = as2.build_mdn(
-            inbound, body, self.config.as2_id, disposition, explanation,
-            user_agent="mock-edi", moment=self.mock.pipeline.now())
-        partner = inbound.sender or "unknown"
-
-        if inbound.asynchronous:
-            cursor = self.mock.conn.execute(
-                "INSERT INTO mdn (partner, direction, original_id, message_id,"
-                " disposition, mic, mode, url, status, payload, headers, at)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
-                (partner, "out", inbound.message_id, headers["Message-ID"],
-                 disposition, as2.mic(body, inbound.micalg) if body else "",
-                 "async", inbound.async_url, "pending",
-                 payload.decode("utf-8", "replace"),
-                 json.dumps(headers), db.now()))
-            self.mock.conn.commit()
-            self.mock.courier.enqueue_mdn(int(cursor.lastrowid))
-            return self._text(202, "MDN will be posted to %s" % inbound.async_url)
-
-        self.mock.conn.execute(
-            "INSERT INTO mdn (partner, direction, original_id, message_id,"
-            " disposition, mic, mode, status, payload, at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (partner, "out", inbound.message_id, headers["Message-ID"],
-             disposition, as2.mic(body, inbound.micalg) if body else "",
-             "sync", "sent", payload.decode("utf-8", "replace"), db.now()))
-        self.mock.conn.commit()
-        return self._raw(200, payload, headers)
-
-    def _as2_mdn(self, body: bytes) -> Tuple[int, int]:
-        """A partner acknowledging something the mock sent."""
-        inbound = as2.read(self.headers)
-        fields = as2.parse_mdn(body)
-        self.mock.conn.execute(
-            "INSERT INTO mdn (partner, direction, original_id, message_id,"
-            " disposition, mic, mode, status, payload, at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?)",
-            (inbound.sender or "unknown", "in",
-             fields.get("Original-Message-ID", ""), inbound.message_id,
-             fields.get("Disposition", ""), fields.get("Received-Content-MIC", ""),
-             "async", "received", body.decode("utf-8", "replace"), db.now()))
-        self.mock.conn.commit()
-        return self._json(200, {"recorded": True, "fields": fields})
-
-    def _plain_inbound(self, body: bytes, query) -> Tuple[int, int]:
-        receipts = self.mock.pipeline.receive(
-            body, transport="http",
-            charset=charsets.from_content_type(self.headers.get("Content-Type", "")))
-        if len(receipts) == 1 and not receipts[0].ok:
-            return self._json(422, {"accepted": False, "error": receipts[0].error})
-
-        # A payload holding several interchanges answers with the same keys it
-        # always has, summed over the lot, and `interchanges` holds them one by
-        # one. For the usual payload of one that is the same object twice, so
-        # nothing reading this needs to know about the case until it meets it.
-        each = [_interchange_summary(receipt) for receipt in receipts]
-        summary = dict(each[0])
-        summary.update({
-            "accepted": all(item["accepted"] for item in each),
-            "orders": [po for item in each for po in item["orders"]],
-            "transactionSets": [t for item in each for t in item["transactionSets"]],
-            "queued": [q for item in each for q in item["queued"]],
-            "acknowledged": [a for item in each for a in item["acknowledged"]],
-            "changed": [c for item in each for c in item["changed"]],
-            "refusals": [r for item in each for r in item["refusals"]],
-            "filed": [f for item in each for f in item["filed"]],
-            "disagreements": [d for item in each for d in item["disagreements"]],
-            "interchanges": each,
-        })
-        return self._json(200, summary)
+    def _route(self, method: str, path: str) -> Tuple[int, int]:
+        found, arguments = routes.find(method, path)
+        if found is None:
+            return self._json(404, {"error": "no route for %s %s" % (method, path),
+                                    "try": ["/as2", "/edi", "/_mock/health", "/"]})
+        if found.method not in (routes.ANY, method):
+            return self._text(405, found.refuse)
+        return found.function(self, *arguments)
 
     # -- the control plane
 
@@ -1040,7 +902,7 @@ class Handler(BaseHTTPRequestHandler):
             if self._read_line() not in (b"\r\n", b"\n"):
                 raise BodyError(400, "a chunk is not followed by CRLF")
 
-    def _raw(self, status: int, payload: bytes,
+    def raw(self, status: int, payload: bytes,
              headers: Optional[Dict[str, str]] = None) -> Tuple[int, int]:
         self._log_before_answering(status, 0 if self._head else len(payload))
         self.send_response(status)
@@ -1057,16 +919,19 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(payload)
         return status, len(payload)
 
-    def _json(self, status: int, payload: Any) -> Tuple[int, int]:
+    def json(self, status: int, payload: Any) -> Tuple[int, int]:
         body = json.dumps(payload, indent=2, default=str).encode("utf-8")
-        return self._raw(status, body, {"Content-Type": JSON})
+        return self.raw(status, body, {"Content-Type": JSON})
 
-    def _text(self, status: int, message: str) -> Tuple[int, int]:
-        return self._raw(status, (message + "\n").encode("utf-8"),
+    def text(self, status: int, message: str) -> Tuple[int, int]:
+        return self.raw(status, (message + "\n").encode("utf-8"),
                          {"Content-Type": TEXT})
 
-    def _html(self, status: int, markup: str) -> Tuple[int, int]:
-        return self._raw(status, markup.encode("utf-8"), {"Content-Type": HTML})
+    def html(self, status: int, markup: str) -> Tuple[int, int]:
+        return self.raw(status, markup.encode("utf-8"), {"Content-Type": HTML})
+
+    # The names the control plane calls them by, until #182 moves it out.
+    _raw, _json, _text, _html = raw, json, text, html
 
     # -- authentication
 
@@ -1110,7 +975,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         return 401, 0
 
-    def _base(self) -> str:
+    def base(self) -> str:
         host = self.headers.get("Host") or "%s:%d" % (self.config.host, self.config.port)
         return "http://%s" % host
 
@@ -1178,66 +1043,6 @@ class Handler(BaseHTTPRequestHandler):
 # Small helpers
 # ---------------------------------------------------------------------------
 
-def _split(target: str) -> Tuple[str, Dict[str, List[str]]]:
-    parsed = urllib.parse.urlsplit(target)
-    # The path stays encoded: it is split on `/` before any segment is
-    # decoded, or an encoded slash in a PO number (`PO%2F2026%2F1`) would
-    # become a real one and the order could never be reached. `_segments`
-    # decodes each piece, once.
-    # `keep_blank_values` matters: the flags are written `?all`, `?raw`,
-    # `?leave`, with no value at all, and the default parse drops them - so
-    # every flag silently read as false.
-    return (parsed.path,
-            urllib.parse.parse_qs(parsed.query, keep_blank_values=True))
-
-
-def _segments(path: str) -> List[str]:
-    """The segments of a still-encoded path, each percent-decoded once."""
-    return [urllib.parse.unquote(p) for p in path.split("/") if p]
-
-
-def _first(query: Dict[str, List[str]], name: str, default: str = "") -> str:
-    values = query.get(name) or []
-    return values[0] if values else default
-
-
-def _flag(query: Dict[str, List[str]], name: str) -> bool:
-    value = _first(query, name, "").lower()
-    return value in ("", "1", "true", "yes") and name in query
-
-
-class BadQuery(ValueError):
-    """A query-string value that cannot be read; answered 400, naming it."""
-
-    def __init__(self, parameter: str, message: str):
-        super().__init__(message)
-        self.parameter = parameter
-
-
-def _number(query: Dict[str, List[str]], name: str, default: float = 0.0) -> float:
-    raw = _first(query, name)
-    if raw == "":
-        return default
-    try:
-        value = float(raw)
-    except ValueError:
-        value = float("nan")
-    if not math.isfinite(value):
-        raise BadQuery(name, "%s must be a number, got %r" % (name, raw))
-    return value
-
-
-def _limit(query: Dict[str, List[str]], default: int = 50) -> int:
-    raw = _first(query, "limit")
-    if raw == "":
-        return default
-    try:
-        value = int(raw)
-    except ValueError:
-        raise BadQuery("limit", "limit must be a whole number, got %r" % raw) from None
-    return max(1, min(1000, value))
-
-
 def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:
     sql = "SELECT COUNT(*) AS n FROM %s%s" % (table, " WHERE " + where if where else "")
     return int(conn.execute(sql).fetchone()["n"])
@@ -1270,89 +1075,8 @@ def _which_order(conn, po_number: str, query, direction: str = ""):
     return found[0], None
 
 
-def _json_body(body: bytes) -> Dict[str, Any]:
-    if not body:
-        return {}
-    try:
-        parsed = json.loads(body.decode("utf-8"))
-    except (ValueError, UnicodeDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
-
-
 def _edi_type(dialect: str) -> str:
     return "application/edi-x12" if dialect == "X12" else "application/edifact"
-
-
-def _findings(message_report) -> List[str]:
-    out: List[str] = []
-    for finding in message_report.segments:
-        for element in finding.elements:
-            out.append("%s@%d: %s" % (finding.tag, finding.position, element.note))
-        if not finding.elements:
-            out.append("%s@%d: %s" % (finding.tag, finding.position, finding.note))
-    out.extend(note for _code, note in message_report.set_errors)
-    return out
-
-
-def _interchange_summary(receipt) -> Dict[str, Any]:
-    """One interchange's outcome, as the plain endpoint reports it."""
-    report = receipt.report
-    summary = {
-        "accepted": receipt.accepted,
-        "partner": receipt.partner,
-        "dialect": receipt.dialect,
-        "interchange": receipt.control,
-        "orders": receipt.orders,
-        "transactionSets": [
-            {"code": m.code, "control": m.control, "kind": m.kind,
-             "accepted": m.accepted, "findings": _findings(m),
-             "disagreements": [claims.finding_json(d) for d in m.disagreements]}
-            for m in (report.messages if report else [])],
-        # Business findings, beside the syntax ones and never among them: what
-        # a supplier's document says that the order does not (#126).
-        "disagreements": [claims.finding_json(d)
-                          for m in (report.messages if report else [])
-                          for d in m.disagreements],
-        "queued": [{"kind": q.kind, "code": q.code, "reference": q.reference,
-                    "dueAt": q.due_at} for q in receipt.queued],
-        "acknowledged": receipt.acknowledged,
-        "changed": receipt.changes,
-        "refusals": receipt.refusals,
-        "filed": receipt.filed,
-    }
-    if not receipt.ok:
-        # One interchange of several can be refused while the rest are read.
-        summary["error"] = receipt.error
-    return summary
-
-
-def _delivery_text(receipts) -> str:
-    """The prose an MDN carries about a whole payload."""
-    if len(receipts) == 1:
-        return _receipt_text(receipts[0])
-    parts = ["The payload held %d interchanges." % len(receipts)]
-    parts.extend(receipt.error or _receipt_text(receipt) for receipt in receipts)
-    return " ".join(parts)
-
-
-def _receipt_text(receipt) -> str:
-    """The prose an MDN carries about what the mock made of the interchange."""
-    report = receipt.report
-    if report is None:
-        return "The interchange was received."
-    parts = ["Interchange %s from %s: %d transaction set(s), %d accepted."
-             % (receipt.control, receipt.partner, report.received, report.accepted)]
-    for message in report.messages:
-        if not message.clean:
-            parts.append("%s/%s: %s" % (message.code, message.control,
-                                        message.summary()))
-    if receipt.orders:
-        parts.append("Purchase order(s) recorded: %s." % ", ".join(receipt.orders))
-    if receipt.queued:
-        parts.append("Queued in reply: %s."
-                     % ", ".join(q.code for q in receipt.queued))
-    return " ".join(parts)
 
 
 def _document_query(query: Dict[str, List[str]]) -> str:
@@ -1449,113 +1173,6 @@ def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
                  for position, element in enumerate(use.segment.elements, start=1)]}
             for use, loop in definition.uses()],
     }
-
-
-# ---------------------------------------------------------------------------
-# The index page
-# ---------------------------------------------------------------------------
-
-_STYLE = """
-:root { color-scheme: light dark; --fg:#1a1a1a; --bg:#fbfbfa; --muted:#6b6b6b;
-        --line:#e3e3e0; --accent:#8b5a2b; --code:#f1f0ee; }
-@media (prefers-color-scheme: dark) {
-  :root { --fg:#e8e6e3; --bg:#1c1c1a; --muted:#9a9894; --line:#33322f;
-          --accent:#d4a373; --code:#262523; } }
-* { box-sizing: border-box; }
-body { font: 15px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
-       color: var(--fg); background: var(--bg); margin: 0; padding: 32px 16px; }
-main { max-width: 860px; margin: 0 auto; }
-h1 { font-size: 1.6rem; margin: 0 0 4px; }
-h2 { font-size: 1.05rem; margin: 32px 0 8px; border-bottom: 1px solid var(--line);
-     padding-bottom: 6px; }
-p.lead { color: var(--muted); margin: 0 0 8px; }
-table { border-collapse: collapse; width: 100%; font-size: 14px; }
-th, td { text-align: left; padding: 6px 10px 6px 0; border-bottom: 1px solid var(--line);
-         vertical-align: top; }
-th { color: var(--muted); font-weight: 600; }
-code, a code { background: var(--code); padding: 1px 5px; border-radius: 4px;
-       font: 13px/1.5 ui-monospace, SFMono-Regular, Menlo, monospace; }
-a { color: var(--accent); text-decoration: none; }
-a:hover { text-decoration: underline; }
-.tag { font-size: 12px; color: var(--muted); }
-"""
-
-
-def _index_page(mock: Mock, base: str) -> str:
-    conn = mock.conn
-    rows = partners.listing(conn)
-    partner_rows = "".join(
-        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td><td>%s</td>"
-        "<td><code>%s</code></td><td>%s</td></tr>"
-        % (row["id"], _esc(row["name"]), row["role"], row["dialect"],
-           row["behaviour"],
-           _esc(partners.BEHAVIOURS.get(row["behaviour"], "")))
-        for row in rows)
-    behaviour_rows = "".join(
-        "<tr><td><code>%s</code></td><td>%s</td><td>%s</td></tr>"
-        % (name, " or ".join(partners.BEHAVIOUR_ROLES[name]), _esc(text))
-        for name, text in sorted(partners.BEHAVIOURS.items()))
-
-    endpoints = [
-        ("POST", "/as2", "An AS2 interchange. Answers with an MDN."),
-        ("POST", "/edi", "The same, without AS2. Answers with a JSON summary."),
-        ("POST", "/as2/mdn", "An asynchronous MDN coming back to us."),
-        ("POST", "/_mock/validate", "Check a document, change nothing."),
-        ("GET", "/_mock/health", "Liveness."),
-        ("GET", "/_mock/state", "Counts, queue depth, configured delays."),
-        ("GET", "/_mock/partners", "Who we trade with, and how each misbehaves."),
-        ("GET", "/_mock/catalog", "What we sell."),
-        ("GET", "/_mock/orders", "Purchase orders received and placed, and what became of them."),
-        ("GET", "/_mock/disagreements", "Where a supplier disagrees with an order the mock placed, or a remittance with itself."),
-        ("GET", "/_mock/remittances", "Every remittance advice received, and whether a later one reversed it."),
-        ("POST", "/_mock/purchase", "Place an order with a supplier: an 850 or ORDERS goes out."),
-        ("POST", "/_mock/purchase/{po}/change", "Change or cancel an order the mock placed."),
-        ("GET", "/_mock/documents", "Every transaction set, in and out."),
-        ("GET", "/_mock/interchanges", "Raw payloads. Add <code>?raw</code> for one."),
-        ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),
-        ("GET", "/_mock/orders/{po}/timeline", "Everything that happened to one order, in order."),
-        ("GET", "/_mock/outbox", "Documents produced, and what became of them."),
-        ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice."),
-        ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
-        ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
-        ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything, "
-                                   "<code>?failed</code> to redeliver what failed."),
-        ("POST", "/_mock/outbox/{id}/retry", "Deliver a failed document again, unchanged."),
-        ("POST", "/_mock/send", "Send a document out of band."),
-        ("GET", "/_mock/mdns", "Receipts, sent and received."),
-        ("GET", "/_mock/unacknowledged", "What we sent that nobody has acknowledged."),
-        ("GET", "/_mock/dictionary", "The segment dictionary the mock validates against."),
-        ("POST", "/_mock/reset", "Back to a freshly seeded system."),
-    ]
-    endpoint_rows = "".join(
-        '<tr><td class="tag">%s</td><td><a href="%s">%s</a></td><td>%s</td></tr>'
-        % (method, path if method == "GET" else "#", path, note)
-        for method, path, note in endpoints)
-
-    return """<!doctype html><html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>mock-edi</title><style>%s</style></head><body><main>
-<h1>mock-edi</h1>
-<p class="lead">A mock EDI trading partner answering as <code>%s</code>.
-Send it an 850 or an ORDERS and it answers with an acknowledgment, a purchase
-order response, a despatch advice and an invoice.</p>
-<h2>Trading partners</h2>
-<table><tr><th>Id</th><th>Name</th><th>Role</th><th>Dialect</th><th>Behaviour</th><th></th></tr>%s</table>
-<h2>Behaviours</h2>
-<table><tr><th>Behaviour</th><th>Partner</th><th></th></tr>%s</table>
-<h2>Endpoints</h2>
-<table><tr><th></th><th>Path</th><th></th></tr>%s</table>
-<h2>Try it</h2>
-<p class="lead">There is a worked example in <code>examples/demo.sh</code>.
-The short version:</p>
-<p><code>curl -X POST --data-binary @order.edi %s/edi</code></p>
-</main></body></html>""" % (_STYLE, mock.config.as2_id, partner_rows,
-                            behaviour_rows, endpoint_rows, base)
-
-
-def _esc(text: str) -> str:
-    return (str(text).replace("&", "&amp;").replace("<", "&lt;")
-            .replace(">", "&gt;").replace('"', "&quot;"))
 
 
 # ---------------------------------------------------------------------------
