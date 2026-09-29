@@ -98,6 +98,25 @@ class TheControlPlaneMatchesAsLooselyAsItAlwaysHas(MockServerCase):
                 self.assertEqual(status, 200, data)
                 self.assertEqual(data["status"], "ok")
 
+    def test_each_endpoint_that_refuses_a_method_says_what_to_do(self):
+        for path, line in (("/_mock/reset", b"POST to reset\n"),
+                           ("/_mock/validate",
+                            b"POST an interchange to validate it\n")):
+            with self.subTest(path=path):
+                status, _headers, data = self.get(path, raw=True)
+                self.assertEqual((status, data), (405, line))
+
+    def test_the_moved_reads_answer_any_method_and_ignore_the_rest(self):
+        for path in ("/_mock/state", "/_mock/behaviours", "/_mock/requests"):
+            with self.subTest(path=path):
+                status, _headers, data = self.request("DELETE", path + "/x")
+                self.assertEqual(status, 200, data)
+
+    def test_the_dictionary_reads_the_rest_of_the_path(self):
+        status, _headers, data = self.get("/_mock/dictionary/x12/850/extra")
+        self.assertEqual(status, 200, data)
+        self.assertEqual((data["dialect"], data["code"]), ("X12", "850"))
+
     def test_an_unknown_endpoint_lists_the_known_ones(self):
         status, _headers, data = self.get("/_mock/nothing-here")
         self.assertEqual(status, 404)
@@ -114,8 +133,12 @@ class ANonsensePathIsAnswered404(MockServerCase):
                                 "try": ["/as2", "/edi", "/_mock/health", "/"]})
 
 
-class TheTableHasNoOverlaps(unittest.TestCase):
-    """Order in the table never decides who answers, as its docstring says."""
+class TheMostSpecificRouteAnswers(unittest.TestCase):
+    """Order in the table never decides who answers, as its docstring says.
+
+    `/_mock` and `/_mock/health` both match `/_mock/health`; the longer one
+    answers, wherever each was registered.
+    """
 
     def test_each_name_a_route_is_registered_under_finds_that_route(self):
         from mockedi import routes

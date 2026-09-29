@@ -47,8 +47,9 @@ class Route(NamedTuple):
     function: Callable[..., Tuple[int, int]]
 
 
-# Every endpoint, in the order the modules registered them. No two patterns
-# match one path, so the order never decides which function answers.
+# Every endpoint, in the order the modules registered them. Where two patterns
+# match one path - `/_mock` and `/_mock/health` both match `/_mock/health` -
+# the one with more segments answers, so the order never decides.
 TABLE: List[Route] = []
 
 
@@ -69,19 +70,22 @@ def route(method: str, pattern: str, aliases: Sequence[str] = (),
 def find(method: str, path: str) -> Tuple[Optional[Route], List[Any]]:
     """The route for a request and its arguments, or ``(None, [])``.
 
-    A route found at the path but for another method is returned all the
-    same; the handler answers it with the route's ``refuse`` line.
+    Of the routes that take the method, the most specific answers. A route
+    found at the path but only for another method is returned all the same;
+    the handler answers it with the route's ``refuse`` line.
     """
+    best: Tuple[Optional[Route], List[Any]] = (None, [])
     elsewhere: Tuple[Optional[Route], List[Any]] = (None, [])
     for entry in TABLE:
         arguments = _match(entry, path)
         if arguments is None:
             continue
         if entry.method in (ANY, method):
-            return entry, arguments
-        if elsewhere[0] is None:
+            if best[0] is None or len(entry.parts) > len(best[0].parts):
+                best = (entry, arguments)
+        elif elsewhere[0] is None:
             elsewhere = (entry, arguments)
-    return elsewhere
+    return best if best[0] is not None else elsewhere
 
 
 def _match(entry: Route, path: str) -> Optional[List[Any]]:
@@ -173,4 +177,4 @@ def json_body(body: bytes) -> Dict[str, Any]:
 
 # Imported last, so that `route` and the helpers above exist when each module
 # asks for them. The order here is the order of the table.
-from . import transport, control, index  # noqa: E402,F401
+from . import transport, control, validate, index  # noqa: E402,F401
