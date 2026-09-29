@@ -124,7 +124,7 @@ else
   curl -s "$BASE/_mock/scheduled" \
     | python3 -c "import json,sys; [print('  %-10s %-12s due %s' % (r['kind'], r['po_number'], r['due_at'])) for r in json.load(sys.stdin)]"
   note "so an 860 can still change it: line 1 down to 60, line 2 deleted."
-  printf 'ISA*00*          *00*          *ZZ*ACME           *ZZ*MOCKEDI        *260924*1130*U*00401*000000105*0*T*>~GS*PC*ACME*MOCKEDI*20260924*1130*105*X*004010~ST*860*0001~BCH*04*SA*PO-DEMO-3**1*20260925****20260924~POC*1*QD*60**EA*12.50**VP*WIDGET-001~POC*2*DI*0**EA*0**VP*BRKT-050~CTT*2~SE*6*0001~GE*1*105~IEA*1*000000105~' > /tmp/mock-edi-860.x12
+  printf 'ISA*00*          *00*          *ZZ*ACME           *ZZ*MOCKEDI        *260924*1130*U*00401*000000105*0*T*>~GS*PC*ACME*MOCKEDI*20260924*1130*105*X*004010~ST*860*0001~BCH*04*SA*PO-DEMO-3**1*20260924*****20260925~POC*1*QD*60**EA*12.50**VP*WIDGET-001~POC*2*DI*0**EA*0**VP*BRKT-050~CTT*2~SE*6*0001~GE*1*105~IEA*1*000000105~' > /tmp/mock-edi-860.x12
   run "curl -s -X POST --data-binary @860.x12 $BASE/edi"
   curl -s -X POST --data-binary @/tmp/mock-edi-860.x12 "$BASE/edi" \
     | python3 -c "import json,sys; d=json.load(sys.stdin); print('  changed:', d['changed'], '| refused:', d['refusals'], '| queued:', [q['code'] for q in d['queued']])"
