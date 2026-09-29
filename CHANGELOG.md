@@ -13,6 +13,283 @@ Entries waiting for a release are one file each in
 cannot conflict. `tools/check_changelog.py --release X.Y.Z` assembles them
 into a dated section here.
 
+## [0.6.0] - 2026-09-29
+
+The mock can now be the buyer (#116). Until this release it could only sell,
+so a supplier had nothing to test against. `POST /_mock/purchase` places an
+order with a supplier partner, the mock reads the 855, 856 and 810 that come
+back, and it reports where they disagree with the order - through to the
+three-way match - beside the acknowledgment, never inside it. Three behaviours
+make the buyer misbehave on request. It also receives a remittance advice,
+the X12 820 and the EDIFACT REMADV.
+
+Three things change on the wire, so check them against what you expect:
+the 860 and 865 carry their dates in the positions 004010 gives them, an 855
+or 865 that refuses every line with detail says `RD` rather than `RJ`, and an
+850 naming a number another partner already holds is accepted, because two
+partners may now each hold an order with the same number. That last one
+replaces the refusal 0.5.0 put in as a stopgap. Element names served by
+`GET /_mock/dictionary` are corrected in both dialects. A file database is
+upgraded in place to schema version 11.
+
+### Added
+
+- **The mock buys from a supplier** ([#125]). `POST /_mock/purchase` places
+  an order with a partner whose `role` is `supplier`: it is stored with a new
+  `direction`, `placed` rather than `received`, and an 850 or ORDERS goes out
+  through the same queue, delays and delivery as anything else the mock
+  sends. `POST /_mock/purchase/<po>/change` changes or cancels it with an 860
+  or ORDCHG. The pipeline now takes the mock's side from the partner's role:
+  a supplier's 855, 856, 810 and 865 are accepted, acknowledged and filed
+  under the order they name, listed under `filed` in the receipt, and shown in
+  the order's timeline after the order going out. One naming an order the
+  mock never placed with that supplier is rejected at the order number's
+  element in the 997 or CONTRL. Nothing about a customer has changed.
+  **The schema version is now 9**; a file database is upgraded in place, and
+  every order it held was received.
+
+- **The buyer says where a supplier disagrees with the order** ([#126]).
+  Each line of a supplier's 855, 856, 810 or 865 is kept as a claim, and a
+  placed order's confirmed, shipped and billed quantities are derived from
+  them. An 855, ORDRSP or 865 is checked against what the mock asked for: a
+  line the order does not have, more or less confirmed than ordered, a
+  different price, an item substituted without saying so. Each disagreement
+  names both numbers and the document it came from, and is reported in the
+  receipt's `disagreements`, in `/_mock/orders/<po>` beside ordered,
+  confirmed, shipped and billed per line, on the document's event in the
+  timeline, and at `GET /_mock/disagreements`. It is a business finding, not
+  a syntax finding: the 997 or CONTRL is exactly what it would have been, and
+  the set is accepted. **The schema version is now 11**; a file database gains
+  the two tables in place.
+
+- **Three behaviours for a supplier partner: a buyer that misbehaves**
+  ([#127]). `duplicate-order` sends the 850 or ORDERS twice under one PO
+  number, a moment apart, as a buyer with a retry bug does - the mirror of
+  `duplicate-invoice`. `change-after-confirm` sends an 860 lowering a line the
+  moment the 855 confirming it arrives, and `cancel-late` sends one
+  cancelling the order the moment the 856 does, which is a cancellation after
+  the goods have left. Neither waits on a clock: both are promised when the
+  supplier's document arrives and released by `POST /_mock/advance`, so a test
+  never sleeps. All three are supplier-only and refused on a customer, by the
+  same record that refuses a seller's behaviour on a supplier.
+
+- **When a remittance arrives, and whether it was taken back** ([#149]). An
+  820 whose `BPR16` says the payment takes effect after the advice arrived
+  carries a `remitted-before-settlement` disagreement: the payee is being told
+  to reconcile cash that has not arrived. It is judged by the mock's clock,
+  so `/_mock/advance` moves it. An 820 with `BPR03 = D` reverses the earlier
+  advice with the same `TRN02` trace - the correction a payer owes once the
+  bank returns the payment - and the new `GET /_mock/remittances` lists every
+  advice received with its trace, total, invoices and settlement date, the
+  reversed one marked `reversed` and naming what reversed it. A debit for a
+  trace never advised is a `reversal-of-nothing`. Both read the 820 only.
+
+- **A remittance advice: the X12 820 and the EDIFACT REMADV** ([#149]). The
+  one leg of procure-to-pay the mock could not carry: the supplier's view of
+  the chain ended at the 810, and learned nothing of the payment. The mock,
+  as the payee, now receives a remittance advice, checks it against the
+  dictionary - `GET /_mock/dictionary/X12/820` and `/EDIFACT/REMADV` describe
+  both - and answers with a 997 or CONTRL, so `no-ack` and the other
+  behaviours apply to it as to any document. An 820 used as a payment order
+  (`BPR01` `D`, `P`, `U` or `X`), which is a bank's document, is refused by
+  name. Each advice is filed under its trace number. A supplier the mock buys
+  from is refused one: the mock pays it.
+
+- **The buyer says where a supplier's despatch disagrees** ([#151]). An 856 or
+  DESADV is checked against the order and against the 855 that answered it: a
+  despatch before anything was confirmed, a consignment against a line the
+  order does not have, more shipped than was confirmed - a line confirmed at
+  nothing included - and more shipped than was ordered. Quantities are counted
+  across every consignment so far, so two part-deliveries that are each within
+  the confirmation but together exceed it are reported. A consignment that
+  carries no line number and names an item the order has on **more than one
+  line** is no longer put on whichever line came first: it is counted against
+  neither and reported as `shipped-ambiguous-item`, and an item is matched by
+  its SKU before its UPC. Like every disagreement, none of these enters a 997
+  or a CONTRL.
+
+- **The buyer's three-way match** ([#152]). A supplier's 810 or INVOIC is
+  checked against the order, its 855 and its 856: billed before anything
+  shipped, billed beyond what shipped over every invoice so far, at a price
+  neither ordered nor confirmed, with a total that is not the sum of its own
+  lines, under an invoice number already received, or for a cancelled order.
+  Each disagreement names both numbers and is reported where the 855's are;
+  a repeated invoice is counted once in what the order shows as billed. As
+  with every disagreement, the 997 or CONTRL is unchanged.
+
+- **A remittance that does not add up is reported, beside its 997** ([#156]).
+  An advice whose total is not the sum of what it says was paid is
+  acknowledged, since it can be read, and carries a
+  `remittance-total-not-parts` disagreement naming both amounts - in the
+  summary and at `GET /_mock/disagreements`, with the same shape as a
+  supplier's. `BPR02` is checked against the `RMR04` amounts plus any `ADX`
+  directly in an `ENT` loop, a deduction not tied to one invoice; REMADV's
+  `MOA+12` total against each `DOC`'s. It is how an advice still claiming an
+  invoice whose payment came back is caught before the supplier duns for it.
+
+### Changed
+
+- **Two partners may each hold an order with the same number** ([#132]). An
+  order is now keyed by its partner and its number, as real purchase order
+  numbers are unique per buyer, not to the world. The 850 that 0.5.0 refused
+  for reusing another partner's number ([#131]) is recorded as that partner's
+  own order, and answered, packed and billed on its own; neither order's
+  documents, shipments or invoices touch the other's. `/_mock/orders/<po>`
+  and its `/timeline` take `?partner=`, and answer `409` naming both partners
+  when the number alone is ambiguous; `mock.order()` and `mock.timeline()`
+  in `mockedi.testing` take `partner=`. A change naming a number the sender
+  holds no order under is still "no such purchase order". **The schema
+  version is now 10**: `purchase_order` and `order_line` are rebuilt in place,
+  every order line taking its order's partner.
+
+- **A changelog entry is a file of its own** ([#138]), in `changelog.d/`, rather
+  than a bullet every pull request adds to the same line of `CHANGELOG.md`. Two
+  pull requests that each record a change now add two files and cannot conflict
+  - where before they always did, and a pull request that conflicts with its
+  base runs no CI at all, so whatever it said about being green was true of an
+  older `main`. Seven were in that state at once on 25 September.
+
+  `tools/check_changelog.py` keeps every rule it had, reading the new place, and
+  gains `--release X.Y.Z` to assemble the fragments into a dated section with
+  its headings in order and its links written. It deliberately will not write
+  the paragraph a release opens with: it leaves a placeholder that the check
+  itself fails on, so a release cannot reach `main` without a person having said
+  why anyone should upgrade.
+
+### Fixed
+
+- Startup no longer waits on a name server. `HTTPServer` reverse-resolves the
+  address it binds, to fill in a `server_name` the mock never reads; on a host
+  whose resolver does not answer for `0.0.0.0` that was up to a minute of
+  silence before the port opened - long enough for the container health check,
+  the CI smoke job and `mockedi.testing.Mock.start` to give up on a mock that
+  was starting normally.
+
+- The exposure warning now reaches a piped stderr immediately. Before Python
+  3.9 a stderr that is not a terminal is block-buffered, and the mock then
+  serves forever without filling the buffer, so under `docker logs` or any
+  supervisor the warning that the control plane is unauthenticated arrived
+  only when the server stopped. Both standard streams are line-buffered at
+  startup now, not just stdout.
+
+- A partner's role can no longer be changed out from under its orders. A
+  supplier holds what the mock placed and a customer holds what it received,
+  and every ownership check reads the pair as one fact; `PATCH
+  /_mock/partners/<id>` let the role move while orders were live, leaving the
+  mock acting on them from the wrong side - answering an 860 with an 865 that
+  cancelled its own purchase order, or going on packing despatches for a
+  partner it now buys from. The change is refused while any order is
+  unfinished, in either direction, and the refusal names them. Finished
+  orders stay, read-only, as history.
+
+- **An invoice's allowances and charges are read before its total is
+  judged** ([#158]). A correct invoice with a freight charge or an allowance
+  was reported as `total-not-lines`, because SAC was not read. In EDIFACT it
+  failed validation outright, because the dictionary had no ALC. The readers
+  now take SAC and ALC into `Invoice.charges` and each line's `adjustment`,
+  and the INVOIC accepts ALC groups at header, line and summary level. The
+  total must be the lines plus allowances and charges plus tax. TDS02, the
+  amount subject to terms discount, is no longer compared as if it were the
+  lines' total.
+
+- **Each data element is declared one way, as its directory has it**
+  ([#163]). EDIFACT 1131 was `an..3` in ALC and `an..17` in nine other
+  segments, so a five-character value was an error in one place and
+  accepted in another. It is now `an..3` everywhere, with the D.96A name.
+  So are 3055's and 3453's names and types, and DOC's 1366, which was
+  `an..70`, is `an..35`. In X12, ITD08 is `N2` rather than `R`, and TDS
+  declares element 610 in all four positions, as 004010 does, not the
+  361, 390, 391 and 362 of an earlier version. How documents are read and
+  written is unchanged. A test now fails if any element number is declared
+  two ways within a dialect.
+
+- **An order restated after it was fulfilled is no longer fulfilled again**
+  ([#165]). [#44] refuses a replayed *interchange*, but a buyer with a retry
+  bug sends the order again in a fresh one, under the same PO number and as an
+  original rather than a change - so nothing caught it, and the mock answered,
+  shipped and billed the whole order a second time. A fresh 850 or ORDERS
+  naming a number whose order has already been acted on is now refused with an
+  855 saying *order number already in use*, the same answer the mock has
+  always given for a number it holds an order of its own under. Restating an
+  order that is still only received, which is how a change may arrive as an
+  850, is unchanged, and `--allow-duplicates` turns the refusal off with the
+  rest of them.
+
+- **A supplier's later answer no longer un-confirms what it has already
+  shipped** ([#168]). A supplier that refuses a *second* order under a number
+  it has already shipped against sends an 855 that is, on the wire,
+  indistinguishable from one rejecting the order outright - every line `IR`
+  with a reason - so `derive` took it as the latest answer and the buyer's
+  order showed nothing confirmed against a hundred shipped and billed. A
+  later answer can no longer take back what an earlier one confirmed and the
+  supplier has shipped against, and only as far as what actually shipped: a
+  supplier that confirms 100 and ships 200 has still confirmed 100, which is
+  the question `shipped-more-than-confirmed` exists to ask. What the refusal
+  said is still reported as a disagreement; only the running total stopped
+  contradicting itself.
+
+- **X12 element 373 is named "Date" wherever it appears** ([#171]). It was
+  "Invoice Date" in `BIG01`, "Purchase Order Date" in `BIG03`, `BCA10` and
+  `BCH10`, and "Acknowledgment Date" in `BAK09`, while nine other segments
+  already called it "Date". The directory has one element 373, called Date;
+  what `BIG03` means comes from where it sits, not from a different element,
+  and a reader building a guide against `GET /_mock/dictionary` was told an
+  element existed that does not. What each position means has moved into its
+  segment's description, which is where [#163] put TDS's four 610s. The
+  element-consistency test now holds names as well as representations, in
+  both dialects - which, with [#170]'s envelope coverage, immediately found a
+  second: `I05` was "Interchange Sender ID Qualifier" at `ISA05` and
+  "Interchange Receiver ID Qualifier" at `ISA07`, where the directory has one
+  element called *Interchange ID Qualifier*. The dates in `BCH` and `BCA` are
+  now described as the standard describes them.
+
+- **EDIFACT elements are named as D.96A names them** ([#172]). The
+  dictionary declares D:96A:UN, but 68 of its data elements carried later
+  directories' wording, for example "Document name code" where D.96A says
+  "Document/message name, coded", and `GET /_mock/dictionary` served it. Each
+  is corrected from D.96A's segment tables, in two published copies that
+  agree, and a test pins all 90 names. Only names change: nothing read,
+  written or validated differs.
+
+- **At 005010, a reference of more than 30 characters was refused outside
+  `REF`** ([#173]). 005010 widened data element 127, *Reference
+  Identification*, from 1/30 to 1/50, and the length belongs to the element,
+  so it applies wherever 127 is used. The mock widened it only in `REF02`, so
+  a 40-character seller's order number in an 855's `BAK08`, a trace number in
+  an 820's `TRN02`, or an invoice number in its `RMR02` was an error at
+  005010 that a real translator would accept. The widening is now declared
+  once, for the element, and applied to every segment that carries it.
+
+- **The 860 and 865 put their dates where 004010 says** ([#178]). `BCH` and
+  `BCA` share three semantic notes: position **06** is the date the purchaser
+  gave the order, **10** the date the sender gave the acknowledgment, and
+  **11** the date of the change request. The mock had 06 and 10 the other way
+  round in both documents, and read them back the same way, so its own round
+  trips agreed with themselves while a partner reading by the standard got
+  the order date and the change date swapped. An 860 now leaves 10 empty,
+  being a request rather than an acknowledgment, and puts the change's date
+  in 11.
+
+  **This changes what the mock sends and how it reads.** A partner that
+  mapped the old positions will see the two dates move, and an 860 or 865
+  written by an earlier mock - or by a partner that copied its layout - will
+  now be read the other way round. There is no compatible middle: reading
+  both would be guessing which was meant. EDIFACT is unaffected, since
+  ORDCHG and ORDRSP qualify their dates in `DTM`.
+
+- **An 855 or 865 refusing every line said it carried no detail** ([#181]).
+  The mock wrote `BAK02`/`BCA02` `RJ`, *Rejected - No Detail*, over a `PO1`
+  or `POC` loop that details every refused line and its reason, including
+  the refusal for an order number already in use. A translator that branches
+  on the code would skip the detail it was about to be given. It is now `RD`,
+  *Reject - With Detail*; a response with no lines at all says `AK` rather
+  than claiming detail it does not have. EDIFACT's `RE` was already right:
+  D.96A's 4343 has only the one rejection code.
+- **An ORDRSP answering `AD` was reported as carrying an invalid code**
+  ([#181]). The dictionary's list for 4343 lacked `AD`, *Acknowledge - with
+  detail, no change*, and gave its name to `AI`, which in D.96A acknowledges
+  only the changes.
+
 ## [0.5.0] - 2026-09-27
 
 Released for the fix: in 0.4.0 one customer could change, cancel or replace
@@ -1060,7 +1337,8 @@ documents a real one sends.
 [#156]: https://github.com/rseufert/mock-edi/issues/156
 [#173]: https://github.com/rseufert/mock-edi/issues/173
 
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/rseufert/mock-edi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0
 [0.3.1]: https://github.com/rseufert/mock-edi/compare/v0.3.0...v0.3.1
