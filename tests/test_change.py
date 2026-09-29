@@ -43,13 +43,25 @@ class ChangingAQuantity(MockServerCase):
         self.assertEqual(message.find("BCA").get(3), "PO-CHANGE")
         self.assertEqual(message.find("BCA").get(5), "1")   # change sequence
 
-    def test_the_865_puts_the_po_date_in_bca10(self):
-        # By position, from 004010: 326, 367 and 127 at 07-09, the purchase
-        # order date at 10.
-        self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")]))
+    def test_the_865s_three_dates_are_where_004010_says(self):
+        """Positionally, against the semantic notes - not through our reader.
+
+        A round trip cannot catch a swap here, which is how #178 survived
+        review: the mock wrote the order date and the change date into each
+        other's places and read them back the same way. So the three dates
+        are three *different* days, read straight off the segment.
+        """
+        self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")],
+                             ordered_on="20260924", changed_on="20260925"))
         bca = self.document(ACME, "change-response").groups[0].messages[0].find("BCA")
         self.assertEqual([bca.get(7), bca.get(8), bca.get(9)], ["", "", ""])
-        self.assertEqual(bca.get(10), "20260924")
+        self.assertEqual(bca.get(6), "20260924")     # the order's date
+        self.assertEqual(bca.get(11), "20260925")    # the change it answers
+        # BCA10 is this acknowledgment's own date, so it is whenever the mock
+        # is running; pinned by shape rather than to a literal that would
+        # rot overnight.
+        self.assertRegex(bca.get(10), r"^\d{8}$")
+        self.assertNotIn(bca.get(10), ("", bca.get(11)))
 
     def test_the_865_answers_line_by_line_in_the_855s_vocabulary(self):
         self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")]))

@@ -322,6 +322,23 @@ class PlacingOverHttp(BuyingCase):
         self.assertTrue(change.cancels)
         self.assertEqual(self.order("PO-CHG")["status"], "cancelled")
 
+    def test_the_860s_dates_are_where_004010_says(self):
+        """Positionally, not through our own reader (#178).
+
+        The mock wrote the change's date into BCH06 and the order's into
+        BCH10, which is the other way round, and read them back the same way
+        - so nothing that round-tripped could see it. BCH10 is the
+        acknowledgment's date, and an 860 is a request, so it stays empty.
+        """
+        self.placed(po_number="PO-DATES")
+        self.post("/_mock/purchase/PO-DATES/change",
+                  {"lines": [{"line": "1", "quantity": "80"}]})
+        bch = parse(self.sent(schema.CHANGE)).groups[0].messages[0].find("BCH")
+        ordered_on = self.order("PO-DATES")["ordered_on"].replace("-", "")
+        self.assertEqual(bch.get(6), ordered_on)
+        self.assertEqual(bch.get(10), "")
+        self.assertRegex(bch.get(11), r"^\d{8}$")
+
     def test_changing_an_order_the_mock_did_not_place(self):
         self.send(x12_order("PO-RECEIVED"))
         status, _h, data = self.post("/_mock/purchase/PO-RECEIVED/change",
