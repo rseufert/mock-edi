@@ -1025,6 +1025,9 @@ mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
 mockedi/routes/index.py     the index page
 mockedi/routes/control.py   health, state, reset; the rest of /_mock until #182 moves it
 mockedi/routes/validate.py  /_mock/validate and the dictionary served as data
+mockedi/routes/orders.py    orders, their timelines, purchasing, disagreements
+mockedi/routes/documents.py documents, interchanges and MDNs as they crossed the wire
+mockedi/routes/partners.py  partners, their guides, and the catalog
 ```
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how they fit together;

@@ -117,6 +117,42 @@ class TheControlPlaneMatchesAsLooselyAsItAlwaysHas(MockServerCase):
         self.assertEqual(status, 200, data)
         self.assertEqual((data["dialect"], data["code"]), ("X12", "850"))
 
+    def test_partners_and_purchases_refuse_a_method_in_their_own_words(self):
+        for method, path, line in (
+                ("GET", "/_mock/purchase", b"POST an order to place it\n"),
+                ("PUT", "/_mock/partners", b"GET or POST partners\n"),
+                ("POST", "/_mock/partners/ACME",
+                 b"GET, PATCH or DELETE a partner\n"),
+                ("PATCH", "/_mock/partners/ACME/profile",
+                 b"GET, PUT or DELETE a partner's profile\n")):
+            with self.subTest(method=method, path=path):
+                status, _headers, data = self.request(method, path, raw=True)
+                self.assertEqual((status, data), (405, line))
+
+    def test_a_purchase_path_it_does_not_know_is_a_404_naming_it(self):
+        status, _headers, data = self.post("/_mock/purchase/PO-1/other", {})
+        self.assertEqual(status, 404)
+        self.assertEqual(data, {"error": "no route for POST /_mock/purchase/PO-1/other"})
+
+    def test_an_order_ignores_what_follows_it_unless_it_is_the_timeline(self):
+        self.send(x12_order("PO-ROUTE-3"))
+        status, _headers, data = self.request("PATCH",
+                                              "/_mock/orders/PO-ROUTE-3/other")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["po_number"], "PO-ROUTE-3")
+        status, _headers, data = self.get("/_mock/orders/PO-ROUTE-3/timeline")
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["order"], "PO-ROUTE-3")
+        self.assertIn("events", data)
+
+    def test_the_listings_answer_any_method(self):
+        for path in ("/_mock/documents", "/_mock/interchanges", "/_mock/mdns",
+                     "/_mock/disagreements", "/_mock/remittances"):
+            with self.subTest(path=path):
+                status, _headers, data = self.request("PUT", path)
+                self.assertEqual(status, 200, data)
+                self.assertIsInstance(data, list)
+
     def test_an_unknown_endpoint_lists_the_known_ones(self):
         status, _headers, data = self.get("/_mock/nothing-here")
         self.assertEqual(status, 404)
