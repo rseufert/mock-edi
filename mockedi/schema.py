@@ -392,8 +392,11 @@ BAK = Segment("BAK", "Beginning Segment for Purchase Order Acknowledgment", (
     # the seller acknowledged. Get 06-09 in the wrong order and a translator
     # reads the acknowledgment date as a contract number.
     _e("127", "Reference Identification", "AN", 1, 30),
-    _e("373", "Acknowledgment Date", "DT", 8, 8),
-), "Identifies the order being acknowledged and the overall verdict on it.")
+    _e("373", "Date", "DT", 8, 8),
+), "Identifies the order being acknowledged and the overall verdict on it. "
+   "BAK04 is the date the purchaser gave the order and BAK09 the date the "
+   "seller acknowledged it: 373 is Date wherever it appears, and the position "
+   "says which date it is.")
 
 BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -405,9 +408,12 @@ BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
     _e("326", "Request Reference Number", "AN", 1, 45),
     _e("367", "Contract Number", "AN", 1, 30),
     _e("127", "Reference Identification", "AN", 1, 30),
-    _e("373", "Purchase Order Date", "DT", 8, 8),
     _e("373", "Date", "DT", 8, 8),
-), "Identifies the order being changed, and which change this is.")
+    _e("373", "Date", "DT", 8, 8),
+), "Identifies the order being changed, and which change this is. The three "
+   "dates are the standard's, and they read the same way as BCA's: BCH06 the "
+   "date the purchaser gave the order, BCH10 the date the sender gave the "
+   "acknowledgment, BCH11 the date of the change request.")
 
 BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -419,9 +425,12 @@ BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment
     _e("326", "Request Reference Number", "AN", 1, 45),
     _e("367", "Contract Number", "AN", 1, 30),
     _e("127", "Reference Identification", "AN", 1, 30),
-    _e("373", "Purchase Order Date", "DT", 8, 8),
     _e("373", "Date", "DT", 8, 8),
-), "The seller's verdict on a change request, and which request it answers.")
+    _e("373", "Date", "DT", 8, 8),
+), "The seller's verdict on a change request, and which request it answers. "
+   "The three dates are the standard's: BCA06 the date the purchaser gave "
+   "the order, BCA10 the date the sender gave the acknowledgment, BCA11 the "
+   "date of the change request.")
 
 POC = Segment("POC", "Line Item Change", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -444,9 +453,9 @@ BSN = Segment("BSN", "Beginning Segment for Ship Notice", (
 ), "Identifies the shipment and declares which HL levels the notice uses.")
 
 BIG = Segment("BIG", "Beginning Segment for Invoice", (
-    _e("373", "Invoice Date", "DT", 8, 8, MANDATORY),
+    _e("373", "Date", "DT", 8, 8, MANDATORY),
     _e("76", "Invoice Number", "AN", 1, 22, MANDATORY),
-    _e("373", "Purchase Order Date", "DT", 8, 8),
+    _e("373", "Date", "DT", 8, 8),
     _e("324", "Purchase Order Number", "AN", 1, 22),
     _e("328", "Release Number", "AN", 1, 30),
     _e("327", "Change Order Sequence Number", "AN", 1, 8),
@@ -454,7 +463,8 @@ BIG = Segment("BIG", "Beginning Segment for Invoice", (
        {"DI": "Debit Invoice", "CR": "Credit Memo", "CI": "Consolidated Invoice",
         "FD": "Freight Invoice"}),
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, OPTIONAL, PURPOSE_CODES),
-), "Identifies the invoice and the order it bills.")
+), "Identifies the invoice and the order it bills. BIG01 is the invoice's "
+   "own date and BIG03 the date of the order it bills.")
 
 CUR = Segment("CUR", "Currency", (
     _e("98", "Entity Identifier Code", "ID", 2, 3, MANDATORY, ENTITY_CODES),
@@ -841,9 +851,9 @@ ISA = Segment("ISA", "Interchange Control Header", (
     _e("I03", "Security Information Qualifier", "ID", 2, 2, MANDATORY,
        {"00": "No Security Information Present", "01": "Password"}),
     _e("I04", "Security Information", "AN", 10, 10, MANDATORY),
-    _e("I05", "Interchange Sender ID Qualifier", "ID", 2, 2, MANDATORY),
+    _e("I05", "Interchange ID Qualifier", "ID", 2, 2, MANDATORY),
     _e("I06", "Interchange Sender ID", "AN", 15, 15, MANDATORY),
-    _e("I05", "Interchange Receiver ID Qualifier", "ID", 2, 2, MANDATORY),
+    _e("I05", "Interchange ID Qualifier", "ID", 2, 2, MANDATORY),
     _e("I07", "Interchange Receiver ID", "AN", 15, 15, MANDATORY),
     _e("I08", "Interchange Date", "DT", 6, 6, MANDATORY),
     _e("I09", "Interchange Time", "TM", 4, 4, MANDATORY),
