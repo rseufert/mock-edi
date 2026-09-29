@@ -93,7 +93,7 @@ class RejectAll(MockServerCase):
 
     def test_the_855_refuses_the_order(self):
         message = self.document(ACME, "response").groups[0].messages[0]
-        self.assertEqual(message.find("BAK").get(2), "RJ")
+        self.assertEqual(message.find("BAK").get(2), "RD")
 
     def test_nothing_ships_and_nothing_is_invoiced(self):
         self.assertEqual([q["code"] for q in self.summary["queued"]], ["997", "855"])

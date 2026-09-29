@@ -675,7 +675,7 @@ BEHAVIOURS = {
                   "ship and invoice the confirmed quantity.",
     "reject-line": "Reject one line outright (855 IR) and leave it out of the "
                    "shipment and the invoice.",
-    "reject-all": "Acknowledge the syntax, then refuse the order (855 RJ).",
+    "reject-all": "Acknowledge the syntax, then refuse the order (855 RD).",
     "no-ack": "Say nothing at all - no 997 and no 855. For testing your "
               "chase-up timer, which is the failure that actually costs money.",
     "duplicate-invoice": "Send the invoice twice, with the same invoice number, "

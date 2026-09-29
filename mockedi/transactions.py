@@ -549,10 +549,19 @@ def _line_rows(lines: Sequence[Dict], field: str) -> List[Dict]:
 
 
 def acknowledgment_type(lines: Sequence[Dict], dialect: str) -> str:
-    """The overall verdict code, derived from what happened to the lines."""
+    """The overall verdict code, derived from what happened to the lines.
+
+    Several of 587's codes also say whether the lines are detailed, and a
+    translator may branch on that before reading the loops. Every writer here
+    details every line it is given, so a rejection is `RD`, never `RJ`
+    (*Rejected - No Detail*), and only a document with no lines is `AK`.
+    EDIFACT's 4343 has a single `RE` and makes no claim either way (#181).
+    """
+    if not lines:
+        return "AK" if dialect == "X12" else "AP"
     statuses = {row.get("status") or ACCEPTED for row in lines}
     if statuses == {REJECTED}:
-        return "RJ" if dialect == "X12" else "RE"
+        return "RD" if dialect == "X12" else "RE"
     if statuses <= {ACCEPTED}:
         return "AD" if dialect == "X12" else "AP"
     return "AC"
