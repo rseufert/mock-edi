@@ -42,4 +42,4 @@ Changelog = "https://github.com/rseufert/mock-edi/blob/main/CHANGELOG.md"
 mock-edi = "mockedi.__main__:main"
 
 [tool.setuptools]
-packages = ["mockedi"]
+packages = ["mockedi", "mockedi.routes"]
