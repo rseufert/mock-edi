@@ -154,7 +154,7 @@ class WithdrawingAnOrdersFulfilment(unittest.TestCase):
         for kind in (schema.DESPATCH, schema.INVOICE, pipeline.CHANGE_LINE):
             conn.execute(
                 "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
-                " VALUES ('ACME', 'PO-W', ?, ?, ?)", (kind, db.now(), db.now()))
+                " VALUES ('ACME', 'PO-W', ?, ?, ?)", (kind, db.now(conn), db.now(conn)))
         line._withdraw_fulfilment({"id": "ACME"}, "PO-W", "order restated")
         self.assertEqual(
             {row["kind"]: row["note"] for row in db.rows(

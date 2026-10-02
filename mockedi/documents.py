@@ -87,7 +87,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
     shows the one that survived.  Another partner's order with the same number
     is a different order, and untouched.
     """
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     seller_order = _existing_seller_order(conn, order.po_number, partner["id"]) or str(
         db.next_number(conn, "seller_order"))
     conn.execute("DELETE FROM order_line WHERE partner = ? AND po_number = ?",
@@ -130,7 +130,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
          ship_to.name or partner["name"], ship_to.identifier or partner["id"],
          ship_to.street or partner["street"], ship_to.city or partner["city"],
          ship_to.region or partner["region"], ship_to.postal or partner["postal"],
-         ship_to.country or partner["country"], db.now(), db.next_seq(conn)))
+         ship_to.country or partner["country"], db.now(conn), db.next_seq(conn)))
     conn.commit()
     return order_row(conn, order.po_number, partner["id"])
 
@@ -158,7 +158,7 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
     850 and sending it is the caller's business, so this stays a function of
     the database alone.
     """
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     problems: List[str] = []
     po_number = str(request.get("po_number") or "").strip()
     if po_number and order_row(conn, po_number, partner["id"]) is not None:
@@ -203,7 +203,7 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
         (po_number, partner["id"], local(moment).date().isoformat(), requested_on,
          str(request.get("currency") or "USD"), PLACED, db.money(total),
          us.name, us.identifier, us.street, us.city, us.region, us.postal,
-         us.country or "US", PLACED, db.now(), db.next_seq(conn)))
+         us.country or "US", PLACED, db.now(conn), db.next_seq(conn)))
     conn.commit()
     return order_row(conn, po_number, partner["id"])
 
@@ -223,7 +223,7 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
     returned `transactions.Change` is what the 860 or ORDCHG says.
     """
     from .transactions import CANCEL_PURPOSES, Change, ChangeLine
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     order = order_row(conn, po_number, partner_id)
     if order is None or order["direction"] != PLACED:
         raise LookupError("the mock placed no purchase order %r" % po_number)
@@ -558,7 +558,7 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
     ships as a second consignment of its own. Each consignment records what
     it carried in `shipment_line`.
     """
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     order = order_row(conn, po_number, partner_id)
     if order is None:
         return None
@@ -597,7 +597,7 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
          "United Parcel Service", "UPSN", _tracking(shipment_id),
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
-         quantity_text(units * 2), db.now(), db.next_seq(conn)))
+         quantity_text(units * 2), db.now(conn), db.next_seq(conn)))
     conn.execute("UPDATE purchase_order SET status = 'shipped'"
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
@@ -624,7 +624,7 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
     and a buyer can match every bill to a delivery. An order that shipped in
     two consignments is billed twice.
     """
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     order = order_row(conn, po_number, partner_id)
     if order is None:
         return None
@@ -650,7 +650,7 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
         " discount_days, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (invoice_number, po_number, order["partner"], shipment_id,
          local(moment).date().isoformat(), order["currency"], db.money(subtotal),
-         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now(),
+         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now(conn),
          db.next_seq(conn)))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
         conn, "SELECT total FROM invoice WHERE partner = ? AND po_number = ?",
@@ -709,7 +709,7 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
                  when: Optional[datetime.datetime] = None) -> ChangeOutcome:
     """Apply a change request to an order the mock already holds."""
     from .transactions import ADD, CHANGE_LINE, DELETE, NO_CHANGE
-    moment = when or db.utcnow()
+    moment = when or db.moment(conn)
     # The partner's own order with that number, or none: another partner's
     # order with the same number is a different order, and not this one's to
     # change.

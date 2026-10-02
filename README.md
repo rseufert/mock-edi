@@ -446,12 +446,23 @@ mock-edi --ack-delay 2000 --response-delay 30000 --invoice-delay 86400000
 
 Nothing is released on a timer of its own. `POST /_mock/advance?all` releases
 whatever is queued, whenever it was due — a test that has to sleep is slow and
-flaky, and one that advances the clock is neither.
+flaky, and one that advances the clock is neither. It moves the mock's clock
+as far as it has to and no further: the clock steps to each due time in turn,
+the work due then is done and stamped then, and the clock is left at the last
+of them. With no delays nothing is waiting and the clock does not move.
+
+**The mock has one clock.** Every timestamp about the conversation - the `at`
+on an order, a document, a shipment, an invoice, a promise, an acknowledgment,
+and every `dueAt` - is read from it, so nothing is stamped before the promise
+it keeps was due. Two things stay on the host's clock, because they are about
+the process and not the conversation: the request log (`/_mock/requests`) and
+`started` in `/_mock/health`.
 
 `POST /_mock/advance?seconds=N` moves the mock's clock forward by `N` seconds
 and releases whatever that makes due. The clock stays moved: two advances of
 60 release a document due in 90, and everything written afterwards - document
-dates, due times, MDN dates - is dated by the moved clock. The response says
+dates, due times, timestamps, MDN dates - is dated by the moved clock, and
+`/_mock/unacknowledged?older-than=` and `--retention-days` count from it. The response says
 where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
 It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance

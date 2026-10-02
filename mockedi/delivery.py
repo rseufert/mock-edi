@@ -245,7 +245,7 @@ def _finish(conn: sqlite3.Connection, outbound_id: int, status: str,
         "UPDATE outbound SET status = ?, delivered_at = ?, delivery = ?, note = ?,"
         " attempts = attempts + 1, last_attempt_at = ?, last_error = ?"
         " WHERE id = ?",
-        (status, db.now(), url, note, db.now(),
+        (status, db.now(conn), url, note, db.now(conn),
          note if status == "failed" else "", outbound_id))
     conn.commit()
 
@@ -323,5 +323,5 @@ def _record_mdn(conn: sqlite3.Connection, partner: str, direction: str,
         " VALUES (?,?,?,?,?,?,?,?,?,?)",
         (partner, direction, original_id, fields.get("Original-Message-ID", ""),
          fields.get("Disposition", ""), fields.get("Received-Content-MIC", ""),
-         "sync", "received", payload, db.now()))
+         "sync", "received", payload, db.now(conn)))
     conn.commit()

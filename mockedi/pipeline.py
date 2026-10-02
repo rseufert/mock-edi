@@ -122,6 +122,10 @@ class Pipeline:
         # one. Every due time, document date and MDN date reads `now()`, so
         # all of them see the moved clock; a reset puts it back.
         self.offset = datetime.timedelta(0)
+        # The connection tells everything that writes a stamp what time it
+        # is, and it is this clock (#196): `db.now(conn)` anywhere below the
+        # pipeline is `self.now()`, moved by the same advance.
+        self.conn._conn.clock = self.now
         # Set by the server to the courier that posts documents to partners
         # who have an AS2 URL. Left unset, documents wait in the mailbox,
         # which is what a test without a listener of its own wants.
@@ -136,10 +140,11 @@ class Pipeline:
     def now(self) -> datetime.datetime:
         """The mock's clock: the real time in UTC, plus how far it was advanced.
 
-        Aware, and the only clock anything above this reads. Everything it
-        ends up written as goes through `db.stamp`, so that the string
-        comparisons in `release` and in the `unacknowledged` cutoff are
-        between values of the same shape.
+        Aware, and the only clock anything about the conversation reads:
+        every `at` as well as every `due_at`, through `db.now(conn)`.
+        Everything it ends up written as goes through `db.stamp`, so that the
+        string comparisons in `release` and in the `unacknowledged` cutoff
+        are between values of the same shape.
         """
         return db.utcnow() + self.offset
 
@@ -433,7 +438,7 @@ class Pipeline:
             (interchange_id, "in", dialect, partner["id"], message.code,
              message_report.kind, message.control, message_report.group_control,
              reference, 1 if message_report.accepted else 0,
-             json.dumps(_findings(message_report)), db.now(),
+             json.dumps(_findings(message_report)), db.now(self.conn),
              db.next_seq(self.conn)))
         self.conn.commit()
         return reference
@@ -474,7 +479,7 @@ class Pipeline:
             "UPDATE scheduled SET done_at = ?, note = ?"
             " WHERE partner = ? AND po_number = ? AND done_at = ''"
             " AND kind IN (?, ?)",
-            (db.now(), note, partner["id"], po_number,
+            (db.now(self.conn), note, partner["id"], po_number,
              schema.DESPATCH, schema.INVOICE))
         self.conn.commit()
 
@@ -675,7 +680,7 @@ class Pipeline:
             self.conn.execute(
                 "INSERT INTO scheduled (partner, po_number, kind, due_at, at, seq)"
                 " VALUES (?,?,?,?,?,?)",
-                (partner["id"], po_number, kind, db.stamp(due), db.now(),
+                (partner["id"], po_number, kind, db.stamp(due), db.now(self.conn),
                  db.next_seq(self.conn)))
         self.conn.commit()
 
@@ -711,7 +716,7 @@ class Pipeline:
             "INSERT INTO scheduled (partner, po_number, kind, due_at, at, seq)"
             " VALUES (?,?,?,?,?,?)",
             (partner["id"], po_number, wanted[1], db.stamp(self.now()),
-             db.now(), db.next_seq(self.conn)))
+             db.now(self.conn), db.next_seq(self.conn)))
 
     def _send_buyer_change(self, row, moment,
                            receipt: Optional[Receipt] = None) -> None:
@@ -992,7 +997,7 @@ class Pipeline:
             " due_at, note, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
              interchange_control, group_control, set_control, PENDING,
-             db.stamp(due), note, db.now(), db.next_seq(self.conn)))
+             db.stamp(due), note, db.now(self.conn), db.next_seq(self.conn)))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
@@ -1136,7 +1141,7 @@ class Pipeline:
         done: List[int] = []
         for row in rows:
             self.conn.execute("UPDATE scheduled SET done_at = ? WHERE id = ?",
-                              (db.now(), row["id"]))
+                              (db.now(self.conn), row["id"]))
             self.conn.commit()
             self._fulfil(row, when if when.year < 9999 else self.now(), receipt)
             done.append(int(row["id"]))
@@ -1170,10 +1175,10 @@ class Pipeline:
                 " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", db.now(), row["seq"]))
+                 row["reference"], 1, "", db.now(self.conn), row["seq"]))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
-                (READY, db.now(), row["id"]))
+                (READY, db.now(self.conn), row["id"]))
             released.append(int(row["id"]))
         self.conn.commit()
         if released and self.on_release is not None:
@@ -1223,15 +1228,17 @@ class Pipeline:
 
         The clock stays moved: two advances of 60 seconds release what is due
         in 90, and the documents written afterwards are dated by the moved
-        clock. `everything` releases documents that are not due yet without
-        moving the clock, which is what a test wants when it has configured a
-        one-day invoice delay and does not intend to wait.
+        clock.
+
+        `everything` moves it as far as it has to go and no further, which is
+        what a test wants when it has configured a one-day invoice delay and
+        does not intend to wait: the clock steps to each due time in turn, the
+        work due then is done and stamped then, and the clock is left at the
+        last of them. Releasing early with the clock where it was stamped a
+        despatch an hour before it was due (#196).
         """
         if everything:
-            # Aware, like every other moment here: a naive max cannot be
-            # converted to UTC without overflowing.
-            return self.release(
-                datetime.datetime.max.replace(tzinfo=datetime.timezone.utc))
+            return self._advance_to_the_last_due_time()
         if seconds != seconds or seconds in (float("inf"), float("-inf")):
             raise ValueError("seconds must be a finite number, got %s" % seconds)
         if seconds < 0:
@@ -1251,6 +1258,40 @@ class Pipeline:
                    _seconds(limit - ahead), _seconds(seconds)))
         self.offset += datetime.timedelta(seconds=seconds)
         return self.release(self.now())
+
+    def _advance_to_the_last_due_time(self) -> List[int]:
+        released = self.release(self.now())
+        while True:
+            due = self._next_due()
+            if due is None:
+                return released
+            behind = due - self.now()
+            if behind > datetime.timedelta(0):
+                if self.offset + behind > MAX_ADVANCE:
+                    # Due further off than the clock can go (#203): released
+                    # all the same, as `?all` promises, with the clock left
+                    # where it could get to.
+                    return released + self.release(
+                        datetime.datetime.max.replace(
+                            tzinfo=datetime.timezone.utc))
+                self.offset += behind
+            # Keeping one promise can make another - an invoice's duplicate, a
+            # buyer's change - so the next due time is looked up again.
+            released.extend(self.release(self.now()))
+
+    def _next_due(self) -> Optional[datetime.datetime]:
+        """When the earliest thing still waiting is due, or None."""
+        waiting = [row["due"] for row in db.rows(
+            self.conn,
+            "SELECT MIN(due_at) AS due FROM scheduled WHERE done_at = ''"
+            " UNION ALL"
+            " SELECT MIN(due_at) AS due FROM outbound WHERE status = ?",
+            (PENDING,)) if row["due"]]
+        if not waiting:
+            return None
+        return datetime.datetime.strptime(
+            min(waiting), "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
 
     def collect(self, partner_id: str = "", kind: str = "",
                 leave: bool = False) -> List[Dict[str, Any]]:
@@ -1275,7 +1316,7 @@ class Pipeline:
                 self.conn.execute(
                     "UPDATE outbound SET status = ?, delivered_at = ?,"
                     " delivery = 'mailbox' WHERE id = ?",
-                    (COLLECTED, db.now(), row["id"]))
+                    (COLLECTED, db.now(self.conn), row["id"]))
             self.conn.commit()
         return rows
 
@@ -1298,7 +1339,7 @@ class Pipeline:
             " transport, message_id, mic, payload, raw, charset, at)"
             " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
             (direction, dialect, partner_id, control, transport, message_id, mic,
-             payload, raw, charset, db.now()))
+             payload, raw, charset, db.now(self.conn)))
         self.conn.commit()
         return int(cursor.lastrowid)
 
