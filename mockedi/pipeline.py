@@ -1025,9 +1025,15 @@ class Pipeline:
                       delay_ms: int = 0, shipment_id: str = "") -> Queued:
         """Send a document on demand, outside the usual choreography.
 
-        `/_mock/send` uses this: it is how a test replays a lost invoice, or
-        produces an unsolicited despatch advice, without arranging the whole
-        order first.
+        `/_mock/send` uses this: it is how a test gets an invoice sent again,
+        or an unsolicited despatch advice, without arranging the whole order
+        first.
+
+        It *writes* a document, now, from the order as it stands: a new
+        interchange with new control numbers, dated now, and saying what the
+        order says today - a quantity ordered that a change has since raised
+        is the raised one. Sending the bytes that went out before, unchanged,
+        is `redeliver`'s job (`/_mock/outbox/<id>/retry`).
 
         A despatch advice or an invoice is about one consignment, and is
         written from that consignment's lines, as the original was (#201):
