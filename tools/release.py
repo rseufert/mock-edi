@@ -211,9 +211,14 @@ class Release:
             raise Stop("CI is not green on main's head %s (%s); release from a "
                        "commit whose checks have passed."
                        % (head[:7], ", ".join(runs) or "no run"))
-        waiting = self.gh("pr", "list", "--state", "open", "--label",
-                          self.version, "--json", "number", "-q",
-                          ".[].number").out.split()
+        # Every open pull request with its labels, and the labelled ones
+        # picked out here. `--label` would be shorter, and is answered from
+        # GitHub's search index, which is behind a label put on a moment ago
+        # (#190) - the one this check exists to catch.
+        waiting = self.gh("pr", "list", "--state", "open", "--limit", "500",
+                          "--json", "number,labels", "-q",
+                          '.[]|select(any(.labels[]; .name=="%s"))|.number'
+                          % self.version).out.split()
         if waiting:
             raise Stop("pull request%s %s %s labelled %s and still open; merge "
                        "or relabel before releasing."
@@ -383,9 +388,15 @@ class Release:
             self.sleep(POLL)
 
     def open_pull_request(self) -> int:
-        found = self.gh("pr", "list", "--state", "open", "--search",
-                        '"%s" in:title' % self.title, "--json", "number,title",
-                        "-q", '.[]|select(.title=="%s")|.number' % self.title,
+        """The open release pull request's number, or 0.
+
+        Found by its branch. Asking by title goes through GitHub's search
+        index, which lags a new pull request by seconds to minutes, so the
+        ask straight after creating one was the ask most likely to miss it
+        (#190). A branch's pull requests are listed from the repository.
+        """
+        found = self.gh("pr", "list", "--state", "open", "--head", self.branch,
+                        "--json", "number", "-q", ".[].number",
                         check=False).out.split()
         return int(found[0]) if found else 0
 

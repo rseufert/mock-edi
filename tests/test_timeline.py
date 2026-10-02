@@ -20,8 +20,8 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 from support import (ACME, EURODIS, INITECH, MockServerCase, STEPS,
-                     acknowledge, edifact_order, spans_more_than_a_second,
-                     stepping, x12_order)
+                     acknowledge, edifact_order, parse,
+                     spans_more_than_a_second, stepping, x12_order)
 
 EDIFACT = {"Content-Type": "application/edifact"}
 
@@ -425,6 +425,125 @@ def sequences_in(blob, trail=""):
         for index, value in enumerate(blob):
             found += sequences_in(value, "%s[%d]" % (trail, index))
     return found
+
+
+class WhatAnAcknowledgmentAnswers(MockServerCase):
+    """A sent 997, CONTRL or TA1 says which document it is for (#197).
+
+    The partner's own receipt already did, as an `acknowledged` event. One
+    the mock sent carried only its own envelope, so a reader had to ask for
+    `?raw` and pick AK1 and AK2 out of the payload to learn that this 997
+    was the one for that 850.
+    """
+
+    def acknowledgments(self, po_number, **kw):
+        _s, _h, found = self.get("/_mock/orders/%s/timeline" % po_number, **kw)
+        return [e for e in found["events"]
+                if e.get("kind") in ("acknowledgment", "interchange-acknowledgment")]
+
+    def envelope(self, po_number):
+        _s, _h, found = self.get("/_mock/orders/%s/timeline" % po_number)
+        return [e for e in found["events"] if e["event"] == "received"
+                and e["kind"] == "order"][0]["interchange"]
+
+    def test_a_997_for_an_accepted_850(self):
+        self.send(x12_order("TL-ANSWERS"))
+        event = self.acknowledgments("TL-ANSWERS")[0]
+        self.assertEqual(event["answers"], {
+            "interchange": self.envelope("TL-ANSWERS"),
+            "verdict": "A", "status": "accepted",
+            "sets": [{"code": "850", "control": "0001", "verdict": "A",
+                      "status": "accepted", "note": ""}]})
+        self.assertIn("sent 997 0001 (acknowledgment) accepting your 850 0001",
+                      event["summary"])
+        # Its own envelope is still where it was, and is not the one it answers.
+        self.assertNotEqual(event["interchange"], event["answers"]["interchange"])
+
+    def test_one_accepted_with_errors_says_so_and_why(self):
+        self.send(x12_order("TL-ERRORS", purpose="ZZ"))
+        answers = self.acknowledgments("TL-ERRORS")[0]
+        one = answers["answers"]["sets"][0]
+        self.assertEqual((one["verdict"], one["status"]),
+                         ("E", "accepted-with-errors"))
+        self.assertIn("BEG", one["note"])
+        self.assertIn("accepting your 850 0001, with errors noted",
+                      answers["summary"])
+
+    def test_a_rejection(self):
+        self.send(x12_order("TL-REJECT", lines=(("WIDGET-001", "lots", "12.50"),)))
+        row = self.mailbox(ACME, "acknowledgment", leave=True)[-1]
+        self.assertIn("AK5*R", row["payload"])
+        # No order was stored, so it is read through the document's own view.
+        from mockedi import reconcile
+        answers = reconcile.answers("X12", "acknowledgment", "0001", "X",
+                                    row["payload"])
+        self.assertEqual((answers["verdict"], answers["status"]), ("R", "rejected"))
+        self.assertEqual(answers["sets"][0]["status"], "rejected")
+
+    def test_a_ta1_answers_an_envelope_and_no_set(self):
+        text = x12_order("TL-TA1")
+        isa = text.split("~")[0]
+        parts = isa.split("*")
+        parts[14] = "1"                 # ISA14: an acknowledgment is requested
+        self.send(text.replace(isa, "*".join(parts), 1))
+        ta1 = [e for e in self.acknowledgments("TL-TA1") if e["code"] == "TA1"][0]
+        self.assertEqual(ta1["answers"], {
+            "interchange": self.envelope("TL-TA1"), "verdict": "A",
+            "status": "accepted", "sets": []})
+        self.assertIn("accepting your interchange " + self.envelope("TL-TA1"),
+                      ta1["summary"])
+
+    def test_a_contrl(self):
+        self.send(edifact_order("TL-EU-ANSWERS"), headers=EDIFACT)
+        event = self.acknowledgments("TL-EU-ANSWERS")[0]
+        self.assertEqual(event["answers"], {
+            "interchange": self.envelope("TL-EU-ANSWERS"),
+            "verdict": "7", "status": "accepted",
+            "sets": [{"code": "ORDERS", "control": "1", "verdict": "7",
+                      "status": "accepted", "note": ""}]})
+        self.assertIn("sent CONTRL", event["summary"])
+        self.assertIn("accepting your ORDERS 1", event["summary"])
+
+    def test_the_partners_own_receipt_reads_as_it_did(self):
+        # A 997 the partner sends is not a document event in this timeline:
+        # it is the `acknowledged` event, which already named what it was
+        # for. That is unchanged, and read from the same 997 by the same
+        # function the new key uses.
+        self.send(x12_order("TL-THEIRS"))
+        sent = self.mailbox(ACME, "response", leave=True)[0]["payload"]
+        theirs = acknowledge(sent)
+        self.send(theirs)
+        _s, _h, found = self.get("/_mock/orders/TL-THEIRS/timeline")
+        acknowledged = [e for e in found["events"] if e["event"] == "acknowledged"]
+        self.assertEqual([(e["code"], e["status"]) for e in acknowledged],
+                         [("855", "accepted")])
+        self.assertNotIn("answers", acknowledged[0])
+        from mockedi import reconcile
+        control = parse(theirs).groups[0].messages[0].control
+        read = reconcile.answers("X12", "acknowledgment", control, "", theirs)
+        self.assertEqual([(s["code"], s["status"]) for s in read["sets"]],
+                         [("855", "accepted")])
+
+    def test_only_an_acknowledgment_has_the_key(self):
+        self.send(x12_order("TL-ONLY"))
+        self.post("/_mock/advance?all")
+        _s, _h, found = self.get("/_mock/orders/TL-ONLY/timeline")
+        for event in found["events"]:
+            is_ack = event.get("kind") in ("acknowledgment",
+                                           "interchange-acknowledgment")
+            self.assertEqual("answers" in event, is_ack, event["summary"])
+
+    def test_a_997_of_ak1_and_ak9_alone_answers_for_the_group(self):
+        from mockedi import reconcile
+        payload = ("ISA*00*          *00*          *ZZ*ACME           "
+                   "*ZZ*MOCKEDI        *261001*0900*U*00401*000000009*0*T*>~"
+                   "GS*FA*ACME*MOCKEDI*20261001*0900*9*X*004010~"
+                   "ST*997*0001~AK1*PR*44~AK9*A*1*1*1~SE*4*0001~"
+                   "GE*1*9~IEA*1*000000009~")
+        self.assertEqual(
+            reconcile.answers("X12", "acknowledgment", "0001", "000000044", payload),
+            {"interchange": "000000044", "verdict": "A", "status": "accepted",
+             "sets": []})
 
 
 class TheSequenceIsTheMocksOwnBusiness(MockServerCase):
