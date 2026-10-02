@@ -9,7 +9,10 @@ sys.path.insert(0, HERE)
 
 from mockedi import validate, x12
 
-from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
+from mockedi.envelope import seg
+
+from support import (ACME, EURODIS, MockServerCase, _next_control,
+                     edifact_order, x12_order)
 
 EDIFACT = {"Content-Type": "application/edifact"}
 
@@ -63,6 +66,87 @@ class X12GroupTrailers(MockServerCase):
         message = self.document(ACME, "acknowledgment").groups[0].messages[0]
         report = validate.validate_message(message, "X12")
         self.assertTrue(report.clean, report.summary())
+
+
+def order_body(po_number, purpose="00"):
+    return [seg("BEG", purpose, "SA", po_number, "", "20260924"),
+            seg("N1", "ST", "Acme DC 4", "92", "ACME-DC4"),
+            seg("PO1", "1", "10", "EA", "12.50", "", "VP", "WIDGET-001"),
+            seg("CTT", "1")]
+
+
+def two_orders(second_purpose="00"):
+    """Two 850s in one group; the second can be given a BEG01 that is no code."""
+    control = _next_control(9)
+    return x12.render(x12.wrap(
+        [x12.message("850", "0001", order_body("PO-ONE")),
+         x12.message("850", "0002", order_body("PO-TWO", second_purpose))],
+        ACME, "MOCKEDI", control, control.lstrip("0") or "1", "PO"), newline=True)
+
+
+class The997ForARejectedGroup(MockServerCase):
+    """No set inside a rejected group is acknowledged as accepted (#205).
+
+    A group whose GE miscounts is rejected whole, however clean its sets. The
+    997 used to say `AK5*A` for each clean set beside `AK9*R`, and a reader
+    that takes its verdict from AK5 - the usual kind - saw an accepted order
+    the mock had dropped. Checked on the bytes, since that is what is read.
+    """
+
+    def body(self, payload):
+        """The 997's own segments, AK1 to AK9, as the text that was sent."""
+        self.send(payload)
+        sent = self.mailbox(ACME, "acknowledgment")[0]["payload"]
+        lines = [line.strip() for line in sent.split("~")]
+        return [line for line in lines if line.startswith("AK")]
+
+    def test_a_clean_set_under_a_miscounting_ge_is_rejected_not_accepted(self):
+        text = x12_order("GE-COUNT-BYTES")
+        group = [line.strip() for line in text.split("~")
+                 if line.strip().startswith("GS*")][0].split("*")[6]
+        self.assertEqual(self.body(text.replace("GE*1*", "GE*9*")),
+                         ["AK1*PO*%s" % group, "AK2*850*0001", "AK5*R",
+                          "AK9*R*1*1*0*5"])
+
+    def test_the_same_when_the_ge_control_number_is_wrong(self):
+        text = x12_order("GE-CONTROL-BYTES")
+        ge = [line for line in text.split("~") if line.strip().startswith("GE*")][0]
+        count, control = ge.strip().split("*")[1:3]
+        body = self.body(text.replace(ge, "GE*%s*%d" % (count, int(control) + 1)))
+        self.assertEqual(body[1:], ["AK2*850*0001", "AK5*R", "AK9*R*1*1*0*4"])
+
+    def test_every_set_is_named_and_none_says_accepted(self):
+        body = self.body(two_orders().replace("GE*2*", "GE*9*"))
+        self.assertEqual(body[1:], ["AK2*850*0001", "AK5*R",
+                                    "AK2*850*0002", "AK5*R", "AK9*R*2*2*0*5"])
+
+    def test_a_set_with_an_error_of_its_own_still_says_what_it_was(self):
+        body = self.body(two_orders(second_purpose="ZZ").replace("GE*2*", "GE*9*"))
+        self.assertEqual(body[1:3], ["AK2*850*0001", "AK5*R"])
+        self.assertEqual(body[3], "AK2*850*0002")
+        self.assertTrue(body[4].startswith("AK3*BEG*"), body)
+        self.assertTrue(body[5].startswith("AK4*1*353*7"), body)
+        self.assertEqual(body[6:], ["AK5*R*5", "AK9*R*2*2*0*5"])
+
+    def test_nothing_in_any_rejected_group_says_a_or_e(self):
+        for payload in (x12_order("GE-A").replace("GE*1*", "GE*9*"),
+                        two_orders("ZZ").replace("GE*2*", "GE*9*")):
+            for line in self.body(payload):
+                if line.startswith("AK5"):
+                    self.assertEqual(line.split("*")[1], "R", line)
+            self.post("/_mock/reset")
+
+    def test_an_accepted_group_is_acknowledged_as_it_was(self):
+        self.assertEqual(self.body(two_orders())[1:],
+                         ["AK2*850*0001", "AK5*A", "AK2*850*0002", "AK5*A",
+                          "AK9*A*2*2*2"])
+
+    def test_the_same_flawed_set_in_an_accepted_group_is_still_e(self):
+        # The set that is `AK5*R*5` above, when its group is sound: accepted
+        # with errors, as before. Only the group's rejection makes it R.
+        body = self.body(two_orders(second_purpose="ZZ"))
+        self.assertEqual(body[1:3], ["AK2*850*0001", "AK5*A"])
+        self.assertEqual(body[-2:], ["AK5*E*5", "AK9*E*2*2*2"])
 
 
 class X12InterchangeTrailers(MockServerCase):

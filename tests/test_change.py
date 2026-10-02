@@ -9,7 +9,7 @@ sys.path.insert(0, HERE)
 
 from decimal import Decimal
 
-from mockedi import validate
+from mockedi import documents, validate
 
 from support import (ACME, EURODIS, MockServerCase, edifact_change,
                      edifact_order, parse, x12_change, x12_order)
@@ -410,10 +410,14 @@ class AnOrderRestatedAsAChange(MockServerCase):
         self.restate_without_line_2("04")
         self.assertEqual(self.order("PO-RESTATE")["lines"][1]["confirmed"], "0")
 
-    def test_a_first_order_with_a_change_purpose_is_still_an_order(self):
+    def test_a_change_to_an_order_never_placed_is_not_an_order(self):
+        # It was one, until #198: the original never arrived, and the sender
+        # hears that rather than getting goods for a message that said
+        # "change". tests/test_restated_orders.py has the rest.
         summary = self.send(x12_order("PO-BRAND-NEW", purpose="04"))
-        self.assertEqual(summary["orders"], ["PO-BRAND-NEW"])
-        self.assertEqual(self.order("PO-BRAND-NEW")["lines"][0]["quantity"], "100")
+        self.assertEqual(summary["orders"], [])
+        self.assertEqual(summary["refusals"], [
+            {"order": "PO-BRAND-NEW", "reason": documents.NOT_FOUND}])
 
 
 class TheChangeIsFiledUnderItsOrder(MockServerCase):

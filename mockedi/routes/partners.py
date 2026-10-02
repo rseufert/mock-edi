@@ -29,6 +29,8 @@ def partner(h, rest: List[str]) -> Tuple[int, int]:
             try:
                 row = partners.create(conn, identifier, payload.pop("name", ""),
                                       **payload)
+            except partners.Exists as error:
+                return h.json(409, {"error": str(error)})
             except ValueError as error:
                 return h.json(400, {"error": str(error)})
             return h.json(201, row)

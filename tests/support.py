@@ -231,10 +231,11 @@ def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
 
 
 def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS,
-                  receiver="MOCKEDI", control=None, extra=(), delimiters=None):
+                  receiver="MOCKEDI", control=None, extra=(), delimiters=None,
+                  purpose="9"):
     """An ORDERS, as a rendered interchange."""
     control = control or _next_control(4)
-    body = [seg("BGM", ["220"], [po_number], "9"),
+    body = [seg("BGM", ["220"], [po_number], purpose),
             seg("DTM", ["137", "20260924", "102"]),
             seg("DTM", ["2", "20261010", "102"]),
             seg("NAD", "BY", ["EURODIS", "", "92"], "", ["Eurodis Handels GmbH"],
