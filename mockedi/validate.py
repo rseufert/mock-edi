@@ -39,7 +39,8 @@ from dataclasses import dataclass, field
 from typing import Dict, List, Optional, Sequence, Tuple
 
 from . import schema
-from .envelope import Interchange, Message, Seg, parse_date
+from .envelope import (EDIFACT_DATE_LAYOUTS, EDIFACT_DATE_PICTURES, Interchange,
+                       Message, Seg, parse_date, parse_edifact_date)
 
 FATAL = "fatal"
 ERROR = "error"
@@ -871,6 +872,9 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
             for index, sub in enumerate(element.components, start=1):
                 value = components[index - 1] if index <= len(components) else ""
                 findings.extend(_check_value(value, sub, position, index, definition))
+            if element.ref == "C507":
+                findings.extend(_check_edifact_date(components, position,
+                                                    definition))
             # A component past the definition is *not* reported, and that is
             # deliberate rather than an oversight to match up with the rule
             # above. A segment's element list is complete here unless it
@@ -934,6 +938,29 @@ def _check_value(value: str, element: schema.Element, position: int,
     if element.type == "TM" and not _is_time(value):
         out.append(finding("9", "%s is not a valid time: %r" % (label, value)))
     return out
+
+
+def _check_edifact_date(components: Sequence[str], position: int,
+                        definition: schema.Segment) -> List[ElementFinding]:
+    """A DTM whose value is not what its format qualifier says it is.
+
+    2380 is plain text in the directory, so nothing else looks at it: a date
+    that could not be read was dropped without a word, and the order went on
+    with no date at all (#209). Only a format the mock reads is judged - an
+    unknown qualifier is already reported against 2379's code list - and a
+    DTM that states no format is left alone, as the directory allows.
+    """
+    value = components[1] if len(components) > 1 else ""
+    form = components[2] if len(components) > 2 else ""
+    if not value or form not in EDIFACT_DATE_LAYOUTS:
+        return []
+    if parse_edifact_date(value, form) is not None:
+        return []
+    return [ElementFinding(
+        position=position, component=2, ref="2380", code="8", value=value,
+        note="%s/2380 is not a valid date in format %s (%s): %r"
+             % (definition.label(position), form, EDIFACT_DATE_PICTURES[form],
+                value))]
 
 
 def _is_time(value: str) -> bool:

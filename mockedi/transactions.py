@@ -50,7 +50,8 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 
 from . import schema
 from .money import cents, unit_price
-from .envelope import Message, Seg, ccyymmdd, hhmm, seg, parse_date
+from .envelope import (Message, Seg, ccyymmdd, hhmm, seg, parse_date,
+                       parse_edifact_date)
 
 # The date and the time a document is written at, as the wire carries them:
 # the mock's clock read in the host's zone, which is what the envelope around
@@ -514,11 +515,11 @@ def _read_order_edifact(message: Message) -> Order:
 
     for item in header:
         if item.tag == "DTM":
-            qualifier, value = item.comp(1, 1), item.comp(1, 2)
+            qualifier, value = item.comp(1, 1), _dtm_date(item)
             if qualifier == "137" and not order.ordered_on:
-                order.ordered_on = parse_date(value)
+                order.ordered_on = value
             elif qualifier in REQUESTED_EDIFACT and not order.requested_on:
-                order.requested_on = parse_date(value)
+                order.requested_on = value
         elif item.tag == "CUX" and item.comp(1, 2):
             order.currency = item.comp(1, 2)
         elif item.tag == "NAD":
@@ -976,7 +977,7 @@ def _read_change_edifact(message: Message) -> Change:
         header.append(item)
     for item in header:
         if item.tag == "DTM" and item.comp(1, 1) == "137":
-            change.changed_on = parse_date(item.comp(1, 2))
+            change.changed_on = _dtm_date(item)
         elif item.tag == "CUX" and item.comp(1, 2):
             change.currency = item.comp(1, 2)
         elif item.tag == "RFF" and item.comp(1, 1) == "ON":
@@ -1756,11 +1757,17 @@ def _edifact_rff(segments: Sequence[Seg], code: str) -> Seg:
     return None
 
 
+def _dtm_date(item: Seg):
+    """The date in an EDIFACT DTM, read by the format its third component
+    states: 102 a date, 203 and 204 a date and a time (#209)."""
+    return parse_edifact_date(item.comp(1, 2), item.comp(1, 3))
+
+
 def _edifact_dtm(segments: Sequence[Seg], codes: Sequence[str]):
     for code in codes:
         for item in segments:
             if item.tag == "DTM" and item.comp(1, 1) == code:
-                found = parse_date(item.comp(1, 2))
+                found = _dtm_date(item)
                 if found:
                     return found
     return None
