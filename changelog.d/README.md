@@ -30,7 +30,13 @@ More than one bullet in a file is allowed: a change with two faces should not
 need two files.
 
 The reference — `[#44]` — is resolved from `CHANGELOG.md`'s link block at the
-foot of the file, so add it there if the number is new.
+foot of the file. **Do not add the line yourself.** The release writes a
+definition for every reference the new section uses, and the changelog check
+fails on one that has none, so a missing link is caught without anyone editing
+the foot of `CHANGELOG.md` — which is the shared line range this directory
+exists to keep people out of. Asking authors to edit it was the old rule; it
+brought back the conflicts `changelog.d/` had just ended, so nobody followed it
+and eight references went unlinked into 0.6.0 (#226).
 
 ## Cutting a release
 

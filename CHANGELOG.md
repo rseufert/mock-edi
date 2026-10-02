@@ -1337,6 +1337,14 @@ documents a real one sends.
 [#156]: https://github.com/rseufert/mock-edi/issues/156
 [#173]: https://github.com/rseufert/mock-edi/issues/173
 
+[#138]: https://github.com/rseufert/mock-edi/issues/138
+[#151]: https://github.com/rseufert/mock-edi/issues/151
+[#165]: https://github.com/rseufert/mock-edi/issues/165
+[#168]: https://github.com/rseufert/mock-edi/issues/168
+[#170]: https://github.com/rseufert/mock-edi/issues/170
+[#171]: https://github.com/rseufert/mock-edi/issues/171
+[#178]: https://github.com/rseufert/mock-edi/issues/178
+[#181]: https://github.com/rseufert/mock-edi/issues/181
 [Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.6.0...HEAD
 [0.6.0]: https://github.com/rseufert/mock-edi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
