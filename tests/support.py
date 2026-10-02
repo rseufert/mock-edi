@@ -173,6 +173,19 @@ def stepping(step_ms):
         db.utcnow = real
 
 
+@contextlib.contextmanager
+def frozen():
+    """The clock standing still, so a test about one second gets one second.
+
+    `TheOrderInsideOneSecond` asserted that premise instead of arranging it,
+    and failed on a slow runner whenever an order happened to straddle a
+    second - a red run that said nothing about the order being right, which
+    is what the test is for. A step of zero never moves.
+    """
+    with stepping(0):
+        yield
+
+
 def spans_more_than_a_second(timeline) -> bool:
     """Whether a timeline's events do not all share one second.
 
