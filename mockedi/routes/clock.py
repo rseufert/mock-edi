@@ -8,7 +8,8 @@ from __future__ import annotations
 from typing import Tuple
 
 from .. import db, partners, pipeline, reconcile
-from . import BadQuery, first, flag, json_body, limit, number, only, route
+from . import (BadQuery, first, flag, json_body, limit, number, only, route,
+               text, whole)
 
 
 @route("GET", "/_mock/scheduled")
@@ -70,9 +71,9 @@ def send(h) -> Tuple[int, int]:
     payload = json_body(h.body)
     try:
         queued = h.mock.pipeline.send_document(
-            payload.get("partner", ""), payload.get("kind", ""),
-            payload.get("order", "") or payload.get("po", ""),
-            int(payload.get("delayMs", 0)))
+            text(payload, "partner"), text(payload, "kind"),
+            text(payload, "order") or text(payload, "po"),
+            whole(payload, "delayMs"))
     except partners.UnknownPartner as error:
         return h.json(404, {"error": "no partner %s" % error})
     except ValueError as error:

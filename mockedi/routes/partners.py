@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import Any, Dict, Tuple
 
 from .. import db, delivery, partners, profiles
-from . import json_body, route
+from . import json_body, route, text
 
 
 @route("GET", "/_mock/partners", refuse="GET or POST partners")
@@ -20,7 +20,8 @@ def listing(h) -> Tuple[int, int]:
 @route("POST", "/_mock/partners")
 def create(h) -> Tuple[int, int]:
     payload = json_body(h.body)
-    identifier = payload.pop("id", "")
+    identifier = text(payload, "id")
+    payload.pop("id", None)
     if not identifier:
         return h.json(400, {"error": "a partner needs an id"})
     refused = _refused_url(h, payload)
