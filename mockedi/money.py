@@ -25,3 +25,20 @@ def cents(value: Union[Decimal, str, int, float]) -> Decimal:
     if not isinstance(value, Decimal):
         value = Decimal(str(value))
     return value.quantize(CENT, rounding=ROUND_HALF_UP)
+
+
+def unit_price(value: Union[Decimal, str, int, float]) -> str:
+    """A unit price as it is written: every decimal it was given, and at
+    least two.
+
+    A unit price is not an amount, and is not rounded: 0.125 each is ordinary
+    for anything sold by the thousand, and the elements that carry it (X12's
+    212, EDIFACT's 5118) are decimals of up to 17 and 15 characters. Rounding
+    it to 0.12 changed the order - a thousand of them is 125.00, not 120.00 -
+    and then compared 0.12 with 0.12 when the supplier answered at the real
+    price (#206). The *amount* a price produces is rounded, by `cents`.
+    """
+    if not isinstance(value, Decimal):
+        value = Decimal(str(value))
+    whole, _, decimals = format(value.normalize(), "f").partition(".")
+    return "%s.%s" % (whole, decimals.ljust(2, "0"))

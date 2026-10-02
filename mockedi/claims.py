@@ -31,6 +31,7 @@ from decimal import Decimal
 from typing import Any, Callable, Dict, List, Optional
 
 from . import db, documents, schema
+from .money import unit_price
 from .transactions import (REJECTED, number, price_text, quantity_text)
 from .validate import BusinessFinding
 
@@ -117,7 +118,7 @@ def record(conn, partner: Dict[str, Any], kind: str, code: str, control: str,
             (partner["id"], order["po_number"], claim.line, kind, code, control,
              interchange, reference, claim.status, claim.sku, claim.upc,
              quantity_text(claim.quantity),
-             "" if claim.price is None else price_text(claim.price),
+             "" if claim.price is None else unit_price(claim.price),
              claim.reason, moment))
 
     for rule in RULES.get(kind, ()):
@@ -375,9 +376,11 @@ def restated_price(received: Received) -> None:
         ordered = number(row["ordered_price"], "0.00")
         if claim.price != ordered:
             received.disagree(
-                "price-differs", claim.line, _money(ordered), _money(claim.price),
+                "price-differs", claim.line, unit_price(ordered),
+                unit_price(claim.price),
                 "line %s: ordered at %s, %s says %s%s"
-                % (claim.line, _money(ordered), received.code, _money(claim.price),
+                % (claim.line, unit_price(ordered), received.code,
+                   unit_price(claim.price),
                    " (%s, price changed)" % claim.status
                    if claim.status == PRICE_CHANGED else ""))
 
@@ -475,11 +478,12 @@ def price_not_agreed(received: Received) -> None:
         if claim.price not in agreed:
             received.disagree(
                 "price-not-agreed", claim.line,
-                " or ".join(sorted(_money(price) for price in agreed)),
-                _money(claim.price),
+                " or ".join(sorted(unit_price(price) for price in agreed)),
+                unit_price(claim.price),
                 "line %s: billed at %s, ordered at %s%s"
-                % (claim.line, _money(claim.price), _money(ordered),
-                   ", confirmed at %s" % _money(confirmed[-1]) if confirmed else ""))
+                % (claim.line, unit_price(claim.price), unit_price(ordered),
+                   ", confirmed at %s" % unit_price(confirmed[-1])
+                   if confirmed else ""))
 
 
 def total_not_lines(received: Received) -> None:
