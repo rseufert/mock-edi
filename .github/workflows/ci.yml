@@ -58,6 +58,7 @@ jobs:
 
   docs:
     name: documentation covers every file
+    if: false   # THROWAWAY (#277): shows a skipped job turns the required job red
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -185,6 +186,8 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
+      - name: THROWAWAY (#277) - shows a failed job turns the required job red
+        run: exit 1
       - run: docker build -t mock-edi:ci .
       - name: Run it and send it an order
         run: |
@@ -198,3 +201,31 @@ jobs:
           curl -sf -X POST --data-binary @order.edi http://127.0.0.1:8080/edi
           curl -sf "http://127.0.0.1:8080/_mock/orders/PO-DOCKER"
           docker rm -f mock-edi
+
+  # The one check `main` requires. Its name, "all checks passed", is written
+  # into a ruleset in the repository's settings: do not change it here without
+  # changing it there, or nothing can be merged.
+  #
+  # It exists because the jobs above cannot be required by name. The matrix
+  # generates "tests (py3.12 on macos-latest)" and its eight neighbours, and
+  # those names change whenever the matrix does.
+  #
+  # A job added to this workflow must be added to `needs:` below, or it can
+  # fail without stopping a merge. tests/test_workflows.py holds that.
+  all-green:
+    name: all checks passed
+    needs: [test, docs, smoke, package, docker]
+    # Without `always()`, this job is skipped when one it needs fails, and a
+    # required check that was skipped counts as passed.
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Every job this one needs succeeded
+        env:
+          NEEDS: ${{ toJSON(needs) }}
+        # Anything but "success" fails it: failure, cancelled, and skipped,
+        # which is not a pass here either.
+        run: |
+          echo "$NEEDS" | jq -r 'to_entries[] | "\(.key): \(.value.result)"'
+          echo "$NEEDS" | jq -e 'all(.[]; .result == "success")' >/dev/null

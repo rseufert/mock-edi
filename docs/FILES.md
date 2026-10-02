@@ -148,6 +148,7 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 | `release.py` | A release in one command: refuses a `main` that is not clean, level and green, then branches, assembles the changelog section, bumps the version, runs the checks and the suite, opens and merges the release pull request, tags the merge commit, publishes the GitHub Release, waits for Publish and confirms PyPI. `--resume` finishes from whatever exists, including a release merged and never tagged. |
 | `test_changelog_tool.py` | The changelog checks and the release that assembles them: fragment naming including two entries for one issue, the intro placeholder that the check refuses, an entry that vanished from `changelog.d/` reported as lost, and the newest released section split back into fragments and reassembled entry for entry. |
 | `test_release_tool.py` | `tools/release.py` against a fake repository, GitHub and PyPI: a release from a green `main` in one command, each refusal, the stop for the upgrade paragraph and `--resume` after it, the 0.4.0 state - merged, never tagged - finished by `--resume`, and every wait giving up with what it was waiting for.; and against a GitHub whose search index is behind (#190): the new pull request found by its branch on the first ask, a pull request labelled a moment ago still stopping the release, and nothing asked that goes through search. |
+| `test_workflows.py` | The workflow files, read as text: the job `main` requires needs every other job in `ci.yml`, runs even when one of them failed, and passes only on success; and every action from outside GitHub is pinned to a commit with its version beside it. |
 
 ## `examples/`
 
@@ -162,5 +163,11 @@ with `python3 -m unittest discover -s tests -v`, or a single surface with
 
 | File | What it is |
 | --- | --- |
-| `ci.yml` | Tests on eight Python and OS combinations, the documentation and changelog checks, the documented examples, a package build and install, and the container image. |
-| `publish.yml` | Releases to PyPI with Trusted Publishing (OIDC, no stored token), after checking that the tag, `pyproject.toml` and the built wheel all agree. Run manually to rehearse against TestPyPI. |
+| `ci.yml` | Tests on nine Python and OS combinations, the documentation and changelog checks, the documented examples, a package build and install, and the container image. A last job, `all checks passed`, needs all of those and passes only when each did: it is the one check `main` requires, and its name is written into the ruleset. |
+| `publish.yml` | Releases to PyPI with Trusted Publishing (OIDC, no stored token), after checking that the tag, `pyproject.toml` and the built wheel all agree. Run manually to rehearse against TestPyPI. The publish action is pinned to a commit. |
+
+## `.github/`
+
+| File | What it is |
+| --- | --- |
+| `dependabot.yml` | Asks Dependabot for a weekly pull request when an action the workflows use has a newer release. It is what keeps the publish action's pinned commit current. |
