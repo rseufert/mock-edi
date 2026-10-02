@@ -241,7 +241,14 @@ class DespatchItem:
 class Despatch:
     """What a seller says it has shipped: an 856, or a DESADV."""
     shipment_id: str = ""
+    # Three dates, and three fields: when the goods left (DTM 011, DTM+11),
+    # when the notice was written (BSN03, DTM+137) and when they should
+    # arrive (DTM 017, DTM+17). A notice sent the day after is a day out for
+    # a reader that takes one for another (#230), so a date the document does
+    # not give is left empty rather than filled in from its neighbour.
     shipped_on: Optional[datetime.date] = None
+    written_on: Optional[datetime.date] = None
+    estimated_delivery: Optional[datetime.date] = None
     po_number: str = ""
     ordered_on: Optional[datetime.date] = None
     carrier: str = ""
@@ -1521,7 +1528,9 @@ def _read_despatch_x12(message: Message) -> Despatch:
     bsn = message.find("BSN")
     if bsn is not None:
         despatch.shipment_id = bsn.get(2)
-        despatch.shipped_on = parse_date(bsn.get(3))
+        # The date the notice was created, by BSN03's semantic note - not
+        # the day the goods left, which is a DTM of its own.
+        despatch.written_on = parse_date(bsn.get(3))
 
     # The HL tree, by parent pointer rather than by position: a real 856 puts
     # pack and tare levels between the order and the item, and a reader that
@@ -1585,8 +1594,11 @@ def _despatch_shipment_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
             despatch.bol = item.get(2)
         elif item.tag == "REF" and item.get(1) == "CN":
             despatch.tracking = item.get(2)
-        elif item.tag == "DTM" and item.get(1) in ("011", "017"):
+        elif item.tag == "DTM" and item.get(1) == "011":
             despatch.shipped_on = parse_date(item.get(2)) or despatch.shipped_on
+        elif item.tag == "DTM" and item.get(1) == "017":
+            despatch.estimated_delivery = (parse_date(item.get(2))
+                                           or despatch.estimated_delivery)
 
 
 def _despatch_order_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
@@ -1860,7 +1872,9 @@ def _read_despatch_edifact(message: Message) -> Despatch:
     if bgm is not None:
         despatch.shipment_id = bgm.comp(2, 1)
     header = _edifact_header(body)
-    despatch.shipped_on = _edifact_dtm(header, ("11", "17", "137"))
+    despatch.shipped_on = _edifact_dtm(header, ("11",))
+    despatch.written_on = _edifact_dtm(header, ("137",))
+    despatch.estimated_delivery = _edifact_dtm(header, ("17",))
     order_reference = _edifact_rff(header, "ON")
     if order_reference is not None:
         despatch.po_number = order_reference.comp(1, 2)
