@@ -412,6 +412,12 @@ curl -X PATCH -H 'Content-Type: application/json' \
 is already there it answers 409 and changes nothing. `PATCH` is how an
 existing partner is changed, and it changes only the fields it is given.
 
+A body of the wrong shape is the caller's mistake and is answered as one: a
+`null`, a list or a number where a field is text, a line that is not an
+object, or a body that is not a JSON object at all, is a 400 that names the
+field and says what it was given - `id must be a string, not a number` - on
+`/_mock/partners`, `/_mock/purchase` and `/_mock/send` alike.
+
 A partner is refused anything the mock could not then act on: an unknown
 field is named rather than dropped, a `version` has to match the dialect
 (`004010` or `D:96A:UN`), `test` is a flag, `as2_url` needs a scheme the

@@ -143,6 +143,12 @@ def check(fields: Dict[str, Any], dialect: str,
                          ", ".join(repr(u) for u in unknown), _known_fields()))
 
     out = dict(fields)
+    # Every field is text but the flag. A null, a list or a number reached
+    # whatever first used it as a string, and came back as a 500 (#207).
+    for name, value in out.items():
+        if name != "test" and not isinstance(value, str):
+            raise Invalid("%s must be a string, not %s"
+                          % (name, db.json_kind(value)))
     if "dialect" in out:
         dialect = out["dialect"]
         if dialect not in DIALECTS:
@@ -303,6 +309,10 @@ def create(conn: sqlite3.Connection, identifier: str, name: str = "",
     looked at, so a caller is not walked through fixing a body that was never
     going to be accepted.
     """
+    for label, value in (("id", identifier), ("name", name)):
+        if not isinstance(value, str):
+            raise Invalid("%s must be a string, not %s"
+                          % (label, db.json_kind(value)))
     if get(conn, identifier) is not None:
         raise Exists(identifier)
     given = dict(fields)

@@ -31,6 +31,7 @@ from __future__ import annotations
 import json
 import math
 import urllib.parse
+from .. import db
 from typing import (Any, Callable, Dict, List, NamedTuple, Optional, Sequence,
                     Tuple)
 
@@ -222,14 +223,44 @@ def only(query: Dict[str, List[str]], *names: str) -> None:
                        % (unknown[0], ", ".join(names)))
 
 
+class BadBody(ValueError):
+    """A request body that is not what the endpoint takes; answered 400."""
+
+
 def json_body(body: bytes) -> Dict[str, Any]:
-    if not body:
+    """The JSON object a request carried; nothing at all is an empty one.
+
+    Anything else is refused. It used to be read as an empty object too, so
+    a body that was a list, or was not JSON, was answered as though the
+    caller had left every field out: "no partner ''" (#207).
+    """
+    if not body or not body.strip():
         return {}
     try:
         parsed = json.loads(body.decode("utf-8"))
     except (ValueError, UnicodeDecodeError):
-        return {}
-    return parsed if isinstance(parsed, dict) else {}
+        raise BadBody("the body is not JSON; this takes a JSON object") from None
+    if not isinstance(parsed, dict):
+        raise BadBody("the body must be a JSON object, not %s"
+                      % db.json_kind(parsed))
+    return parsed
+
+
+def text(payload: Dict[str, Any], name: str, default: str = "") -> str:
+    """A field the endpoint uses as text: a string, or refused by name."""
+    value = payload.get(name, default)
+    if not isinstance(value, str):
+        raise BadBody("%s must be a string, not %s" % (name, db.json_kind(value)))
+    return value
+
+
+def whole(payload: Dict[str, Any], name: str, default: int = 0) -> int:
+    """A field that is a whole number, or refused by name."""
+    value = payload.get(name, default)
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise BadBody("%s must be a whole number, not %s"
+                      % (name, db.json_kind(value)))
+    return value
 
 
 # Imported last, so that `route` and the helpers above exist when each module
