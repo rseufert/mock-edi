@@ -393,6 +393,59 @@ class TheSupplierNeverBills(BothDialects):
                 self.assertNotIn("INVOIC", codes)
 
 
+class TheBuyersTimelineOfTheConversation(BothDialects):
+    """`PLACED_RANK`, against a real supplier rather than a fixture (#195).
+
+    The direction the mock places an order in is nearly all documents, and
+    those were already ordered among themselves by the row they were archived
+    in - which is why a one-mock test of it proves nothing. The event that is
+    *not* a document is the receipt the supplier sends for the 850, and the
+    rank put it after every document on the order. Two mocks is the only way
+    to get one: it takes a real partner to acknowledge anything.
+    """
+
+    def timeline(self, pair, po_number):
+        found = pair.buyer.expect(
+            "GET", "/_mock/orders/%s/timeline?partner=SELLCO" % po_number)
+        out = []
+        for event in found["events"]:
+            out.append(("%s %s" % (event["event"],
+                                   event.get("code", ""))).strip())
+        return out
+
+    # The order the buyer sent, and the supplier's first answer to it.
+    ORDER = {"X12": "850", "EDIFACT": "ORDERS"}
+    CONFIRMED = {"X12": "855", "EDIFACT": "ORDRSP"}
+
+    def test_the_supplier_s_receipt_for_the_order_lands_where_it_arrived(self):
+        for dialect in self.dialects:
+            with self.subTest(dialect=dialect):
+                pair = self.pair(dialect)
+                po_number = "PO-TL-" + dialect[:3]
+                pair.place(po_number)
+                pair.exchange()
+                events = self.timeline(pair, po_number)
+                acknowledged = "acknowledged " + self.ORDER[dialect]
+                # The supplier answered the order before it confirmed
+                # anything, and the whole conversation is inside one second,
+                # so nothing but the recorded sequence puts the receipt
+                # there. Before #195 it sat last, after the invoice.
+                self.assertLess(
+                    events.index(acknowledged),
+                    events.index("received " + self.CONFIRMED[dialect]), events)
+                self.assertNotEqual(events[-1], acknowledged, events)
+
+    def test_and_the_order_is_still_first(self):
+        for dialect in self.dialects:
+            with self.subTest(dialect=dialect):
+                pair = self.pair(dialect)
+                po_number = "PO-TL-FIRST-" + dialect[:3]
+                pair.place(po_number)
+                pair.exchange()
+                self.assertEqual(self.timeline(pair, po_number)[:2],
+                                 ["ordered", "sent " + self.ORDER[dialect]])
+
+
 class ADisagreementIsNotASyntaxError(unittest.TestCase):
     """The rule the whole of #126 rests on, guarded before the rules exist.
 

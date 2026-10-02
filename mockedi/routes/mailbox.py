@@ -22,7 +22,12 @@ def mailbox(h, rest: List[str]) -> Tuple[int, int]:
     if flag(h.query, "raw"):
         joined = b"\n".join(h.mock.pipeline.wire(row)[0] for row in rows)
         return h.raw(200, joined, {"Content-Type": TEXT})
-    return h.json(200, rows)
+    # Without the mock's own bookkeeping (#195). These rows are answered
+    # whole, so the sequence would otherwise reach everyone who collects the
+    # mailbox - `mockedi.testing`'s `mailbox()` included. Dropped here rather
+    # than in `Pipeline.collect`, so that the shaping sits where the other two
+    # endpoints that answer rows whole do theirs.
+    return h.json(200, db.public(rows))
 
 
 @route(ANY, "/_mock/outbox", rest=True)

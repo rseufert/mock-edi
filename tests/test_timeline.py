@@ -22,8 +22,6 @@ sys.path.insert(0, HERE)
 from support import (ACME, EURODIS, INITECH, MockServerCase, acknowledge,
                      edifact_order, x12_order)
 
-NORTHWIND = "NORTHWIND"
-
 EDIFACT = {"Content-Type": "application/edifact"}
 
 
@@ -264,32 +262,6 @@ class TheReleasedSecond(MockServerCase):
                     if event["event"] in ("packed", "invoiced")
                     or event.get("code") in ("856", "810")}
         self.assertEqual(len(released), 1, "the four should share one second")
-
-
-class TheOrderTheMockPlaced(MockServerCase):
-    """`PLACED_RANK`, pinned the same way.
-
-    This one passes without the change: a placed order's events are almost
-    all documents, and those were already ordered among themselves by the
-    row id they were archived with. It is here so that the direction has a
-    sequence of its own on the record, now that `seq` governs it too.
-    """
-
-    def test_it_reads_in_the_order_it_happened(self):
-        status, _headers, placed = self.post(
-            "/_mock/purchase",
-            {"partner": NORTHWIND,
-             "lines": [{"sku": "WIDGET-001", "quantity": "10", "uom": "EA",
-                        "price": "12.50"}]})
-        self.assertEqual(status, 201, placed)
-        po_number = placed["po_number"]
-        self.send(acknowledge(self.mailbox(NORTHWIND, "order")[0]["payload"]))
-        status, _headers, found = self.get(
-            "/_mock/orders/%s/timeline?partner=%s" % (po_number, NORTHWIND))
-        self.assertEqual(status, 200, found)
-        self.assertEqual(found["direction"], "placed")
-        self.assertEqual(labels(found), ["ordered", "sent 850", "acknowledged 850"])
-
 
 
 # Every GET the index advertises, so that a route added later cannot put the
