@@ -815,6 +815,11 @@ class Pipeline:
         """Whether a despatch and an invoice after it still wait for the order.
 
         `out-of-order` is the invoice going first, so it never waits.
+
+        The invoice asking is not counted, because `run_due` marks a promise
+        done before it is kept. If that order ever changes, an invoice would
+        see itself waiting, leave the packing to the despatch, and nothing
+        would bill what the despatch then packed.
         """
         if partner["behaviour"] == "out-of-order":
             return False
