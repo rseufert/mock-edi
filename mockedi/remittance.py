@@ -150,7 +150,7 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
                             if not credits else
                             "every advice for that trace was already reversed"),
                     interchange=interchange))
-    moment = db.now()
+    moment = db.now(conn)
     for finding in found:
         conn.execute(
             "INSERT INTO disagreement (partner, po_number, line, rule, kind, code,"

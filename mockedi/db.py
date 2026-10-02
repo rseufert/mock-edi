@@ -416,8 +416,18 @@ class DatabaseError(Exception):
     """A --db file this version of the mock cannot use, and why."""
 
 
+class Connection(sqlite3.Connection):
+    """The mock's connection, which knows what time the mock says it is.
+
+    `clock` is the one clock (#196): the pipeline that owns the connection
+    sets it to its own `now`, which `/_mock/advance` moves. Until then it is
+    the wall clock, which is the same thing for a mock nobody has advanced.
+    """
+    clock = staticmethod(lambda: utcnow())
+
+
 def connect(path: str = ":memory:") -> sqlite3.Connection:
-    conn = sqlite3.connect(path, check_same_thread=False)
+    conn = sqlite3.connect(path, check_same_thread=False, factory=Connection)
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA foreign_keys = ON")
@@ -577,11 +587,15 @@ def prune(conn: sqlite3.Connection, keep_requests: int = 0,
             "DELETE FROM request_log WHERE id <= (SELECT id FROM request_log"
             " ORDER BY id DESC LIMIT 1 OFFSET ?)", (keep_requests,)))
     if retention_days > 0:
-        cutoff = (datetime.datetime.now()
-                  - datetime.timedelta(days=retention_days)
-                  ).replace(microsecond=0).isoformat()
+        # In the stamps' own shape, UTC with a `Z`, or the comparison is
+        # between strings that mean different zones: a naive local cutoff
+        # deleted rows younger than the limit east of Greenwich and kept
+        # them longer west of it (#196). The request log is stamped by the
+        # wall clock and cut off by it; everything else by the mock's.
+        age = datetime.timedelta(days=retention_days)
         gone("request_log", conn.execute(
-            "DELETE FROM request_log WHERE at < ?", (cutoff,)))
+            "DELETE FROM request_log WHERE at < ?", (stamp(utcnow() - age),)))
+        cutoff = stamp(moment(conn) - age)
         gone("transaction_set", conn.execute(
             "DELETE FROM transaction_set WHERE interchange_id IN"
             " (SELECT id FROM interchange WHERE at < ?)", (cutoff,)))
@@ -660,7 +674,7 @@ def utcnow() -> datetime.datetime:
     return datetime.datetime.now(datetime.timezone.utc)
 
 
-def stamp(moment: Optional[datetime.datetime] = None) -> str:
+def stamp(moment: datetime.datetime) -> str:
     """One timestamp format for everything the control plane reports.
 
     Second precision and a trailing `Z`, so that two of them sort the way the
@@ -668,16 +682,36 @@ def stamp(moment: Optional[datetime.datetime] = None) -> str:
     A naive value is read as local time, because that is what the host meant
     by it.
     """
-    moment = moment or utcnow()
     if moment.tzinfo is None:
         moment = moment.astimezone()
     return (moment.astimezone(datetime.timezone.utc)
             .replace(microsecond=0, tzinfo=None).isoformat() + "Z")
 
 
-def now() -> str:
-    """The current moment, as the control plane writes it."""
-    return stamp()
+def moment(conn: sqlite3.Connection) -> datetime.datetime:
+    """What time the mock says it is: the clock of the connection's owner."""
+    return conn.clock()
+
+
+def now(conn: sqlite3.Connection) -> str:
+    """The mock's moment, as the control plane writes it.
+
+    Every stamp about the conversation is written with this (#196): what
+    arrived, what was promised, packed, billed, sent and acknowledged. It
+    takes the connection so that there is no way to ask for the time without
+    saying whose - the mock's clock is the one `/_mock/advance` moves, and a
+    stamp from any other clock can precede the promise it keeps.
+    """
+    return stamp(moment(conn))
+
+
+def wall_now() -> str:
+    """The host's moment. For what is about the process, not the conversation.
+
+    The request log is the only caller: when a request reached this process
+    is a fact about the process, and advancing the mock does not change it.
+    """
+    return stamp(utcnow())
 
 
 def money(value) -> str:
@@ -910,7 +944,7 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
              (ordered_on + datetime.timedelta(days=10)).isoformat(),
              "EUR" if partner == "EURODIS" else "USD", "invoiced", money(total),
              row["name"], partner, row["street"], row["city"], row["region"],
-             row["postal"], row["country"], now(), next_seq(conn)))
+             row["postal"], row["country"], now(conn), next_seq(conn)))
 
         conn.execute(
             "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on,"
@@ -920,7 +954,7 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
              "United Parcel Service", "UPSN",
              "1Z%09d" % rng.randrange(10 ** 8, 10 ** 9), str(next_number(conn, "bol")),
              max(1, sum(q for _s, q in lines) // 24),
-             str(sum(q for _s, q in lines) * 2), now(), next_seq(conn)))
+             str(sum(q for _s, q in lines) * 2), now(conn), next_seq(conn)))
 
         tax = (total * Decimal("0.00")).quantize(Decimal("0.01"))
         conn.execute(
@@ -930,4 +964,4 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
             " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (invoice_number, po_number, partner, shipment_id, invoiced_on.isoformat(),
              "EUR" if partner == "EURODIS" else "USD", money(total), money(tax),
-             money(total + tax), 30, "2", 10, now(), next_seq(conn)))
+             money(total + tax), 30, "2", 10, now(conn), next_seq(conn)))

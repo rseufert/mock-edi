@@ -229,7 +229,7 @@ def _record(conn: sqlite3.Connection, partner: str, dialect: str,
     conn.execute(
         "UPDATE transaction_set SET ack_status = ?, ack_code = ?, ack_note = ?,"
         " ack_at = ?, ack_seq = ? WHERE id = ?",
-        (result.status, result.verdict, result.note, db.now(),
+        (result.status, result.verdict, result.note, db.now(conn),
          db.next_seq(conn), row["id"]))
     conn.commit()
 
@@ -322,7 +322,7 @@ def unacknowledged(conn: sqlite3.Connection, older_than: float = 0.0,
         clauses.append("partner = ?")
         params.append(partner)
     if older_than:
-        cutoff = (db.utcnow()
+        cutoff = (db.moment(conn)
                   - datetime.timedelta(seconds=older_than))
         clauses.append("at <= ?")
         params.append(db.stamp(cutoff))

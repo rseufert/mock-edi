@@ -342,7 +342,10 @@ class Mock:
 
     def advance(self, seconds: Optional[float] = None, everything: bool = False,
                 failed: bool = False) -> Dict[str, Any]:
-        """Release what is due, everything, or what failed to be delivered."""
+        """Release what is due, everything, or what failed to be delivered.
+
+        `everything` moves the mock's clock to the last due time it releases.
+        """
         if failed:
             return self.expect("POST", "/_mock/advance?failed")
         if everything:
@@ -371,8 +374,12 @@ class Mock:
 
         That means **`exchange` moves every clock it touches**, which is what a
         test about *what* is exchanged wants and the opposite of what a test
-        about *when* wants. Pass `advance=False` to settle only what is already
-        due, and drive the clock yourself.
+        about *when* wants. With delays configured, each mock's clock is left
+        at the last due time it released, and the documents and events it
+        produced carry the moments they came due rather than the moment
+        `exchange` ran: an invoice with a one-day delay is dated tomorrow.
+        Pass `advance=False` to settle only what is already due, and drive
+        the clock yourself.
 
         Raises rather than hanging if `passes` full rounds do not converge: a
         rally with no end is a bug in the test or in the mock, and the useful

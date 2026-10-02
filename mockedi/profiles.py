@@ -422,7 +422,7 @@ def save(conn: sqlite3.Connection, profile: Profile) -> None:
         "INSERT OR REPLACE INTO partner_profile (partner, profile, at)"
         " VALUES (?,?,?)",
         (profile.partner, json.dumps({"name": profile.name, "sets": profile.sets}),
-         db.now()))
+         db.now(conn)))
     conn.commit()
 
 

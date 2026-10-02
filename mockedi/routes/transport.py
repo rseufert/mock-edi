@@ -98,7 +98,7 @@ def _mdn(h, inbound: as2.Inbound, body: bytes, disposition: str,
              disposition, as2.mic(body, inbound.micalg) if body else "",
              "async", inbound.async_url, "pending",
              payload.decode("utf-8", "replace"),
-             json.dumps(headers), db.now()))
+             json.dumps(headers), db.now(h.mock.conn)))
         h.mock.conn.commit()
         h.mock.courier.enqueue_mdn(int(cursor.lastrowid))
         return h.text(202, "MDN will be posted to %s" % inbound.async_url)
@@ -109,7 +109,7 @@ def _mdn(h, inbound: as2.Inbound, body: bytes, disposition: str,
         " VALUES (?,?,?,?,?,?,?,?,?,?)",
         (partner, "out", inbound.message_id, headers["Message-ID"],
          disposition, as2.mic(body, inbound.micalg) if body else "",
-         "sync", "sent", payload.decode("utf-8", "replace"), db.now()))
+         "sync", "sent", payload.decode("utf-8", "replace"), db.now(h.mock.conn)))
     h.mock.conn.commit()
     return h.raw(200, payload, headers)
 
@@ -126,7 +126,7 @@ def as2_mdn(h) -> Tuple[int, int]:
         (inbound.sender or "unknown", "in",
          fields.get("Original-Message-ID", ""), inbound.message_id,
          fields.get("Disposition", ""), fields.get("Received-Content-MIC", ""),
-         "async", "received", h.body.decode("utf-8", "replace"), db.now()))
+         "async", "received", h.body.decode("utf-8", "replace"), db.now(h.mock.conn)))
     h.mock.conn.commit()
     return h.json(200, {"recorded": True, "fields": fields})
 
