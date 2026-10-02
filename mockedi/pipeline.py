@@ -1206,9 +1206,15 @@ class Pipeline:
             # disagree: a few milliseconds apart, and when they crossed a
             # second the document sorted after work sequenced before it.
             #
-            # **Held** - the `late` behaviour, a despatch or invoice delay,
-            # `/_mock/send` with `delayMs`: this moment, and a sequence taken
-            # now. Being late is the whole point of those settings, and
+            # **Held** - the `late` behaviour, `--ack-delay`,
+            # `--response-delay`, `/_mock/send` with `delayMs`: this moment,
+            # and a sequence taken now.
+            #
+            # Not `--despatch-delay` or `--invoice-delay`, which postpone the
+            # *work*: the promise comes due an hour later and the 856 is
+            # queued then, due at once, so it takes the queued pair like any
+            # other document. Only a delay on the document itself holds a row
+            # that was already written. Being late is the whole point of those settings, and
             # stamping such a document when it was queued - which the first
             # attempt at #238 did to all of them - took the hour back out of
             # the timeline and out of `/_mock/documents`, the two places a
