@@ -1,19 +1,19 @@
 """Purchase orders: those received and those placed, what became of them, and the mock as buyer.
 
-Each is registered for `ANY` method with the `rest` of the path read as
-the control plane's old `if` chain read it (#182); `purchase` refuses anything but a POST, and says so
-as it did.
+An order and its timeline are routes of their own; `purchase` and a change
+to a placed order are POSTs, and refuse another method as they always did.
 """
 from __future__ import annotations
 
-from typing import List, Tuple
+from typing import Tuple
 
 from .. import claims, db, documents, partners, remittance, timeline
-from . import ANY, first, flag, json_body, limit, route, split
+from . import first, flag, json_body, limit, route
 
 
-@route(ANY, "/_mock/orders", rest=True)
-def orders(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/orders")
+@route("GET", "/_mock/orders/<po>")
+def orders(h, *rest: str) -> Tuple[int, int]:
     conn = h.mock.conn
     if rest:
         order, refusal = which_order(conn, rest[0], h.query)
@@ -54,11 +54,14 @@ def orders(h, rest: List[str]) -> Tuple[int, int]:
         (limit(h.query),))))
 
 
-@route(ANY, "/_mock/purchase", rest=True)
-def purchase(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/orders/<po>/timeline")
+def order_timeline(h, po: str) -> Tuple[int, int]:
+    return orders(h, po, "timeline")
+
+
+@route("POST", "/_mock/purchase", refuse="POST an order to place it")
+def purchase(h, *rest: str) -> Tuple[int, int]:
     # The mock as buyer: place an order with a supplier, or change one.
-    if h.method != "POST":
-        return h.text(405, "POST an order to place it")
     conn = h.mock.conn
     payload = json_body(h.body)
     try:
@@ -66,7 +69,7 @@ def purchase(h, rest: List[str]) -> Tuple[int, int]:
             order, queued = h.mock.pipeline.place(
                 str(payload.get("partner") or ""), payload)
             status = 201
-        elif len(rest) == 2 and rest[1] == "change":
+        else:
             order, refusal = which_order(conn, rest[0], h.query,
                                          documents.PLACED)
             if order is None:
@@ -74,9 +77,6 @@ def purchase(h, rest: List[str]) -> Tuple[int, int]:
             order, queued = h.mock.pipeline.change_placed(
                 rest[0], order["partner"], payload)
             status = 200
-        else:
-            return h.json(404, {"error": "no route for %s %s"
-                                         % (h.method, split(h.path)[0])})
     except partners.UnknownPartner as error:
         return h.json(404, {"error": "no partner %s" % error})
     except LookupError as error:
@@ -91,8 +91,14 @@ def purchase(h, rest: List[str]) -> Tuple[int, int]:
     return h.json(status, db.public(order))
 
 
-@route(ANY, "/_mock/disagreements", rest=True)
-def disagreements(h, rest: List[str]) -> Tuple[int, int]:
+@route("POST", "/_mock/purchase/<po>/change",
+       refuse="POST an order to place it")
+def purchase_change(h, po: str) -> Tuple[int, int]:
+    return purchase(h, po)
+
+
+@route("GET", "/_mock/disagreements")
+def disagreements(h) -> Tuple[int, int]:
     # Only the business findings, for a test that wants nothing else.
     return h.json(200, [claims.as_json(row) for row in
                         claims.disagreements(
@@ -100,8 +106,8 @@ def disagreements(h, rest: List[str]) -> Tuple[int, int]:
                             first(h.query, "po"), limit(h.query, 1000))])
 
 
-@route(ANY, "/_mock/remittances", rest=True)
-def remittances(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/remittances")
+def remittances(h) -> Tuple[int, int]:
     # Every remittance advice received, and what became of it.
     return h.json(200, remittance.listing(h.mock.conn, first(h.query, "partner")))
 

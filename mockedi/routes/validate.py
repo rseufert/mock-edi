@@ -1,8 +1,7 @@
 """Checking a document without trading on it, and the dictionary it is checked against.
 
-Both are registered for `ANY` method with the `rest` of the path read as
-the control plane's old `if` chain read it (#182); `validate` refuses anything but a POST, and says so
-as it did.
+`validate` is a POST, and refuses another method as it always did. The
+dictionary is three routes: all of it, one dialect, one transaction set.
 """
 from __future__ import annotations
 
@@ -10,20 +9,18 @@ from typing import Any, Dict, List, Tuple
 
 from .. import ack, charsets, edifact, partners, profiles, schema, validate, x12
 from ..envelope import EdiSyntaxError, sniff
-from . import ANY, first, route
+from . import first, route
 from .transport import findings
 
 
-@route(ANY, "/_mock/validate", rest=True)
-def validate_only(h, rest: List[str]) -> Tuple[int, int]:
+@route("POST", "/_mock/validate", refuse="POST an interchange to validate it")
+def validate_only(h) -> Tuple[int, int]:
     """Check an interchange and say what is wrong, changing nothing.
 
     The mock's validator, without the trading partner attached: useful
     while writing a mapping, when what you want is the findings and not
     four documents in a mailbox.
     """
-    if h.method != "POST":
-        return h.text(405, "POST an interchange to validate it")
     partner_id = first(h.query, "partner")
     http_charset = charsets.from_content_type(h.headers.get("Content-Type", ""))
     view = h.body.decode(charsets.BYTES)
@@ -67,15 +64,17 @@ def validate_only(h, rest: List[str]) -> Tuple[int, int]:
     })
 
 
-@route(ANY, "/_mock/dictionary", rest=True)
-def dictionary(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/dictionary")
+@route("GET", "/_mock/dictionary/<dialect>")
+@route("GET", "/_mock/dictionary/<dialect>/<code>")
+def dictionary(h, *rest: str) -> Tuple[int, int]:
     profile = None
     partner_id = first(h.query, "partner")
     if partner_id:
         if partners.get(h.mock.conn, partner_id) is None:
             return h.json(404, {"error": "no partner %r" % partner_id})
         profile = profiles.load(h.mock.conn, partner_id)
-    return h.json(200, _dictionary(rest, first(h.query, "version"), profile))
+    return h.json(200, _dictionary(list(rest), first(h.query, "version"), profile))
 
 
 def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:

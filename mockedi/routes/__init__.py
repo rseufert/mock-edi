@@ -7,22 +7,24 @@ handler looks a request up with :func:`find` and knows nothing about any
 endpoint, so adding one touches one file here. It is mock-bank's table
 (rseufert/mock-bank#44), so that a reader of one repo can read the other.
 
-Where it differs, it differs to answer exactly as the mock always has (#182):
+A pattern is written the way the 404 lists it, with ``<name>`` for a segment
+that can be anything: ``/_mock/orders/<po>/timeline``. A route function is
+called with the handler and each placeholder's segment, percent-decoded, in
+order.
 
-* A route can take ``ANY`` method. Most of the control plane never looked at
-  the method - ``POST /_mock/catalog`` is the catalog - and the move changes
-  no answer.
-* A route can take the ``rest`` of the path as a list, which is how the
-  control plane has always read ``/_mock/orders/<po>/timeline``.
-* A ``/_mock`` pattern is matched as the control plane always matched it: the
-  path starts with ``/_mock``, and the segments after the first are compared.
-  Every other pattern is matched on the path exactly as sent, or one of its
-  ``aliases``, so ``/edi/`` is the door only because it is listed as one.
-* A route that names its method and is asked with another answers 405 with
-  its own ``refuse`` line, which is what each door has always said.
+**A request is matched on its method and its path exactly** (#188). Until
+then the control plane answered any method on a read endpoint, ignored
+segments past the ones it knew, and took any path that began with ``/_mock``
+- so ``/_mockery/health`` was the health check. Now:
 
-Making the control plane as strict as mock-bank's is a change in behaviour,
-and is #188's to decide.
+* The path is the pattern, segment for segment. A trailing slash, an empty
+  segment or an extra one is not it: 404.
+* The method is the one registered. Another is a 405 that says what to send,
+  in the route's ``refuse`` line, with an ``Allow`` header.
+* A door keeps the other names it has always answered under, as ``aliases``:
+  ``/as2/`` and ``/as2/receive`` are what a partner's AS2 software was
+  configured with once and never looked at again. They are listed names, not
+  loose matching.
 """
 from __future__ import annotations
 
@@ -32,8 +34,6 @@ import urllib.parse
 from typing import (Any, Callable, Dict, List, NamedTuple, Optional, Sequence,
                     Tuple)
 
-# The method a route takes when it answers whatever it is asked with.
-ANY = "*"
 CONTROL = "/_mock"
 
 
@@ -42,63 +42,107 @@ class Route(NamedTuple):
     pattern: str
     parts: Tuple[str, ...]
     aliases: Tuple[str, ...]
-    rest: bool
     refuse: str
     function: Callable[..., Tuple[int, int]]
 
 
-# Every endpoint, in the order the modules registered them. Where two patterns
-# match one path - `/_mock` and `/_mock/health` both match `/_mock/health` -
-# the one with more segments answers, so the order never decides.
+# Every endpoint, in the order the modules registered them. The order is the
+# order a 405 lists the allowed methods in and the 404 lists the endpoints
+# in; no two registrations match one path with the same method, so it never
+# decides which function answers.
 TABLE: List[Route] = []
 
 
 def route(method: str, pattern: str, aliases: Sequence[str] = (),
-          rest: bool = False, refuse: str = ""):
+          refuse: str = ""):
     """Register the decorated function as the answer to ``method pattern``.
 
-    The function is called with the handler, then the list of segments after
-    the pattern's own when ``rest`` is set.
+    ``refuse`` is the line a 405 says when the path is asked with a method
+    nothing is registered for; left out, the line names the methods that are.
+    One function can be registered more than once, for each method or
+    pattern it answers.
     """
     def register(function):
         TABLE.append(Route(method, pattern, tuple(segments(pattern)),
-                           tuple(aliases), rest, refuse, function))
+                           tuple(aliases), refuse, function))
         return function
     return register
 
 
-def find(method: str, path: str) -> Tuple[Optional[Route], List[Any]]:
-    """The route for a request and its arguments, or ``(None, [])``.
+def find(method: str, path: str) -> Tuple[Optional[Route], List[str], List[str]]:
+    """The route for a request, its arguments, and the methods allowed.
 
-    Of the routes that take the method, the most specific answers. A route
-    found at the path but only for another method is returned all the same;
-    the handler answers it with the route's ``refuse`` line.
+    ``(route, arguments, [])`` when the path and the method match.
+    ``(route, [], allowed)`` when the path matches only with other methods:
+    a 405, and the route is one registered there - the one that carries a
+    ``refuse`` line, if any does. ``(None, [], [])`` when nothing matches: a
+    404.
     """
-    best: Tuple[Optional[Route], List[Any]] = (None, [])
-    elsewhere: Tuple[Optional[Route], List[Any]] = (None, [])
+    elsewhere: Optional[Route] = None
+    allowed: List[str] = []
     for entry in TABLE:
         arguments = _match(entry, path)
         if arguments is None:
             continue
-        if entry.method in (ANY, method):
-            if best[0] is None or len(entry.parts) > len(best[0].parts):
-                best = (entry, arguments)
-        elif elsewhere[0] is None:
-            elsewhere = (entry, arguments)
-    return best if best[0] is not None else elsewhere
+        if entry.method == method:
+            return entry, arguments, []
+        if elsewhere is None or (entry.refuse and not elsewhere.refuse):
+            elsewhere = entry
+        if entry.method not in allowed:
+            allowed.append(entry.method)
+    return elsewhere, [], sorted(allowed)
 
 
-def _match(entry: Route, path: str) -> Optional[List[Any]]:
+def _match(entry: Route, path: str) -> Optional[List[str]]:
+    if path in entry.aliases:
+        return []
     if not entry.pattern.startswith(CONTROL):
-        return [] if path in (entry.pattern,) + entry.aliases else None
-    if not path.startswith(CONTROL):
+        return [] if path == entry.pattern else None
+    # Split as sent, before any segment is decoded: an empty piece is a
+    # doubled or a trailing slash, and neither is the pattern.
+    pieces = path.split("/")[1:]
+    if len(pieces) != len(entry.parts) or "" in pieces:
         return None
-    wanted, given = entry.parts[1:], segments(path)[1:]
-    if given[:len(wanted)] != list(wanted):
-        return None
-    if entry.rest:
-        return [given[len(wanted):]]
-    return [] if len(given) == len(wanted) else None
+    arguments: List[str] = []
+    for wanted, piece in zip(entry.parts, pieces):
+        given = urllib.parse.unquote(piece)
+        if wanted.startswith("<") and wanted.endswith(">"):
+            arguments.append(given)
+        elif wanted != given:
+            return None
+    return arguments
+
+
+def refusal(found: Route, allowed: Sequence[str]) -> str:
+    """What a 405 says: the route's own line, or the methods it does take."""
+    return found.refuse or "%s %s" % (" or ".join(allowed), found.pattern)
+
+
+def endpoints() -> List[str]:
+    """The control plane's endpoints by name, in the order registered."""
+    names: List[str] = []
+    for entry in TABLE:
+        if len(entry.parts) > 1 and entry.parts[0] == CONTROL[1:] \
+                and entry.parts[1] not in names:
+            names.append(entry.parts[1])
+    return names
+
+
+def not_found(method: str, path: str) -> Dict[str, Any]:
+    """The body of a 404: what was asked for, and what there is instead."""
+    if path != CONTROL and not path.startswith(CONTROL + "/"):
+        return {"error": "no route for %s %s" % (method, path),
+                "try": ["/as2", "/edi", "/_mock/health", "/"]}
+    given = segments(path)
+    name = given[1] if len(given) > 1 else ""
+    if name in endpoints():
+        # The endpoint exists and this is not one of its paths: a trailing
+        # slash, a segment too many, a name it does not have.
+        return {"error": "no route for %s %s" % (method, path),
+                "routes": ["%s %s" % (entry.method, entry.pattern)
+                           for entry in TABLE
+                           if len(entry.parts) > 1 and entry.parts[1] == name]}
+    return {"error": "no control endpoint %r" % name, "endpoints": endpoints()}
 
 
 # ---------------------------------------------------------------------------
