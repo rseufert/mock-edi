@@ -302,6 +302,14 @@ between the two is carried and not checked: your `SAC15` description is not
 wrong, it is untested. A position beyond the width is reported as error 3,
 because there the element really does not exist.
 
+## Money
+
+Every amount is rounded to the cent, **half up**: 0.625 is 0.63. That covers a
+line's extended amount, tax, an order's or invoice's total, and the integer
+`TDS` carries, and it is the same for a negative amount, which rounds the
+same distance from zero. A line is rounded before it is added, so a total is
+the sum of what each line says. 12.50 at `--tax-rate 0.05` is `TXI*ST*0.63`.
+
 ## Timestamps
 
 Every timestamp the control plane returns has one shape: UTC, second
@@ -1068,6 +1076,7 @@ mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
 mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
+mockedi/money.py         the one rounding rule: to the cent, half up
 mockedi/server.py        HTTP: the handler and the mock's state
 mockedi/routes/__init__.py  the route table every endpoint registers with
 mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
