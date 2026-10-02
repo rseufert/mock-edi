@@ -184,5 +184,145 @@ class TheEdifactSide(MockServerCase):
                                  ("out", "INVOIC")])
 
 
+def labels(found):
+    """Each event as one word, with the document or the work it is about.
+
+    A list of these is the whole assertion these tests make: the sequence,
+    and nothing else.
+    """
+    out = []
+    for event in found["events"]:
+        kind = event["event"]
+        if kind in ("received", "sent", "acknowledged"):
+            out.append("%s %s" % (kind, event["code"]))
+        elif kind == "promised":
+            out.append("promised %s" % event["kind"])
+        else:
+            out.append(kind)
+    return out
+
+
+# What a plain order actually does, in the order it does it: the 850 arrives
+# and is recorded, the 997 and the 855 answer it, the work is promised and
+# then done, and each document goes out beside the work that produced it.
+# Before #195 every `sent` landed after the packing and the invoicing,
+# because the rank by kind of event said so.
+PLAIN = ["received 850", "ordered", "sent 997", "sent 855",
+         "promised despatch", "promised invoice",
+         "packed", "sent 856", "invoiced", "sent 810"]
+
+
+class TheOrderInsideOneSecond(MockServerCase):
+    """Timestamps are second-precision, so this is nearly every order (#195)."""
+
+    def timeline(self, po_number):
+        status, _headers, data = self.get("/_mock/orders/%s/timeline" % po_number)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def test_a_plain_order_reads_in_the_order_it_happened(self):
+        self.send(x12_order("TL-SEQ"))
+        found = self.timeline("TL-SEQ")
+        self.assertEqual(labels(found), PLAIN)
+        # The premise: all of it inside one second, so nothing but the
+        # recorded sequence can be putting it in this order.
+        self.assertEqual(len({event["at"] for event in found["events"]}), 1)
+
+    def test_the_sequence_is_the_same_on_a_second_call(self):
+        self.send(x12_order("TL-SEQ-2"))
+        self.assertEqual(labels(self.timeline("TL-SEQ-2")),
+                         labels(self.timeline("TL-SEQ-2")))
+
+    def test_an_edifact_order_reads_the_same_way(self):
+        self.send(edifact_order("TL-SEQ-EDI"), headers=EDIFACT)
+        self.assertEqual(
+            labels(self.timeline("TL-SEQ-EDI")),
+            ["received ORDERS", "ordered", "sent CONTRL", "sent ORDRSP",
+             "promised despatch", "promised invoice",
+             "packed", "sent DESADV", "invoiced", "sent INVOIC"])
+
+
+class TheReleasedSecond(MockServerCase):
+    """Work held back by a delay, and then all let go at once.
+
+    The release writes every document that is due in one go, so a sequence
+    taken there would put the 856 and the 810 after the invoice raised
+    between them. The number is taken when the document is queued instead.
+    """
+    config_kwargs = {"despatch_delay_ms": 3600 * 1000,
+                     "invoice_delay_ms": 3600 * 1000}
+
+    def test_each_document_stays_with_the_work_that_produced_it(self):
+        self.send(x12_order("TL-HELD"))
+        self.post("/_mock/advance?all")
+        status, _headers, found = self.get("/_mock/orders/TL-HELD/timeline")
+        self.assertEqual(status, 200, found)
+        self.assertEqual(labels(found), PLAIN)
+        released = {event["at"] for event in found["events"]
+                    if event["event"] in ("packed", "invoiced")
+                    or event.get("code") in ("856", "810")}
+        self.assertEqual(len(released), 1, "the four should share one second")
+
+
+# Every GET the index advertises, so that a route added later cannot put the
+# sequence back into a response by returning rows whole.
+PUBLIC_GETS = ("/_mock/health", "/_mock/state", "/_mock/partners",
+               "/_mock/catalog", "/_mock/orders", "/_mock/orders/TL-PUBLIC",
+               "/_mock/disagreements", "/_mock/remittances",
+               "/_mock/documents", "/_mock/documents/1",
+               "/_mock/interchanges", "/_mock/interchanges/1",
+               "/_mock/mailbox?leave", "/_mock/orders/TL-PUBLIC/timeline",
+               "/_mock/outbox", "/_mock/scheduled?all", "/_mock/drop",
+               "/_mock/mdns", "/_mock/unacknowledged",
+               "/_mock/dictionary/X12/850")
+
+
+def sequences_in(blob, trail=""):
+    """Every `seq` or `ack_seq` anywhere in a response, by where it is."""
+    found = []
+    if isinstance(blob, dict):
+        for key, value in blob.items():
+            if key in ("seq", "ack_seq"):
+                found.append("%s.%s" % (trail, key))
+            found += sequences_in(value, "%s.%s" % (trail, key))
+    elif isinstance(blob, list):
+        for index, value in enumerate(blob):
+            found += sequences_in(value, "%s[%d]" % (trail, index))
+    return found
+
+
+class TheSequenceIsTheMocksOwnBusiness(MockServerCase):
+    """It orders the timeline and belongs in no response (#195).
+
+    `/_mock/orders`, `/_mock/documents` and `/_mock/mailbox` all hand back
+    rows from these tables whole, so a new column lands in each of them
+    unless something drops it. One of the three was missed when this was
+    written, which is why the check is every endpoint at once rather than
+    the three that were known about.
+    """
+
+    def test_no_endpoint_returns_it(self):
+        self.send(x12_order("TL-PUBLIC"))
+        self.send(acknowledge(
+            self.mailbox(ACME, "response", leave=True)[0]["payload"]))
+        leaks = {}
+        for path in PUBLIC_GETS:
+            status, _headers, data = self.get(path)
+            if status != 200:
+                continue
+            found = sequences_in(data)
+            if found:
+                leaks[path] = found
+        self.assertEqual(leaks, {})
+
+    def test_but_the_timeline_is_still_ordered_by_it(self):
+        # The other half of the claim: dropped from the responses, and doing
+        # its job in the one place it exists for.
+        self.send(x12_order("TL-PUBLIC-2"))
+        _status, _headers, found = self.get("/_mock/orders/TL-PUBLIC-2/timeline")
+        self.assertEqual(labels(found), PLAIN)
+
+
+
 if __name__ == "__main__":
     unittest.main()
