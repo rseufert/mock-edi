@@ -213,7 +213,7 @@ Both are walked through, test by test, in
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
 | Work promised, not done | `GET /_mock/scheduled` |
 | Directory trading | `GET /_mock/drop`, `POST /_mock/drop/scan` |
-| The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850` |
+| The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850`, `/_mock/dictionary/X12/envelope` |
 | Health and state | `GET /_mock/health`, `GET /_mock/state`, `GET /_mock/requests` |
 | Reset | `POST /_mock/reset` |
 | Index page | `GET /` |
@@ -241,6 +241,15 @@ Both dialects are read and written from one dictionary
 what you assert about an X12 flow holds for the EDIFACT one. `GET
 /_mock/dictionary/X12/850` serves that dictionary as JSON — the actual rules,
 not a description of them that can go stale.
+
+A set runs from `ST` to `SE`, or `UNH` to `UNT`. What goes round it belongs
+to no set, so it is served once for each dialect: `GET
+/_mock/dictionary/X12/envelope` is `ISA`, `GS`, `GE` and `IEA`, and
+`/_mock/dictionary/EDIFACT/envelope` is `UNA`, `UNB`, `UNG`, `UNE` and `UNZ`,
+each described as any other segment is, in the order they are on the wire,
+with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
+or `advice` for `UNA`). Every set's entry names its envelope's path, so the
+whole of one interchange can be read from two requests.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
 is read against the version its group's `GS08` names — an industry suffix such
