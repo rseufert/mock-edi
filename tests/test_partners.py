@@ -437,12 +437,11 @@ class EachBehaviourSaysWhichRolesItFits(PartnerCase):
                 self.assertEqual(status, 200, data)
                 self.assertEqual(data["behaviour"], name)
 
-    def test_a_supplier_only_behaviour_would_be_refused_on_a_customer(self):
-        # None exists yet - #127's buyer behaviours are next - so one is added
-        # for the length of this test, to show the rule runs both ways.
-        from mockedi import db
-        db.BEHAVIOURS["duplicate-order"] = "Send the 850 twice."
-        db.BEHAVIOUR_ROLES["duplicate-order"] = ("supplier",)
+    def test_a_supplier_only_behaviour_is_refused_on_a_customer(self):
+        # The rule runs both ways. `duplicate-order` is a behaviour the mock
+        # has only as a buyer (#127). This test once had to invent one, under
+        # that very name, and removed it afterwards - which, once the name
+        # was real, removed the real one for every test that ran later.
         try:
             status, _h, data = self.patch_partner(ACME, {"behaviour": "duplicate-order"})
             self.assertRefused(status, data, "'duplicate-order'",
@@ -452,8 +451,6 @@ class EachBehaviourSaysWhichRolesItFits(PartnerCase):
             self.assertEqual(status, 200, data)
         finally:
             self.patch_partner("NORTHWIND", {"behaviour": "accept"})
-            del db.BEHAVIOURS["duplicate-order"]
-            del db.BEHAVIOUR_ROLES["duplicate-order"]
 
     def test_help_names_the_roles(self):
         from mockedi.__main__ import build_parser
