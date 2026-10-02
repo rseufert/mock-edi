@@ -27,6 +27,8 @@ import sqlite3
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .money import cents
+
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS partner (
     id           TEXT PRIMARY KEY,
@@ -716,7 +718,7 @@ def wall_now() -> str:
 
 def money(value) -> str:
     """Two decimal places, always - the shape every monetary column is stored in."""
-    return str(Decimal(str(value)).quantize(Decimal("0.01")))
+    return str(cents(value))
 
 
 # The columns that order the timeline (#195) and mean nothing outside it.
@@ -956,7 +958,7 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
              max(1, sum(q for _s, q in lines) // 24),
              str(sum(q for _s, q in lines) * 2), now(conn), next_seq(conn)))
 
-        tax = (total * Decimal("0.00")).quantize(Decimal("0.01"))
+        tax = cents(total * Decimal("0.00"))
         conn.execute(
             "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
             " invoiced_on, currency, subtotal, tax, total, terms_days,"

@@ -49,6 +49,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from . import schema
+from .money import cents
 from .envelope import Message, Seg, seg, parse_date
 
 # The item number qualifiers a reader will take a SKU from, best first.
@@ -83,7 +84,7 @@ class Line:
 
     @property
     def amount(self) -> Decimal:
-        return (self.quantity * self.price).quantize(Decimal("0.01"))
+        return cents(self.quantity * self.price)
 
 
 # The line-level verbs of a change request, in the vocabulary the X12 670
@@ -276,7 +277,7 @@ class InvoiceLine(Line):
         """
         if self.amount_stated is not None:
             return self.amount_stated
-        return (self.quantity * self.price).quantize(Decimal("0.01")) + self.adjustment
+        return cents(self.quantity * self.price) + self.adjustment
 
 
 @dataclass
@@ -364,7 +365,7 @@ def quantity_text(value: Decimal) -> str:
 
 
 def price_text(value: Decimal) -> str:
-    return str(value.quantize(Decimal("0.01")))
+    return str(cents(value))
 
 
 def implied_decimal(value: Decimal) -> str:
@@ -373,7 +374,7 @@ def implied_decimal(value: Decimal) -> str:
     125.00 goes on the wire as `12500`.  Every EDI integration meets this once,
     usually as an invoice a hundred times too large.
     """
-    return str(int((value * 100).to_integral_value()))
+    return str(int(cents(value) * 100))
 
 
 def date_text(value: Optional[datetime.date]) -> str:
@@ -714,7 +715,9 @@ def _x12_810(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
     out.extend(_x12_parties(us, order, (("RE", "us"), ("ST", "order"))))
     out.append(seg("N1", "BT", partner.get("name") or "", "92", partner.get("id") or ""))
 
-    # ITD08 is the discount amount, which only exists if a discount is offered.
+    # ITD01 is the terms type: 08, basic discount offered, when there is a
+    # discount (its percentage in ITD03, its days in ITD05), and 01, basic,
+    # when there is not. ITD07 is the net days either way.
     discount_pct = number(str(invoice.get("discount_pct") or "0"))
     if discount_pct > 0:
         out.append(seg("ITD", "08", "3", str(discount_pct), "",
@@ -1447,7 +1450,7 @@ def _from_implied(value: str) -> Decimal:
     Reading TDS01 as a plain number is the invoice a hundred times too large
     that every EDI integration meets once.
     """
-    return (number(value) / Decimal("100")).quantize(Decimal("0.01"))
+    return cents(number(value) / Decimal("100"))
 
 
 def _spare_sku(ids: Dict[str, str]) -> str:
