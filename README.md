@@ -923,7 +923,9 @@ segment the set does not define. A partner set to `strict` rejects on either.
 The envelope is checked too, and a fault there outranks anything inside it.
 A `GE` whose count or control number disagrees with what arrived, or a group
 with no `GE` at all, rejects the group: `AK9*R` with the standard's reason in
-`AK905`. Every set inside it is then `AK5*R` as well, however clean it was -
+`AK905`. `AK902` quotes the count the sender's own `GE01` gave and `AK903`
+says how many sets arrived, so a miscount shows which way it was out. Every
+set inside it is then `AK5*R` as well, however clean it was -
 no set in a rejected group is acted on, so none is acknowledged as accepted -
 and a set with a fault of its own keeps its `AK3`/`AK4`. An `IEA` that disagrees with the `ISA`, or a file that stops before
 its `IEA`, rejects the whole interchange, and the answer is a `TA1` with
