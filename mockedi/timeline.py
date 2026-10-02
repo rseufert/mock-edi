@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from . import db
+from . import db, reconcile
 
 # Within one second, the order things must have happened in - for rows
 # written before the sequence existed. Timestamps are second-precision on
@@ -128,6 +128,14 @@ def _documents(conn, po_number: str, partner_id: str,
             event["delivery"] = _delivery(conn, row)
         if raw:
             event["payload"] = row["payload"] or ""
+        if row["kind"] in reconcile.ACKNOWLEDGMENT_KINDS:
+            # Which document this acknowledgment is for. Its own
+            # `interchange` above is the envelope it travelled in; the one it
+            # answers is the row's reference, which is how it was found, and
+            # was then left out of the event (#197).
+            event["answers"] = reconcile.answers(
+                row["dialect"], row["kind"], row["control"], row["reference"],
+                row["payload"] or "")
         if row["direction"] == "in":
             # What this document said that the order does not (#126), on the
             # event that said it rather than in a list of its own.
@@ -281,10 +289,34 @@ def _invoiced(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
     return out
 
 
+_ANSWERING = {reconcile.ACCEPTED: ("accepting", ""),
+              reconcile.ACCEPTED_WITH_ERRORS: ("accepting", ", with errors noted"),
+              reconcile.REJECTED: ("rejecting", "")}
+
+
+def _answering(answers: Dict[str, Any], direction: str) -> str:
+    """ "accepting your 850 0001": what an acknowledgment says, and of what."""
+    whose = "our" if direction == "in" else "your"
+    sets = answers["sets"]
+    if not sets:
+        verb, tail = _ANSWERING.get(answers["status"], ("answering", ""))
+        return "%s %s interchange %s%s" % (verb, whose, answers["interchange"],
+                                           tail)
+    if len({item["status"] for item in sets}) == 1:
+        verb, tail = _ANSWERING.get(sets[0]["status"], ("answering", ""))
+        return "%s %s %s%s" % (verb, whose, ", ".join(
+            "%s %s" % (item["code"], item["control"]) for item in sets), tail)
+    return "answering %s %s" % (whose, ", ".join(
+        "%s %s (%s)" % (item["code"], item["control"],
+                        item["status"].replace("-", " ")) for item in sets))
+
+
 def _summarise(event: Dict[str, Any]) -> str:
     verb = "received" if event["direction"] == "in" else "sent"
     line = "%s %s %s (%s)" % (verb, event["code"], event["control"],
                               event["kind"] or "document")
+    if event.get("answers"):
+        line += " " + _answering(event["answers"], event["direction"])
     if not event["accepted"]:
         line += ", rejected"
     elif event["findings"]:

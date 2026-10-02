@@ -374,7 +374,7 @@ order recorded: 2 line(s), 1416.00 USD
 despatch promised, due 2026-09-26T21:14:19Z
 invoice promised, due 2026-09-26T22:14:19Z (not done yet)
 packed SHP8000002: 2 line(s), 6 carton(s), United Parcel Service
-sent 997 0001 (acknowledgment); delivery delivered
+sent 997 0001 (acknowledgment) accepting your 850 0001; delivery delivered
 sent 855 0002 (response); delivery delivered after 2 attempts
 the partner's receipt accepted our 855 0002
 ```
@@ -384,6 +384,13 @@ delivered and how many attempts it took, and what the seller promised but has
 not done yet. Every event carries the structured form beside that prose, so a
 test can assert on it. `?raw` adds the payloads, which makes one call enough
 to attach to a bug report.
+
+An acknowledgment the mock sent says what it is for. Its event carries
+`answers`: the envelope it answers, its own verdict on all of it (`AK901`,
+the `UCI` action or `TA104`), and each set it names with that set's code,
+control number and verdict. A `TA1` answers an envelope and no set, so its
+`sets` is empty. The event's own `interchange` is still the envelope the
+acknowledgment travelled in.
 
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
