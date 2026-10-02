@@ -969,6 +969,43 @@ class TheEnvelopesOwnNumbers(MockServerCase):
                                  (version, sets))
 
 
+class AVersionWithAnIndustrySuffix(MockServerCase):
+    """`005010X222` names a guide, not another standard, and a set asked for
+    that way is served as 005010. The envelope has to answer the same way:
+    it was a 500, a KeyError on the suffixed string (found in review of #259).
+    """
+
+    def test_the_envelope_is_served_as_the_set_is(self):
+        for asked, sets, own in (("005010X222", "005010", "00501"),
+                                 ("005010X222A1", "005010", "00501"),
+                                 ("004010VICS", "004010", "00401")):
+            with self.subTest(version=asked):
+                status, _h, envelope = self.get(
+                    "/_mock/dictionary/X12/envelope?version=" + asked)
+                self.assertEqual(status, 200, envelope)
+                self.assertEqual((envelope["version"], envelope["setVersion"]),
+                                 (own, sets))
+                status, _h, one = self.get(
+                    "/_mock/dictionary/X12/850?version=" + asked)
+                self.assertEqual((status, one["version"]), (200, sets))
+
+    def test_edifact_with_its_directory_spelled_out(self):
+        status, _h, data = self.get(
+            "/_mock/dictionary/EDIFACT/envelope?version=D:96A:UN")
+        self.assertEqual(status, 200, data)
+        self.assertEqual((data["version"], data["setVersion"]), ("3", "D:96A:UN"))
+
+    def test_no_version_any_set_accepts_is_a_500_for_the_envelope(self):
+        for dialect, versions in schema.VERSIONS.items():
+            for version in list(versions) + [v + "X1" for v in versions
+                                              if dialect == "X12"]:
+                with self.subTest(dialect=dialect, version=version):
+                    status, _h, data = self.get(
+                        "/_mock/dictionary/%s/envelope?version=%s"
+                        % (dialect, version))
+                    self.assertEqual(status, 200, data)
+
+
 class WhatWasServedBefore(MockServerCase):
     """New keys and new entries only: nothing already served changes shape (#210)."""
 

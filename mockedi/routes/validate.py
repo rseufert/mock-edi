@@ -171,15 +171,27 @@ def _envelope(dialect: str, version: str = "") -> Dict[str, Any]:
             # The envelope's own: ISA12 for the X12 version asked for, and
             # the syntax version for EDIFACT, whatever directory its
             # messages are in. `setVersion` is the one `?version=` named.
-            "version": _envelope_version(dialect, version),
-            "setVersion": version or schema.VERSIONS[dialect][0],
+            "version": _envelope_version(dialect, _set_version(dialect, version)),
+            "setVersion": _set_version(dialect, version),
             "segments": segments}
 
 
-def _envelope_version(dialect: str, version: str) -> str:
+def _set_version(dialect: str, version: str) -> str:
+    """The version the dictionary keys its sets by, for the one asked for.
+
+    A GS08 may carry an industry suffix - `005010X222` - which names a
+    guide and not another standard, and a set asked for that way is served
+    as 005010. The envelope says the same, and is not a 500 for it.
+    """
+    if not version:
+        return schema.VERSIONS[dialect][0]
+    return schema.base_version(dialect, version)
+
+
+def _envelope_version(dialect: str, set_version: str) -> str:
     if dialect == "EDIFACT":
         return schema.EDIFACT_SYNTAX_VERSION
-    return schema.ENVELOPE_VERSIONS[dialect][version or schema.VERSIONS[dialect][0]]
+    return schema.ENVELOPE_VERSIONS[dialect][set_version]
 
 
 def _repeats(element) -> Any:
