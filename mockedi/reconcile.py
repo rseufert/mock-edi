@@ -34,8 +34,8 @@ import sqlite3
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional
 
-from . import db, schema
-from .envelope import Message
+from . import db, edifact, schema, x12
+from .envelope import EdiSyntaxError, Message
 
 # What we record against the document that was acknowledged.
 # Kinds that answer a document rather than await an answer.
@@ -194,6 +194,74 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
             note="acknowledged for the whole interchange by UCI, with no UCM",
             covers=INTERCHANGE))
     return out
+
+
+def answers(dialect: str, kind: str, control: str, reference: str,
+            payload: str) -> Dict[str, Any]:
+    """What an acknowledgment answers, read from the acknowledgment itself.
+
+    For the timeline (#197): the envelope, the acknowledgment's own verdict
+    on all of it - AK901, the UCI's action, or TA104 - and each set it names
+    with that set's verdict. Read by the same two functions that reconcile a
+    receipt, so the timeline and the reconciliation cannot read one 997 two
+    ways. `reference` is the envelope the row was filed under; `payload` the
+    interchange the acknowledgment travelled in.
+
+    A TA1 answers an envelope and no set, and so does a 997 of AK1 and AK9
+    alone or a CONTRL with no UCM: `sets` is then empty and the verdict is
+    the whole of it.
+    """
+    out: Dict[str, Any] = {"interchange": reference, "verdict": "",
+                           "status": "", "sets": []}
+    if not payload:
+        return out
+    if kind == schema.INTERCHANGE_ACKNOWLEDGMENT:
+        verdict = _ta1_verdict(payload)
+        out["verdict"] = verdict
+        out["status"] = X12_VERDICTS.get(verdict, "")
+        return out
+    try:
+        interchange = (x12.parse(payload) if dialect == "X12"
+                       else edifact.parse(payload))
+    except EdiSyntaxError:
+        return out
+    message = next((item for _group, item in interchange.messages()
+                    if item.control == control), None)
+    if message is None:
+        return out
+    if dialect == "X12":
+        found = _read_997(message)
+        trailer = message.find("AK9")
+        verdict = trailer.get(1) if trailer is not None else ""
+        out["status"] = X12_VERDICTS.get(verdict, "")
+    else:
+        found = _read_contrl(message, reference)
+        head = message.find("UCI")
+        verdict = head.get(4) if head is not None else ""
+        out["status"] = EDIFACT_VERDICTS.get(verdict, "")
+    out["verdict"] = verdict
+    out["sets"] = [{"code": item.code, "control": item.control,
+                    "verdict": item.verdict, "status": item.status,
+                    "note": item.note}
+                   for item in found if not item.covers]
+    return out
+
+
+def _ta1_verdict(payload: str) -> str:
+    """TA104 of the TA1 in an interchange that carries nothing else.
+
+    Read off the text: a TA1 sits between ISA and IEA with no group round
+    it, and the element separator is the character after `ISA`.
+    """
+    text = payload.lstrip()
+    if len(text) < 106 or not text.startswith("ISA"):
+        return ""
+    separator, terminator = text[3], text[105]
+    for segment in text.split(terminator):
+        parts = segment.strip().split(separator)
+        if parts[0] == "TA1" and len(parts) > 4:
+            return parts[4]
+    return ""
 
 
 def _segment_error(code: str) -> str:
