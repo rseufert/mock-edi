@@ -309,8 +309,23 @@ class SendingAgainFromTheMailbox(OutboxCase):
         status, _headers, data = self.post(
             "/_mock/outbox/%d/resend" % waiting["id"])
         self.assertEqual(status, 200, data)
-        self.assertEqual(data, {"resent": [], "count": 0, "was": "ready"})
+        self.assertEqual(data, {"resent": [], "count": 0, "was": "ready",
+                                "sent_before": False})
         self.assertEqual(len(self.mailbox(ACME, "invoice")), 1)
+
+    def test_asking_twice_queues_it_once_and_says_it_is_queued(self):
+        # Two posts before the first copy has gone are one copy, not two; and
+        # the second answer is not the one a never-sent document gets.
+        self.send(x12_order("AGAIN-TWICE"))
+        taken = self.mailbox(ACME, "invoice", leave=False)[0]
+        self.post("/_mock/outbox/%d/resend" % taken["id"])
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % taken["id"])
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"resent": [], "count": 0, "was": "ready",
+                                "sent_before": True})
+        self.assertEqual(len(self.mailbox(ACME, "invoice", leave=False)), 1)
+        self.assertEqual(self.mailbox(ACME, "invoice"), [])
 
 
 class WhatCannotBeSentAgain(OutboxCase):

@@ -613,6 +613,12 @@ control numbers and AS2 `Message-ID`; a collected one goes back in the mailbox
 to be collected again. The answer's `was` says what had become of it. A
 document not yet due, or cancelled, has not been sent once and is a `409`.
 
+One that is waiting to go is left waiting, and nothing is resent. Its answer
+carries `sent_before`: `false` for a document that has not gone out at all,
+`true` for one already queued to go again. So two `resend` posts in a row put
+one more copy on the wire, not two. Let the first be delivered or collected
+before asking for another: `mock.settle()`, with `mockedi.testing`.
+
 `/_mock/outbox` carries the history: `attempts`, `last_error` and
 `last_attempt_at`, so a document delivered on the second try says so.
 

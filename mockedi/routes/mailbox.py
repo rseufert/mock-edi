@@ -65,6 +65,12 @@ def resend(h, identifier: str) -> Tuple[int, int]:
     whether a listener is idempotent about a control number it has already
     seen, which `retry` cannot show - that one refuses anything that did not
     fail. `was` is what had become of the document before this.
+
+    One row goes out once each time it is queued, so asking twice before the
+    first has gone does not queue a third copy. The answer for a document
+    that is waiting says which wait it is: `sent_before` is true when it has
+    gone out already and is queued to go again, and false when it has not
+    gone out at all.
     """
     row, missing = _outbound(h, identifier)
     if row is None:
@@ -75,9 +81,14 @@ def resend(h, identifier: str) -> Tuple[int, int]:
             "error": "outbound document %d is %s: it has not been sent once, "
                      "so it cannot be sent again" % (row["id"], was)})
     if was == "ready":
-        # Released and still waiting to be collected or delivered: there is
-        # no first time yet for this to be the second of.
-        return h.json(200, {"resent": [], "count": 0, "was": was})
+        # Waiting to be collected or delivered, and left to. Either it has
+        # never gone out, and there is no first time for this to be the
+        # second of; or it is already queued to go again, by a `resend` or a
+        # `retry` a moment ago, and will go once for that. The two are not
+        # the same answer to a test counting copies on the wire.
+        sent_before = bool(row["attempts"] or row["delivered_at"])
+        return h.json(200, {"resent": [], "count": 0, "was": was,
+                            "sent_before": sent_before})
     resent = h.mock.pipeline.redeliver(row["id"], again=True)
     return h.json(200, {"resent": resent, "count": len(resent), "was": was})
 
@@ -88,7 +99,8 @@ def _outbound(h, identifier: str):
         outbound_id = int(identifier)
     except ValueError:
         return None, (404, {"error": "no outbound document %r" % identifier})
-    row = db.one(h.mock.conn, "SELECT id, status FROM outbound WHERE id = ?",
+    row = db.one(h.mock.conn, "SELECT id, status, attempts, delivered_at FROM outbound"
+                              " WHERE id = ?",
                  (outbound_id,))
     if row is None:
         return None, (404, {"error": "no outbound document %d" % outbound_id})
