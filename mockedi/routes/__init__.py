@@ -31,9 +31,10 @@ from __future__ import annotations
 import json
 import math
 import urllib.parse
-from .. import db
 from typing import (Any, Callable, Dict, List, NamedTuple, Optional, Sequence,
                     Tuple)
+
+from .. import db
 
 CONTROL = "/_mock"
 

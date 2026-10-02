@@ -721,6 +721,9 @@ def json_kind(value) -> str:
 
     For telling a client which type it sent where another was wanted (#207).
     `bool` before the numbers: in Python, `True` is an `int`.
+
+    It lives here, and not with the routes that answer the 400, because
+    `partners` and `documents` need it too and neither may import `routes`.
     """
     if value is None:
         return "null"
