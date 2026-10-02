@@ -362,6 +362,87 @@ class PlacingOverHttp(BuyingCase):
         self.assertIn("placed with NORTHWIND", data["events"][0]["summary"])
 
 
+class WhatTheDocumentCannotCarry(BuyingCase):
+    """An order the mock's own dictionary would reject is refused (#206).
+
+    A 33-character PO number, currency `DOLLARS` and unit `BOXES` used to
+    return 201 and go on the wire, where `/_mock/validate` then found five
+    errors in the 850 the mock had just sent.
+    """
+    LONG = "P" * 33
+
+    def assertRefused(self, data, status, field, *fragments):
+        self.assertEqual(status, 400, data)
+        named = [p for p in data["problems"] if p.startswith(field)]
+        self.assertTrue(named, data["problems"])
+        for fragment in fragments:
+            self.assertTrue(any(fragment in p for p in named), named)
+
+    def test_a_po_number_too_long_for_the_element(self):
+        status, _h, data = self.purchase(po_number=self.LONG)
+        self.assertRefused(data, status, "po_number", "BEG03", "22")
+
+    def test_a_currency_that_is_not_a_code(self):
+        status, _h, data = self.purchase(currency="DOLLARS")
+        self.assertRefused(data, status, "currency", "CUR02", "DOLLARS")
+
+    def test_a_unit_that_is_not_a_code_names_the_line(self):
+        lines = [LINES[0], dict(LINES[1], uom="BOXES")]
+        status, _h, data = self.purchase(lines=lines)
+        self.assertRefused(data, status, "line 2: uom", "PO103", "BOXES")
+        self.assertFalse([p for p in data["problems"] if p.startswith("line 1")])
+
+    def test_every_problem_is_named_at_once(self):
+        lines = [dict(LINES[0], uom="BOXES")]
+        status, _h, data = self.purchase(po_number=self.LONG, currency="DOLLARS",
+                                         lines=lines)
+        self.assertEqual(status, 400, data)
+        for field in ("po_number", "currency", "line 1: uom"):
+            self.assertTrue([p for p in data["problems"] if p.startswith(field)],
+                            data["problems"])
+
+    def test_nothing_is_stored_or_sent(self):
+        before = self.get("/_mock/orders")[2]
+        self.purchase(po_number=self.LONG)
+        self.purchase(currency="DOLLARS")
+        self.assertEqual(self.get("/_mock/orders")[2], before)
+        self.assertEqual(self.mailbox(NORTHWIND, leave=True), [])
+        self.assertEqual(self.get("/_mock/outbox")[2], [])
+
+    def test_the_next_order_number_is_not_used_up(self):
+        first = self.placed()["po_number"]
+        self.purchase(currency="DOLLARS")
+        self.assertEqual(int(self.placed()["po_number"]), int(first) + 1)
+
+    def test_the_limit_is_the_partners_dialect(self):
+        # 33 characters is too long for BEG03 and fine for an ORDERS, whose
+        # BGM carries 35.
+        self.post("/_mock/partners", {"id": "NORDIC", "dialect": "EDIFACT",
+                                      "role": "supplier"})
+        self.placed(partner="NORDIC", po_number=self.LONG)
+        status, _h, data = self.purchase(partner="NORDIC", po_number="P" * 36)
+        self.assertRefused(data, status, "po_number", "35")
+
+    def test_a_change_is_held_to_the_same(self):
+        po_number = self.placed()["po_number"]
+        status, _h, data = self.post(
+            "/_mock/purchase/%s/change" % po_number,
+            {"lines": [{"line": "1", "action": "change", "quantity": "5",
+                        "uom": "BOXES"}]})
+        self.assertRefused(data, status, "line 1: uom", "POC05", "BOXES")
+        # And the order is as it was.
+        line = self.get("/_mock/orders/%s" % po_number)[2]["lines"][0]
+        self.assertEqual((line["quantity"], line["uom"]),
+                         (LINES[0]["quantity"], LINES[0].get("uom", "EA")))
+
+    def test_what_was_sendable_still_is(self):
+        self.placed(po_number="PO-FINE", currency="EUR",
+                    lines=[dict(LINES[0], uom="CA")])
+        report = self.post("/_mock/validate",
+                           self.sent(schema.ORDER, NORTHWIND))[2]
+        self.assertTrue(report["clean"], report)
+
+
 class WhatComesBack(BuyingCase):
     def setUp(self):
         super().setUp()

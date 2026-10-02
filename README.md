@@ -302,6 +302,14 @@ between the two is carried and not checked: your `SAC15` description is not
 wrong, it is untested. A position beyond the width is reported as error 3,
 because there the element really does not exist.
 
+## Money
+
+Every amount is rounded to the cent, **half up**: 0.625 is 0.63. That covers a
+line's extended amount, tax, an order's or invoice's total, and the integer
+`TDS` carries, and it is the same for a negative amount, which rounds the
+same distance from zero. A line is rounded before it is added, so a total is
+the sum of what each line says. 12.50 at `--tax-rate 0.05` is `TXI*ST*0.63`.
+
 ## Timestamps
 
 Every timestamp the control plane returns has one shape: UTC, second
@@ -643,6 +651,14 @@ the delays, to the partner's `as2_url` or the pickup directory, and into
 range. `POST /_mock/purchase/<po>/change` sends an **860** or **ORDCHG**:
 `{"lines": [{"line": "1", "quantity": "80"}]}`, with `action` `add` or
 `delete` on a line, or `{"cancel": true}`.
+
+An order or change the document could not carry is refused with a 400 before
+anything is stored or sent: a PO number longer than `BEG03` allows, a currency
+or unit that is not one of the element's codes. The check is the mock's own
+validator run on the document it was about to send, in that supplier's
+dialect, so it says exactly what `/_mock/validate` would have said about the
+bytes afterwards - and each problem names the field of the request it came
+from: `currency 'DOLLARS': CUR02 is 7 characters, the maximum is 3`.
 
 What the supplier sends back - an **855**, **856**, **810** or **865**, or
 their EDIFACT counterparts - is accepted, acknowledged and filed under the
@@ -1064,6 +1080,7 @@ mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
 mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
+mockedi/money.py         the one rounding rule: to the cent, half up
 mockedi/server.py        HTTP: the handler and the mock's state
 mockedi/routes/__init__.py  the route table every endpoint registers with
 mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi

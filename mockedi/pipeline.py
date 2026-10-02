@@ -31,7 +31,7 @@ from . import (ack, charsets, claims, db, documents, edifact, partners,
 from .envelope import EdiSyntaxError, Interchange, Seg, local, sniff
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
-                       SegmentFinding, validate)
+                       SegmentFinding, validate, validate_message)
 
 PENDING = "pending"
 # How much later the `late` partner answers than it otherwise would: an hour.
@@ -1085,10 +1085,16 @@ class Pipeline:
         """
         partner = self._supplier(partner_id)
         moment = self.now()
-        order = documents.place_order(self.conn, partner, self.us, request, moment)
-        body = transactions.write_order(
-            partner["dialect"], self.us, partner, order,
-            documents.order_lines(self.conn, order["po_number"], partner["id"]), moment)
+        # One unit of work, so that an order the document cannot carry leaves
+        # nothing behind: not the order, and not its number used up.
+        with self.conn.atomic():
+            order = documents.place_order(self.conn, partner, self.us, request,
+                                          moment)
+            body = transactions.write_order(
+                partner["dialect"], self.us, partner, order,
+                documents.order_lines(self.conn, order["po_number"], partner["id"]),
+                moment)
+            self._refuse_unsendable(partner, schema.ORDER, body)
         queued = self._send(partner, schema.ORDER, body, order["po_number"], None,
                             moment)
         if partner["behaviour"] == "duplicate-order":
@@ -1100,6 +1106,26 @@ class Pipeline:
         self.release(self.now())
         return order, queued
 
+    def _refuse_unsendable(self, partner: Dict[str, Any], kind: str,
+                           body: Sequence[Seg]) -> None:
+        """Refuse a document the mock's own dictionary would reject (#206).
+
+        The check is the validator itself, run on the document as it would
+        be sent to this partner, so it cannot drift from what
+        `/_mock/validate` says about the same bytes afterwards.
+        """
+        dialect = partner["dialect"]
+        code = schema.set_code(dialect, kind)
+        if dialect == "X12":
+            message = x12.message(code, "0001", body, self._x12_version(partner))
+        else:
+            version = partner["version"] if ":" in partner["version"] else "D:96A:UN"
+            message = edifact.message(code, "1", body, version)
+        problems = transactions.unsendable(
+            message, validate_message(message, dialect))
+        if problems:
+            raise documents.Refused(problems)
+
     def change_placed(self, po_number: str, partner_id: str,
                       request: Dict[str, Any]) -> Tuple[Dict, Queued]:
         """Change or cancel an order the mock placed, and send the 860 or ORDCHG."""
@@ -1109,11 +1135,13 @@ class Pipeline:
                               % (po_number, partner_id))
         partner = self._supplier(partner_id)
         moment = self.now()
-        change = documents.change_placed(self.conn, po_number, partner_id,
-                                         request, moment)
-        order = documents.order_row(self.conn, po_number, partner_id)
-        body = transactions.write_change(partner["dialect"], self.us, partner,
-                                         order, change, moment)
+        with self.conn.atomic():
+            change = documents.change_placed(self.conn, po_number, partner_id,
+                                             request, moment)
+            order = documents.order_row(self.conn, po_number, partner_id)
+            body = transactions.write_change(partner["dialect"], self.us, partner,
+                                             order, change, moment)
+            self._refuse_unsendable(partner, schema.CHANGE, body)
         queued = self._send(partner, schema.CHANGE, body, po_number, None, moment)
         self.release(self.now())
         return order, queued

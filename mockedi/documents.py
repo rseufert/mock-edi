@@ -59,6 +59,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import db
 from .envelope import local
+from .money import cents
 from .transactions import (ACCEPTED, BACKORDERED, REJECTED, SHORT, Order,
                            number, quantity_text)
 
@@ -97,7 +98,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
     decisions = decide(conn, partner, order, moment)
     total = Decimal("0.00")
     for line, (status, confirmed, price, reason, scheduled) in zip(order.lines, decisions):
-        total += (confirmed * price).quantize(Decimal("0.01"))
+        total += cents(confirmed * price)
         # The seller knows its own item numbers even when the buyer sent only
         # one of them, and puts both on everything it sends back.
         item = _catalog(conn, line)
@@ -186,7 +187,7 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
     po_number = po_number or str(db.next_number(conn, "purchase_order"))
     total = Decimal("0.00")
     for row in rows:
-        total += (row["quantity"] * row["price"]).quantize(Decimal("0.01"))
+        total += cents(row["quantity"] * row["price"])
         conn.execute(
             "INSERT INTO order_line (partner, po_number, line, sku, upc,"
             " description, quantity, uom, price, ordered_price)"
@@ -313,8 +314,7 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
             number=row["line"], sku=row["sku"], upc=row["upc"],
             description=row["description"], quantity=row["quantity"],
             uom=row["uom"], price=row["price"], action=action))
-    total = sum(((number(row["quantity"]) * number(row["price"], "0.00"))
-                 .quantize(Decimal("0.01"))
+    total = sum((cents(number(row["quantity"]) * number(row["price"], "0.00"))
                  for row in order_lines(conn, po_number, partner_id)), Decimal("0.00"))
     conn.execute("UPDATE purchase_order SET total = ? WHERE partner = ?"
                  " AND po_number = ?", (db.money(total), partner_id, po_number))
@@ -418,7 +418,9 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             # At least one, but never more than was asked for: rounding a
             # fraction of a single unit down to zero would report a stock
             # problem, and rounding it up would ship more than the order.
-            confirmed = max(Decimal("1"), min(confirmed, line.quantity))
+            # The ceiling goes last, or the floor wins against an order for
+            # less than one unit and half a unit is billed as a whole (#206).
+            confirmed = min(max(Decimal("1"), confirmed), line.quantity)
         elif stock < line.quantity:
             confirmed = stock
 
@@ -640,9 +642,9 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
                      " AND po_number = ? AND line = ?",
                      (quantity_text(number(current[row["line"]]["invoiced"]) + billed),
                       partner_id, po_number, row["line"]))
-        subtotal += (billed * number(row["price"], "0.00")).quantize(Decimal("0.01"))
+        subtotal += cents(billed * number(row["price"], "0.00"))
 
-    tax = (subtotal * Decimal(tax_rate)).quantize(Decimal("0.01"))
+    tax = cents(subtotal * Decimal(tax_rate))
     invoice_number = "INV%d" % db.next_number(conn, "invoice")
     conn.execute(
         "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
@@ -858,8 +860,7 @@ def _change_line(conn, partner, change, line, row, moment) -> Dict[str, Any]:
 def _retotal(conn: sqlite3.Connection, po_number: str, partner_id: str) -> None:
     total = Decimal("0.00")
     for row in order_lines(conn, po_number, partner_id):
-        total += (number(row["confirmed"]) * number(row["price"], "0.00")
-                  ).quantize(Decimal("0.01"))
+        total += cents(number(row["confirmed"]) * number(row["price"], "0.00"))
     status = "received" if total > 0 else "cancelled"
     current = order_row(conn, po_number, partner_id)
     if current and current["status"] in ("shipped", "invoiced"):

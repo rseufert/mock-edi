@@ -215,6 +215,36 @@ class LinesThatAskForNothing(MockServerCase):
         line = self.order("PO-ONE")["lines"][0]
         self.assertLessEqual(int(line["confirmed"]), int(line["quantity"]))
 
+    def test_short_ship_does_not_round_a_fraction_of_a_unit_up(self):
+        """Half a unit was confirmed, shipped and billed as one (#206).
+
+        The floor of one came last, so it beat "never more than was asked
+        for" - and one being no less than a half, it went out as `IA`.
+        """
+        self.behaviour(ACME, "short-ship")
+        self.send(x12_order("PO-HALF", lines=(("WIDGET-001", "0.5", "12.50"),)))
+        line = self.order("PO-HALF")["lines"][0]
+        self.assertEqual((line["confirmed"], line["status"]), ("0.5", "IA"))
+        self.post("/_mock/advance?all")
+        wire = {}
+        for row in self.mailbox(ACME):
+            for text in row["payload"].split("~"):
+                parts = text.strip().split("*")
+                if parts[0] in ("ACK", "SN1", "IT1", "TDS"):
+                    wire[parts[0]] = parts[1:4]
+        self.assertEqual(wire["ACK"], ["IA", "0.5", "EA"])
+        self.assertEqual(wire["SN1"], ["1", "0.5", "EA"])
+        self.assertEqual(wire["IT1"], ["1", "0.5", "EA"])
+        # Half of 12.50, not the whole of it.
+        self.assertEqual(wire["TDS"], ["625"])
+
+    def test_short_ship_still_shorts_what_it_can(self):
+        self.behaviour(ACME, "short-ship")
+        self.send(x12_order("PO-ONE-AND-A-HALF",
+                            lines=(("WIDGET-001", "1.5", "12.50"),)))
+        line = self.order("PO-ONE-AND-A-HALF")["lines"][0]
+        self.assertEqual((line["confirmed"], line["status"]), ("1", "IQ"))
+
     def test_it_is_not_reported_as_a_stock_problem(self):
         """Zero used to come back `IB` with 4200 in stock."""
         self.send(x12_order("PO-ZERO2", lines=(("WIDGET-001", 0, "12.50"),)))
