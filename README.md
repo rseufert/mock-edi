@@ -899,7 +899,9 @@ interval — the same reason `/_mock/advance` exists.
 
 Every inbound document is checked against the dictionary, and the findings
 become a real 997 or CONTRL — `AK3`/`AK4` with X12 error codes, `UCS`/`UCD`
-with EDIFACT ones. The CONTRL uses 0085's own word where it has one: 39 and
+with EDIFACT ones. `AK404` quotes the offending value back, up to 99
+characters, unless it holds a control character: a 997 may not carry one
+either, so the copy is left out and `AK401`–`AK403` say which element and why. The CONTRL uses 0085's own word where it has one: 39 and
 40 for an element too long or too short, 37 for a letter in a number, and in
 the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
 14 for a message type the mock does not know, with the service segment
