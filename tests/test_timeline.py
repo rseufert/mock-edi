@@ -292,5 +292,65 @@ class TheOrderTheMockPlaced(MockServerCase):
 
 
 
+# Every GET the index advertises, so that a route added later cannot put the
+# sequence back into a response by returning rows whole.
+PUBLIC_GETS = ("/_mock/health", "/_mock/state", "/_mock/partners",
+               "/_mock/catalog", "/_mock/orders", "/_mock/orders/TL-PUBLIC",
+               "/_mock/disagreements", "/_mock/remittances",
+               "/_mock/documents", "/_mock/documents/1",
+               "/_mock/interchanges", "/_mock/interchanges/1",
+               "/_mock/mailbox?leave", "/_mock/orders/TL-PUBLIC/timeline",
+               "/_mock/outbox", "/_mock/scheduled?all", "/_mock/drop",
+               "/_mock/mdns", "/_mock/unacknowledged",
+               "/_mock/dictionary/X12/850")
+
+
+def sequences_in(blob, trail=""):
+    """Every `seq` or `ack_seq` anywhere in a response, by where it is."""
+    found = []
+    if isinstance(blob, dict):
+        for key, value in blob.items():
+            if key in ("seq", "ack_seq"):
+                found.append("%s.%s" % (trail, key))
+            found += sequences_in(value, "%s.%s" % (trail, key))
+    elif isinstance(blob, list):
+        for index, value in enumerate(blob):
+            found += sequences_in(value, "%s[%d]" % (trail, index))
+    return found
+
+
+class TheSequenceIsTheMocksOwnBusiness(MockServerCase):
+    """It orders the timeline and belongs in no response (#195).
+
+    `/_mock/orders`, `/_mock/documents` and `/_mock/mailbox` all hand back
+    rows from these tables whole, so a new column lands in each of them
+    unless something drops it. One of the three was missed when this was
+    written, which is why the check is every endpoint at once rather than
+    the three that were known about.
+    """
+
+    def test_no_endpoint_returns_it(self):
+        self.send(x12_order("TL-PUBLIC"))
+        self.send(acknowledge(
+            self.mailbox(ACME, "response", leave=True)[0]["payload"]))
+        leaks = {}
+        for path in PUBLIC_GETS:
+            status, _headers, data = self.get(path)
+            if status != 200:
+                continue
+            found = sequences_in(data)
+            if found:
+                leaks[path] = found
+        self.assertEqual(leaks, {})
+
+    def test_but_the_timeline_is_still_ordered_by_it(self):
+        # The other half of the claim: dropped from the responses, and doing
+        # its job in the one place it exists for.
+        self.send(x12_order("TL-PUBLIC-2"))
+        _status, _headers, found = self.get("/_mock/orders/TL-PUBLIC-2/timeline")
+        self.assertEqual(labels(found), PLAIN)
+
+
+
 if __name__ == "__main__":
     unittest.main()

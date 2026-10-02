@@ -1189,7 +1189,11 @@ class Pipeline:
                     " delivery = 'mailbox' WHERE id = ?",
                     (COLLECTED, db.now(), row["id"]))
             self.conn.commit()
-        return rows
+        # Without the mock's own bookkeeping (#195): the mailbox answers
+        # these rows whole, so the sequence would otherwise reach a caller
+        # through `/_mock/mailbox`. Dropped here rather than at the route,
+        # which is in `server.py` and frozen until #182's fourth step.
+        return db.public(rows)
 
     # -- storage
 
