@@ -5,7 +5,7 @@ dictionary is three routes: all of it, one dialect, one transaction set.
 """
 from __future__ import annotations
 
-from typing import Any, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 from .. import ack, charsets, edifact, partners, profiles, schema, validate, x12
 from ..envelope import EdiSyntaxError, sniff
@@ -98,18 +98,27 @@ def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
                  "kind": schema.kind_of(item.dialect, item.code),
                  "group": item.group, "version": item.version,
                  "purpose": item.purpose,
-                 "segments": list(item.known_tags())}
+                 "segments": list(item.known_tags()),
+                 "envelope": _envelope_path(item.dialect)}
                 for item in schema.SETS.values()],
+            # What goes round every set of a dialect, and belongs to none.
+            "envelopes": [
+                {"dialect": dialect, "path": _envelope_path(dialect),
+                 "segments": [use.tag for use in uses]}
+                for dialect, uses in schema.ENVELOPES.items()],
         }
     dialect = rest[0].upper()
     if len(rest) == 1:
         return {"dialect": dialect,
                 "transactionSets": sorted(code for d, code in schema.SETS
-                                          if d == dialect)}
+                                          if d == dialect),
+                "envelope": _envelope_path(dialect)}
     if version and not schema.supports(dialect, version):
         return {"error": "no %s dictionary at version %s; this mock speaks %s"
                          % (dialect, version,
                             " and ".join(schema.VERSIONS.get(dialect, ())))}
+    if rest[1].lower() == ENVELOPE:
+        return _envelope(dialect, version)
     definition = schema.lookup(dialect, rest[1].upper(), version)
     if definition is None:
         return {"error": "no transaction set %s/%s" % (dialect, rest[1])}
@@ -121,25 +130,66 @@ def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
         "name": definition.name, "purpose": definition.purpose,
         "group": definition.group, "version": definition.version,
         "profile": guide,
+        "envelope": _envelope_path(definition.dialect),
         "segments": [
-            {"tag": use.tag, "name": use.segment.name, "requirement": use.req,
-             "maxUse": use.max_use, "loop": loop.id if loop else "",
-             "purpose": use.segment.purpose,
-             # `width` is how wide the standard makes the segment; the
-             # elements below are the ones this mock checks. Where they differ,
-             # the positions in between are carried and not validated - so a
-             # guide that uses one of them is not wrong, it is untested.
-             "width": use.segment.width,
-             "checkedTo": len(use.segment.elements),
-             "elements": [
-                 {"position": position, "ref": element.ref, "name": element.name,
-                  "type": element.type, "requirement": element.req,
-                  "length": "%d/%d" % (element.min_len, element.max_len),
-                  "codes": sorted(element.codes) if element.codes else None,
-                  "components": [
-                      {"ref": c.ref, "name": c.name, "requirement": c.req,
-                       "codes": sorted(c.codes) if c.codes else None}
-                      for c in element.components] or None}
-                 for position, element in enumerate(use.segment.elements, start=1)]}
+            _segment(use.segment, use.req, use.max_use, loop.id if loop else "")
             for use, loop in definition.uses()],
     }
+
+
+ENVELOPE = "envelope"
+
+
+def _envelope_path(dialect: str) -> str:
+    return "/_mock/dictionary/%s/%s" % (dialect, ENVELOPE)
+
+
+def _envelope(dialect: str, version: str = "") -> Dict[str, Any]:
+    """What goes round the transaction sets: ISA to IEA, or UNA to UNZ.
+
+    One entry for each dialect, which every set shares - the envelope is part
+    of no transaction set (#210). Each segment is described exactly as a
+    set's segments are, with where it sits added: `level` is what it wraps
+    and `role` which end of that it is, in the order they are on the wire.
+    """
+    uses = schema.ENVELOPES.get(dialect)
+    if uses is None:
+        return {"error": "no dialect %s" % dialect}
+    segments = []
+    for use in uses:
+        entry = _segment(use.segment, use.req, 1, "")
+        entry["level"], entry["role"] = use.level, use.role
+        # Not split on delimiters, when set: it is the segment that says
+        # what they are.
+        entry["fixedLength"] = use.fixed_length or None
+        segments.append(entry)
+    return {"dialect": dialect, "code": ENVELOPE,
+            "name": "Interchange envelope",
+            "purpose": "What goes round the %s: the interchange, and the "
+                       "functional group inside it."
+                       % ("transaction sets" if dialect == "X12" else "messages"),
+            "version": version or schema.VERSIONS[dialect][0],
+            "segments": segments}
+
+
+def _segment(segment, requirement: str, max_use: int, loop: str) -> Dict[str, Any]:
+    return {
+        "tag": segment.tag, "name": segment.name, "requirement": requirement,
+        "maxUse": max_use, "loop": loop,
+        "purpose": segment.purpose,
+        # `width` is how wide the standard makes the segment; the
+        # elements below are the ones this mock checks. Where they differ,
+        # the positions in between are carried and not validated - so a
+        # guide that uses one of them is not wrong, it is untested.
+        "width": segment.width,
+        "checkedTo": len(segment.elements),
+        "elements": [
+            {"position": position, "ref": element.ref, "name": element.name,
+             "type": element.type, "requirement": element.req,
+             "length": "%d/%d" % (element.min_len, element.max_len),
+             "codes": sorted(element.codes) if element.codes else None,
+             "components": [
+                 {"ref": c.ref, "name": c.name, "requirement": c.req,
+                  "codes": sorted(c.codes) if c.codes else None}
+                 for c in element.components] or None}
+            for position, element in enumerate(segment.elements, start=1)]}

@@ -164,8 +164,20 @@ def _position(element) -> str:
 
 
 def _clip(value: str, limit: int = 99) -> str:
-    """AK404 carries a copy of the bad data, and is 99 characters at most."""
+    """AK404 carries a copy of the bad data, and is 99 characters at most.
+
+    Unless the copy would itself be a syntax error, which the segment's own
+    semantic note rules out: a control character is not allowed in a data
+    element in any X12 character set, so a 997 that quoted one back could be
+    rejected for the fault it was reporting (#231). The element is then left
+    out whole rather than tidied - a copy with the character removed is not
+    a copy - and AK401 to AK403 still say which element and why. A letter
+    outside ASCII is kept: it is legal in the extended set, and the 997 goes
+    out in the character set the document came in.
+    """
     text = (value or "").strip()
+    if any(ord(ch) < 0x20 or 0x7F <= ord(ch) <= 0x9F for ch in value or ""):
+        return ""
     return text[:limit]
 
 

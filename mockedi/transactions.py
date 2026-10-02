@@ -50,7 +50,17 @@ from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tupl
 
 from . import schema
 from .money import cents, unit_price
-from .envelope import Message, Seg, seg, parse_date
+from .envelope import Message, Seg, ccyymmdd, hhmm, seg, parse_date
+
+# The date and the time a document is written at, as the wire carries them:
+# the mock's clock read in the host's zone, which is what the envelope around
+# the document already says. No date in a document names a zone, and the
+# standards' convention is the sender's local time. Written in UTC, as these
+# were, an 856 packed at 22:28 Pacific said the 1st in BSN03 inside an envelope
+# and beside a ship date that said the 30th (#196). Every writer below uses
+# these two, so a new one cannot format the clock some other way.
+wire_date = ccyymmdd
+wire_time = hhmm
 
 # The item number qualifiers a reader will take a SKU from, best first.
 SKU_QUALIFIERS = ("VP", "SA", "BP", "IN", "SK", "MG", "MF")
@@ -641,9 +651,9 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         "BAK", "00", acknowledgment_type(lines, "X12"), order["po_number"],
         _iso(order.get("ordered_on")), "", "", "",
         order.get("seller_order") or "",      # BAK08: the seller's order
-        when.strftime("%Y%m%d"))]              # BAK09: acknowledged on
+        wire_date(when))]              # BAK09: acknowledged on
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", when.strftime("%Y%m%d")))
+    out.append(seg("DTM", "137", wire_date(when)))
     if order.get("currency"):
         out.insert(1, seg("CUR", "SE", order["currency"]))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
@@ -673,8 +683,8 @@ def _x12_856(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
              shipment: Dict, when: datetime.datetime) -> List[Seg]:
     shipped = _line_rows(lines, "shipped")
     out: List[Seg] = [seg(
-        "BSN", "00", shipment["shipment_id"], when.strftime("%Y%m%d"),
-        when.strftime("%H%M"),
+        "BSN", "00", shipment["shipment_id"], wire_date(when),
+        wire_time(when),
         # 0004 is Shipment, Order, Item - the levels this notice actually uses.
         "0004")]
 
@@ -801,7 +811,7 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
     out: List[Seg] = [seg(
         "BGM", ["231"], [order.get("seller_order") or order["po_number"]], "9",
         acknowledgment_type(lines, "EDIFACT"))]
-    out.append(seg("DTM", ["137", when.strftime("%Y%m%d"), "102"]))
+    out.append(seg("DTM", ["137", wire_date(when), "102"]))
     out.append(seg("RFF", ["ON", order["po_number"]]))
     if order.get("ordered_on"):
         out.append(seg("DTM", ["4", _iso(order["ordered_on"]), "102"]))
@@ -836,7 +846,7 @@ def _edifact_desadv(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
                     shipment: Dict, when: datetime.datetime) -> List[Seg]:
     shipped = _line_rows(lines, "shipped")
     out: List[Seg] = [seg("BGM", ["351"], [shipment["shipment_id"]], "9")]
-    out.append(seg("DTM", ["137", when.strftime("%Y%m%d"), "102"]))
+    out.append(seg("DTM", ["137", wire_date(when), "102"]))
     out.append(seg("DTM", ["11", _iso(shipment.get("shipped_on")), "102"]))
     out.append(seg("RFF", ["ON", order["po_number"]]))
     if shipment.get("tracking"):
@@ -1035,11 +1045,11 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         # (#178). BCH says the same three things in the same three places.
         "BCA", "00", acknowledgment_type(lines, "X12"), order["po_number"],
         "", change.sequence, _iso(order.get("ordered_on")), "", "", "",
-        when.strftime("%Y%m%d"),
+        wire_date(when),
         date_text(change.changed_on))]
     out.append(seg("CUR", "SE", order.get("currency") or "USD"))
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", when.strftime("%Y%m%d")))
+    out.append(seg("DTM", "137", wire_date(when)))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
 
     for row in lines:
@@ -1218,7 +1228,7 @@ def _x12_850(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
              when: datetime.datetime) -> List[Seg]:
     out: List[Seg] = [seg(
         "BEG", order.get("purpose") or "00", "SA", order["po_number"], "",
-        _iso(order.get("ordered_on")) or when.strftime("%Y%m%d"))]
+        _iso(order.get("ordered_on")) or wire_date(when))]
     out.append(seg("CUR", "BY", order.get("currency") or "USD"))
     if order.get("requested_on"):
         out.append(seg("DTM", "002", _iso(order["requested_on"])))
@@ -1240,7 +1250,7 @@ def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
         # an acknowledgment - and 11 the date of the change request (#178).
         date_text(change.ordered_on) or _iso(order.get("ordered_on")),
         "", "", "", "",
-        date_text(change.changed_on) or when.strftime("%Y%m%d"))]
+        date_text(change.changed_on) or wire_date(when))]
     out.append(seg("CUR", "BY", change.currency or order.get("currency") or "USD"))
     for line in change.lines:
         out.append(seg("POC", line.number, line.action,
@@ -1288,7 +1298,7 @@ def _edifact_orders(us: Party, partner: Dict, order: Dict,
                     lines: Sequence[Dict], when: datetime.datetime) -> List[Seg]:
     out: List[Seg] = [seg("BGM", ["220"], [order["po_number"]], "9")]
     out.append(seg("DTM", ["137", _iso(order.get("ordered_on"))
-                           or when.strftime("%Y%m%d"), "102"]))
+                           or wire_date(when), "102"]))
     if order.get("requested_on"):
         out.append(seg("DTM", ["2", _iso(order["requested_on"]), "102"]))
     out.extend(_buyer_parties_edifact(us, partner, order))
@@ -1317,7 +1327,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
         "BGM", ["230"], [po_number, "", change.sequence or "1"],
         "1" if change.cancels else "4")]
     out.append(seg("DTM", ["137", date_text(change.changed_on)
-                           or when.strftime("%Y%m%d"), "102"]))
+                           or wire_date(when), "102"]))
     out.append(seg("RFF", ["ON", po_number]))
     out.extend(_buyer_parties_edifact(us, partner, order))
     out.append(seg("CUX", ["2", change.currency or order.get("currency")

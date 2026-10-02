@@ -119,6 +119,54 @@ class FunctionalAcknowledgment(unittest.TestCase):
         self.assertEqual([g[0] for g in groups], ["PO", "IN"])
 
 
+class TheCopyOfTheBadData(unittest.TestCase):
+    """AK404 must never be a value that is itself a syntax error (#231).
+
+    That is the segment's own semantic note. The copy used to be made whatever
+    the value held, so a 997 reporting an invalid character carried the same
+    invalid character, and could be rejected for the fault it was reporting.
+    """
+
+    def ak4(self, quantity):
+        body = [seg("BEG", "00", "SA", "PO4711", "", "20260924"),
+                seg("PO1", "1", quantity, "EA", "12.50", "", "VP", "WIDGET-001"),
+                seg("CTT", "1")]
+        interchange = x12.parse(x12.render(x12.wrap(
+            [x12.message("850", "0001", body)], "ACME", "MOCKEDI", "1", "88",
+            "PO")))
+        report = validate.validate(interchange)
+        segments = []
+        for functional_id, control, version, messages in ack.group_reports(
+                interchange, report):
+            segments.extend(ack.functional_acknowledgment(
+                functional_id, control, version, messages))
+        rendered = x12.render(x12.wrap(
+            [x12.message("997", "0001", segments)], "MOCKEDI", "ACME", "2",
+            "89", "FA"))
+        line = [text for text in rendered.split("~") if text.startswith("AK4")]
+        return line[0], rendered
+
+    def test_a_control_character_is_not_copied(self):
+        for bad in ("1\x012", "1\t2", "1\x7f2", "1\x852", "\x00"):
+            with self.subTest(value=repr(bad)):
+                line, _rendered = self.ak4(bad)
+                # Which element and why, and nothing after.
+                self.assertEqual(line, "AK4*2*330*6")
+
+    def test_what_can_be_carried_still_is(self):
+        for value in ("eight", "1\u00e92", "1 2", "1.2.3"):
+            with self.subTest(value=value):
+                line, _rendered = self.ak4(value)
+                self.assertEqual(line, "AK4*2*330*6*" + value)
+
+    def test_the_997_is_valid_either_way(self):
+        for value in ("1\x012", "eight"):
+            with self.subTest(value=repr(value)):
+                _line, rendered = self.ak4(value)
+                self.assertTrue(validate.validate(x12.parse(rendered)).clean)
+                self.assertNotIn("\x01", rendered)
+
+
 class SyntaxReport(unittest.TestCase):
     BODY = [seg("BGM", ["220"], ["PO1"], "9"),
             seg("LIN", "1", "", ["WIDGET-001", "VP"]),

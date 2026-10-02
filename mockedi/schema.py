@@ -515,19 +515,19 @@ N1 = Segment("N1", "Party Identification", (
 N2 = Segment("N2", "Additional Name Information", (
     _e("93", "Name", "AN", 1, 60, MANDATORY),
     _e("93", "Name", "AN", 1, 60),
-))
+), "A second and third line for a party's name, when N102 is not enough.")
 
 N3 = Segment("N3", "Party Location", (
     _e("166", "Address Information", "AN", 1, 55, MANDATORY),
     _e("166", "Address Information", "AN", 1, 55),
-))
+), "A party's street address: one line, or two.")
 
 N4 = Segment("N4", "Geographic Location", (
     _e("19", "City Name", "AN", 2, 30),
     _e("156", "State or Province Code", "ID", 2, 2),
     _e("116", "Postal Code", "ID", 3, 15),
     _e("26", "Country Code", "ID", 2, 3),
-))
+), "A party's city, state or province, postal code and country.")
 
 PO1 = Segment("PO1", "Baseline Item Data", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -544,13 +544,13 @@ PID = Segment("PID", "Product/Item Description", (
     _e("559", "Agency Qualifier Code", "ID", 2, 2),
     _e("751", "Product Description Code", "AN", 1, 12),
     _e("352", "Description", "AN", 1, 80),
-))
+), "A description of the item in words: free form in PID05 when PID01 is F.")
 
 PO4 = Segment("PO4", "Item Physical Details", (
     _e("356", "Pack", "N0", 1, 6),
     _e("357", "Size", "R", 1, 8),
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
-), full_width=18)
+), "How the item is packed: units to a pack, and the size of each.", full_width=18)
 
 ACK = Segment("ACK", "Line Item Acknowledgment", (
     _e("668", "Line Item Status Code", "ID", 2, 2, MANDATORY, LINE_STATUS_CODES),
@@ -582,7 +582,7 @@ TD1 = Segment("TD1", "Carrier Details - Quantity and Weight", (
     _e("187", "Weight Qualifier", "ID", 1, 2),
     _e("81", "Weight", "R", 1, 10),
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
-))
+), "What the shipment is on the dock: its packaging, the number of packages and the weight.")
 
 TD5 = Segment("TD5", "Carrier Details - Routing", (
     _e("133", "Routing Sequence Code", "ID", 1, 2),
@@ -592,13 +592,14 @@ TD5 = Segment("TD5", "Carrier Details - Routing", (
        {"A": "Air", "M": "Motor (Common Carrier)", "U": "Private Parcel Service",
         "R": "Rail", "S": "Ocean", "LT": "Less Than Trailer Load"}),
     _e("387", "Routing", "AN", 1, 35),
-), full_width=15)
+), "Who carries the shipment and by what method: the SCAC, and the routing "
+   "in words.", full_width=15)
 
 TD3 = Segment("TD3", "Carrier Details - Equipment", (
     _e("40", "Equipment Description Code", "ID", 2, 2),
     _e("206", "Equipment Initial", "AN", 1, 4),
     _e("207", "Equipment Number", "AN", 1, 10),
-))
+), "The equipment the shipment travels in: the trailer or container's initial and number.")
 
 PRF = Segment("PRF", "Purchase Order Reference", (
     _e("324", "Purchase Order Number", "AN", 1, 22, MANDATORY),
@@ -652,7 +653,7 @@ TXI = Segment("TXI", "Tax Information", (
         "CT": "County Tax", "LS": "State and Local Sales Tax"}),
     _e("782", "Monetary Amount", "R", 1, 18),
     _e("954", "Percent", "R", 1, 10),
-))
+), "A tax on the invoice: which tax, and how much.")
 
 SAC = Segment("SAC", "Service, Promotion, Allowance, or Charge Information", (
     _e("248", "Allowance or Charge Indicator", "ID", 1, 1, MANDATORY,
@@ -661,7 +662,7 @@ SAC = Segment("SAC", "Service, Promotion, Allowance, or Charge Information", (
     _e("559", "Agency Qualifier Code", "ID", 2, 2),
     _e("1301", "Agency Service, Promotion, Allowance, or Charge Code", "AN", 1, 10),
     _e("610", "Amount", "N2", 1, 15),
-), full_width=16)
+), "An allowance or a charge and its amount: SAC01 says which of the two.", full_width=16)
 
 # 004010 carries element 610, Amount, in all four positions; what each one
 # means is its position's. 361, 390, 391 and 362, which this used to declare,
@@ -681,7 +682,7 @@ CAD = Segment("CAD", "Carrier Detail", (
     _e("207", "Equipment Number", "AN", 1, 10),
     _e("140", "Standard Carrier Alpha Code", "ID", 2, 4),
     _e("387", "Routing", "AN", 1, 35),
-))
+), "How the goods on this invoice travelled: the method, the carrier's SCAC and the routing.")
 
 # The 820's remittance-advice use. BPR01 says which use it is: I (remittance
 # information only) or C (payment accompanies the advice) is a remittance a
@@ -887,12 +888,14 @@ GS = Segment("GS", "Functional Group Header", (
 GE = Segment("GE", "Functional Group Trailer", (
     _e("97", "Number of Transaction Sets Included", "N0", 1, 6, MANDATORY),
     _e("28", "Group Control Number", "N0", 1, 9, MANDATORY),
-))
+), "Ends a functional group: counts its transaction sets and repeats the control number "
+   "GS06 gave.")
 
 IEA = Segment("IEA", "Interchange Control Trailer", (
     _e("I16", "Number of Included Functional Groups", "N0", 1, 5, MANDATORY),
     _e("I12", "Interchange Control Number", "N0", 9, 9, MANDATORY),
-))
+), "Ends the interchange: counts its functional groups and repeats the control number "
+   "ISA13 gave.")
 
 TA1 = Segment("TA1", "Interchange Acknowledgment", (
     _e("I12", "Interchange Control Number", "N0", 9, 9, MANDATORY),
@@ -1284,12 +1287,64 @@ UNH = Segment("UNH", "Message Header", (
 UNT = Segment("UNT", "Message Trailer", (
     _e("0074", "Number of segments in the message", "N0", 1, 10, MANDATORY),
     _e("0062", "Message reference number", "AN", 1, 14, MANDATORY),
-))
+), "Ends a message: counts its segments, UNH and UNT included, and repeats the reference "
+   "UNH gave.")
 
 UNZ = Segment("UNZ", "Interchange Trailer", (
     _e("0036", "Interchange control count", "N0", 1, 6, MANDATORY),
     _e("0020", "Interchange control reference", "AN", 1, 14, MANDATORY),
-))
+), "Ends the interchange: counts its messages, or its groups when it has them, and "
+   "repeats the reference UNB gave.")
+
+# UNG and UNE: ISO 9735 syntax version 3. The parser reads a functional
+# group when a sender uses one; the mock never writes one, and neither does
+# almost anybody else. Declared so the dictionary can describe a whole
+# interchange (#210); the envelope checks do not go through these.
+UNG = Segment("UNG", "Functional Group Header", (
+    _e("0038", "Functional group identification", "AN", 1, 6, MANDATORY),
+    _c("S006", "Application Sender's Identification", (
+        _e("0040", "Sender identification", "AN", 1, 35, MANDATORY),
+        _e("0007", "Partner identification code qualifier", "AN", 1, 4),
+    ), MANDATORY),
+    _c("S007", "Application Recipient's Identification", (
+        _e("0044", "Recipient's identification", "AN", 1, 35, MANDATORY),
+        _e("0007", "Partner identification code qualifier", "AN", 1, 4),
+    ), MANDATORY),
+    # S004 as UNB has it: syntax version 3 gives 0017 six digits, and the
+    # mock reads the eight a version 4 sender writes as well.
+    _c("S004", "Date/Time of Preparation", (
+        _e("0017", "Date", "DT", 6, 8, MANDATORY),
+        _e("0019", "Time", "TM", 4, 4, MANDATORY),
+    ), MANDATORY),
+    _e("0048", "Functional group reference number", "AN", 1, 14, MANDATORY),
+    _e("0051", "Controlling agency", "AN", 1, 2, MANDATORY),
+    _c("S008", "Message Version", (
+        _e("0052", "Message version number", "AN", 1, 3, MANDATORY),
+        _e("0054", "Message release number", "AN", 1, 3, MANDATORY),
+        _e("0057", "Association assigned code", "AN", 1, 6),
+    ), MANDATORY),
+    _e("0058", "Application password", "AN", 1, 14),
+), "Starts a functional group of messages of one type. Optional and rare: the "
+   "mock reads one and never writes one.")
+
+UNE = Segment("UNE", "Functional Group Trailer", (
+    _e("0060", "Number of messages", "N0", 1, 6, MANDATORY),
+    _e("0048", "Functional group reference number", "AN", 1, 14, MANDATORY),
+), "Ends a functional group: counts its messages and repeats the reference UNG gave.")
+
+# UNA is not a segment in the delimited sense: it is the three letters and
+# then six characters in a fixed order, and it is how the delimiters are
+# known before any of them can be used. Its six positions are declared as
+# elements so the dictionary can name them; nothing splits it on them.
+UNA = Segment("UNA", "Service String Advice", (
+    _e("UNA1", "Component data element separator", "AN", 1, 1, MANDATORY),
+    _e("UNA2", "Data element separator", "AN", 1, 1, MANDATORY),
+    _e("UNA3", "Decimal notation", "AN", 1, 1, MANDATORY),
+    _e("UNA4", "Release indicator", "AN", 1, 1, MANDATORY),
+    _e("UNA5", "Reserved for future use", "AN", 1, 1, MANDATORY),
+    _e("UNA6", "Segment terminator", "AN", 1, 1, MANDATORY),
+), "Declares the punctuation the interchange uses, before any of it is used: "
+   "nine characters in a fixed order, and optional when the defaults apply.")
 
 UNS = Segment("UNS", "Section Control", (
     _e("0081", "Section identification", "ID", 1, 1, MANDATORY,
@@ -1337,7 +1392,8 @@ RFF = Segment("RFF", "Reference", (
         _e("4000", "Reference version number", "AN", 1, 35),
         _e("1060", "Revision identifier", "AN", 1, 6),
     ), MANDATORY),
-))
+), "A reference to something else, named by its qualifier: the order, the seller's "
+   "order, a delivery note.")
 
 NAD = Segment("NAD", "Name and Address", (
     _e("3035", "Party qualifier", "ID", 1, 3, MANDATORY,
@@ -1378,7 +1434,7 @@ CUX = Segment("CUX", "Currencies", (
         _e("6345", "Currency, coded", "ID", 3, 3),
     )),
     _e("5402", "Rate of exchange", "R", 1, 12),
-))
+), "The currency the document's amounts are in.")
 
 PAT = Segment("PAT", "Payment Terms Basis", (
     _e("4279", "Payment terms type qualifier", "ID", 1, 3, MANDATORY,
@@ -1395,7 +1451,7 @@ PAT = Segment("PAT", "Payment Terms Basis", (
         _e("2151", "Type of period, coded", "ID", 1, 3),
         _e("2152", "Number of periods", "N0", 1, 3),
     )),
-))
+), "Payment terms: the kind of terms, and when payment falls due.")
 
 LIN_E = Segment("LIN", "Line Item", (
     _e("1082", "Line item number", "AN", 1, 6),
@@ -1440,7 +1496,7 @@ IMD = Segment("IMD", "Item Description", (
         _e("7008", "Item description", "AN", 1, 256),
         _e("3453", "Language, coded", "ID", 1, 3),
     )),
-))
+), "A description of the item in words.")
 
 QTY = Segment("QTY", "Quantity", (
     _c("C186", "Quantity Details", (
@@ -1460,7 +1516,7 @@ PRI = Segment("PRI", "Price Details", (
         _e("5284", "Unit price basis", "R", 1, 9),
         _e("6411", "Measure unit qualifier", "AN", 1, 8),
     )),
-))
+), "The unit price of the line.")
 
 MOA = Segment("MOA", "Monetary Amount", (
     _c("C516", "Monetary Amount", (
@@ -1503,7 +1559,7 @@ TDT = Segment("TDT", "Transport Information", (
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("3128", "Carrier name", "AN", 1, 35),
     )),
-))
+), "Who carries the consignment, and by what means of transport.")
 
 CPS = Segment("CPS", "Consignment Packing Sequence", (
     _e("7164", "Hierarchical id. number", "AN", 1, 12, MANDATORY),
@@ -1522,7 +1578,7 @@ PAC = Segment("PAC", "Package", (
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("7064", "Type of packages", "AN", 1, 35),
     )),
-))
+), "How many packages, and of what kind.")
 
 CNT = Segment("CNT", "Control Total", (
     _c("C270", "Control", (
@@ -1532,7 +1588,7 @@ CNT = Segment("CNT", "Control Total", (
         _e("6066", "Control value", "R", 1, 18, MANDATORY),
         _e("6411", "Measure unit qualifier", "AN", 1, 8),
     ), MANDATORY),
-))
+), "A control total: what is counted, and the count.")
 
 # -- CONTRL
 
@@ -1963,6 +2019,48 @@ def base_version(dialect: str, version: str) -> str:
 
 def supports(dialect: str, version: str) -> bool:
     return base_version(dialect, version) in VERSIONS.get(dialect, ())
+
+
+INTERCHANGE = "interchange"
+GROUP = "group"
+HEADER = "header"
+TRAILER = "trailer"
+ADVICE = "advice"
+
+
+@dataclass(frozen=True)
+class EnvelopeUse:
+    """One segment of the envelope: what it wraps, and which end of it."""
+    segment: Segment
+    level: str
+    role: str
+    req: str = MANDATORY
+    # The whole of it, in characters, when it is not split on delimiters.
+    fixed_length: int = 0
+
+    @property
+    def tag(self) -> str:
+        return self.segment.tag
+
+
+# What goes round the transaction sets, in the order it is on the wire. It
+# belongs to no set - TA1 already sits outside one - so it is declared once
+# for each dialect and every set shares it (#210).
+ENVELOPES: Dict[str, Tuple[EnvelopeUse, ...]] = {
+    "X12": (
+        EnvelopeUse(ISA, INTERCHANGE, HEADER, fixed_length=106),
+        EnvelopeUse(GS, GROUP, HEADER),
+        EnvelopeUse(GE, GROUP, TRAILER),
+        EnvelopeUse(IEA, INTERCHANGE, TRAILER),
+    ),
+    "EDIFACT": (
+        EnvelopeUse(UNA, INTERCHANGE, ADVICE, OPTIONAL, fixed_length=9),
+        EnvelopeUse(UNB, INTERCHANGE, HEADER),
+        EnvelopeUse(UNG, GROUP, HEADER, OPTIONAL),
+        EnvelopeUse(UNE, GROUP, TRAILER, OPTIONAL),
+        EnvelopeUse(UNZ, INTERCHANGE, TRAILER),
+    ),
+}
 
 
 def lookup(dialect: str, code: str, version: str = "") -> Optional[TransactionSet]:

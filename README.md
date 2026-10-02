@@ -213,7 +213,7 @@ Both are walked through, test by test, in
 | Outstanding documents | `GET /_mock/unacknowledged?older-than=60` |
 | Work promised, not done | `GET /_mock/scheduled` |
 | Directory trading | `GET /_mock/drop`, `POST /_mock/drop/scan` |
-| The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850` |
+| The dictionary | `GET /_mock/dictionary`, `/_mock/dictionary/X12/850`, `/_mock/dictionary/X12/envelope` |
 | Health and state | `GET /_mock/health`, `GET /_mock/state`, `GET /_mock/requests` |
 | Reset | `POST /_mock/reset` |
 | Index page | `GET /` |
@@ -249,6 +249,15 @@ Both dialects are read and written from one dictionary
 what you assert about an X12 flow holds for the EDIFACT one. `GET
 /_mock/dictionary/X12/850` serves that dictionary as JSON — the actual rules,
 not a description of them that can go stale.
+
+A set runs from `ST` to `SE`, or `UNH` to `UNT`. What goes round it belongs
+to no set, so it is served once for each dialect: `GET
+/_mock/dictionary/X12/envelope` is `ISA`, `GS`, `GE` and `IEA`, and
+`/_mock/dictionary/EDIFACT/envelope` is `UNA`, `UNB`, `UNG`, `UNE` and `UNZ`,
+each described as any other segment is, in the order they are on the wire,
+with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
+or `advice` for `UNA`). Every set's entry names its envelope's path, so the
+whole of one interchange can be read from two requests.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
 is read against the version its group's `GS08` names — an industry suffix such
@@ -344,7 +353,11 @@ CI.
 The dates **on the wire** are the opposite case and stay as they are. ISA09/10,
 GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
-them.
+them. So is every date and time inside a document - `BAK09`, `BSN03/04`,
+`BIG01`, an ORDRSP's `DTM+137` - which is the mock's clock read in the host's
+zone, so a document and its envelope always name the same day. A date a
+partner sends without a zone is read the same way: `BPR16` is compared with
+the day the mock would write today.
 
 ## One order, one conversation
 
@@ -907,7 +920,9 @@ interval — the same reason `/_mock/advance` exists.
 
 Every inbound document is checked against the dictionary, and the findings
 become a real 997 or CONTRL — `AK3`/`AK4` with X12 error codes, `UCS`/`UCD`
-with EDIFACT ones. The CONTRL uses 0085's own word where it has one: 39 and
+with EDIFACT ones. `AK404` quotes the offending value back, up to 99
+characters, unless it holds a control character: a 997 may not carry one
+either, so the copy is left out and `AK401`–`AK403` say which element and why. The CONTRL uses 0085's own word where it has one: 39 and
 40 for an element too long or too short, 37 for a letter in a number, and in
 the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
 14 for a message type the mock does not know, with the service segment
