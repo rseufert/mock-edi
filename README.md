@@ -912,6 +912,13 @@ the `UCM` 29 or 28 for a `UNT` that miscounts or names another message and
 named. `UCI` says 4 only when the interchange itself is at fault; a sound one
 carrying a refused message is 7, with the 4 on that message's `UCM`.
 
+An EDIFACT date is read by the format it states. `DTM`'s third component says
+what the second is: `102` a date, `203` a date and a time, `204` with seconds,
+`101` with a two-digit year - and the mock takes the date from each. A value
+that is not what its format says, `2026-10-10` called `102` or eight digits
+called `203`, is reported on 2380 as an invalid date (0085 code 12 in the
+CONTRL) and is not read; a `DTM` that states no format is read by its length.
+
 The mock sells, so it refuses what a seller sends. An 855, 856, 810 or 865 -
 or an ORDRSP, DESADV or INVOIC - arriving from a partner is rejected the way a
 real translator rejects a set its relationship with that partner does not

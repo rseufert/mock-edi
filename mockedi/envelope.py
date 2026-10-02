@@ -459,3 +459,40 @@ def parse_date(value: str):
     except ValueError:
         return None
     return None
+
+
+# EDIFACT 2379, the format a DTM says its value is in, as (digits in the
+# date, digits in the time after it). 2379 has hundreds of codes; these are
+# the four the dictionary lists, and the ones a date arrives in.
+EDIFACT_DATE_LAYOUTS = {"101": (6, 0), "102": (8, 0), "203": (8, 4), "204": (8, 6)}
+EDIFACT_DATE_PICTURES = {"101": "YYMMDD", "102": "CCYYMMDD",
+                         "203": "CCYYMMDDHHMM", "204": "CCYYMMDDHHMMSS"}
+
+
+def parse_edifact_date(value: str, form: str = ""):
+    """The date an EDIFACT DTM carries, read by the format it states, or None.
+
+    `form` is 2379. A value is read only as what it says it is: eight digits
+    called 203 are not a date and a time, and are not read as a date by the
+    luck of their length (#209). With no format given, which the directory
+    allows, the length decides. The time, where there is one, has to be a
+    real time for the value to be read at all; only the date is returned.
+    """
+    text = (value or "").strip()
+    if not text.isdigit():
+        return None
+    if form:
+        layout = EDIFACT_DATE_LAYOUTS.get(form)
+        if layout is None or len(text) != sum(layout):
+            return None
+    else:
+        layout = {6: (6, 0), 8: (8, 0), 12: (8, 4), 14: (8, 6)}.get(len(text))
+        if layout is None:
+            return None
+    clock = text[layout[0]:]
+    if clock:
+        hour, minute = int(clock[0:2]), int(clock[2:4])
+        second = int(clock[4:6]) if len(clock) == 6 else 0
+        if hour > 23 or minute > 59 or second > 59:
+            return None
+    return parse_date(text[:layout[0]])
