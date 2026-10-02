@@ -19,9 +19,9 @@ publishers or more for each, listed position by position in the table on
 Every date below is different, so a value in the wrong position is the wrong
 value and not a coincidence.
 
-Two positions still disagree and are marked as expected failures, each naming
-the issue that fixes it: #231 and #232. (#230, the 856 reader taking BSN03 as
-the ship date, is fixed.)
+One position still disagrees and is marked as an expected failure naming the
+issue that fixes it: #232. (#230, the 856 reader taking BSN03 as the ship
+date, and #231, AK404 repeating an invalid character, are fixed.)
 """
 import datetime
 import os
@@ -452,7 +452,6 @@ class The997(unittest.TestCase):
     def test_ak404_copies_the_bad_data_when_it_can_be_carried(self):
         self.assertEqual(one(self.acknowledge("eight"), "AK4").get(4), "eight")
 
-    @unittest.expectedFailure       # #231: the invalid character is copied
     def test_ak404_does_not_repeat_an_invalid_character(self):
         ak4 = one(self.acknowledge("1\x012"), "AK4")
         self.assertEqual(ak4.get(3), "6")
