@@ -373,7 +373,7 @@ def delete(conn: sqlite3.Connection, identifier: str) -> Dict[str, Any]:
     unscheduled = conn.execute(
         "UPDATE scheduled SET done_at = ?, note = ? WHERE partner = ?"
         " AND done_at = ''",
-        (db.now(), "partner deleted", identifier)).rowcount
+        (db.now(conn), "partner deleted", identifier)).rowcount
     conn.execute("DELETE FROM partner WHERE id = ?", (identifier,))
     # Its guide goes with it: a new partner by the same id is somebody else.
     conn.execute("DELETE FROM partner_profile WHERE partner = ?", (identifier,))

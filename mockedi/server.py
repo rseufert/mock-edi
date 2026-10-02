@@ -567,7 +567,7 @@ class Handler(BaseHTTPRequestHandler):
                     "INSERT INTO request_log (method, path, status, bytes_in,"
                     " bytes_out, partner, at) VALUES (?,?,?,?,?,?,?)",
                     (method, path, status, bytes_in, bytes_out,
-                     self.headers.get("AS2-From", "") or "", db.now()))
+                     self.headers.get("AS2-From", "") or "", db.wall_now()))
                 self.mock.conn.commit()
                 self.mock.requests_since_prune += 1
                 if self.mock.requests_since_prune >= PRUNE_EVERY:

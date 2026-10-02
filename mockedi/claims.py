@@ -107,7 +107,7 @@ def record(conn, partner: Dict[str, Any], kind: str, code: str, control: str,
         if not claim.line:
             _place(received.lines, claim)
 
-    moment = db.now()
+    moment = db.now(conn)
     reference = _reference(kind, document)
     for claim in received.claims:
         conn.execute(
