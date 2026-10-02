@@ -253,6 +253,16 @@ is no API token anywhere. Running the `Publish` workflow by hand publishes to
 TestPyPI instead. Add the release to [`CHANGELOG.md`](CHANGELOG.md) in the same
 commit as the version bump.
 
+**The upload waits for an approval.** When the `pypi` environment has the
+maintainer as a required reviewer, the Publish workflow builds, then stops at
+the `publish to PyPI` job until the maintainer approves the deployment in the
+browser, on the workflow run's page. Nothing is uploaded before that click.
+`tools/release.py` does not know about the approval: it waits 30 minutes for
+the Publish workflow and then gives up, naming what it was waiting for. Approve
+the deployment, let the workflow finish, and run the tool again with `--resume`
+to confirm PyPI. With no reviewer on the environment, the upload follows the
+build without stopping.
+
 Verify the release by installing the exact version into a clean environment:
 
 ```bash

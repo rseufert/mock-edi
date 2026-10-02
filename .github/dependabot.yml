@@ -1,0 +1,12 @@
+# Keeps the actions the workflows use up to date, one pull request at a time.
+#
+# The package has no dependencies, so the actions are the whole of what this
+# repository runs that it did not write. The publish action is pinned to a
+# commit (publish.yml says why), and a pin nobody moves is a pin on an old
+# release: this is what moves it.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
