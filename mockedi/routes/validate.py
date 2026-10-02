@@ -157,7 +157,7 @@ def _envelope(dialect: str, version: str = "") -> Dict[str, Any]:
         return {"error": "no dialect %s" % dialect}
     segments = []
     for use in uses:
-        entry = _segment(use.segment, use.req, 1, "")
+        entry = _segment(use.segment, use.req, use.max_use, "")
         entry["level"], entry["role"] = use.level, use.role
         # Not split on delimiters, when set: it is the segment that says
         # what they are.
@@ -168,8 +168,26 @@ def _envelope(dialect: str, version: str = "") -> Dict[str, Any]:
             "purpose": "What goes round the %s: the interchange, and the "
                        "functional group inside it."
                        % ("transaction sets" if dialect == "X12" else "messages"),
-            "version": version or schema.VERSIONS[dialect][0],
+            # The envelope's own: ISA12 for the X12 version asked for, and
+            # the syntax version for EDIFACT, whatever directory its
+            # messages are in. `setVersion` is the one `?version=` named.
+            "version": _envelope_version(dialect, version),
+            "setVersion": version or schema.VERSIONS[dialect][0],
             "segments": segments}
+
+
+def _envelope_version(dialect: str, version: str) -> str:
+    if dialect == "EDIFACT":
+        return schema.EDIFACT_SYNTAX_VERSION
+    return schema.ENVELOPE_VERSIONS[dialect][version or schema.VERSIONS[dialect][0]]
+
+
+def _repeats(element) -> Any:
+    """Which header element this one has to say again, or None."""
+    if not element.repeats:
+        return None
+    return {"tag": element.repeats[:-2], "position": int(element.repeats[-2:]),
+            "label": element.repeats}
 
 
 def _segment(segment, requirement: str, max_use: int, loop: str) -> Dict[str, Any]:
@@ -191,5 +209,8 @@ def _segment(segment, requirement: str, max_use: int, loop: str) -> Dict[str, An
              "components": [
                  {"ref": c.ref, "name": c.name, "requirement": c.req,
                   "codes": sorted(c.codes) if c.codes else None}
-                 for c in element.components] or None}
+                 for c in element.components] or None,
+             # IEA02 is ISA13 again: declared once in `schema.py`, where the
+             # validator's check reads it too.
+             "repeats": _repeats(element)}
             for position, element in enumerate(segment.elements, start=1)]}

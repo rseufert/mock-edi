@@ -257,7 +257,13 @@ to no set, so it is served once for each dialect: `GET
 each described as any other segment is, in the order they are on the wire,
 with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
 or `advice` for `UNA`). Every set's entry names its envelope's path, so the
-whole of one interchange can be read from two requests.
+whole of one interchange can be read from two requests. An element that
+has to say again what its header said carries `repeats`, naming the header's
+element: `IEA02` repeats `ISA13`, `GE02` `GS06`, `SE02` `ST02`, and in
+EDIFACT `UNZ` and `UNT` repeat the references `UNB` and `UNH` gave. It is
+one declaration, and the validator's check of the pair reads it too. An
+envelope's `version` is its own - `ISA12`, or EDIFACT's syntax version - and
+`setVersion` is the version of the sets inside it.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
 is read against the version its group's `GS08` names — an industry suffix such

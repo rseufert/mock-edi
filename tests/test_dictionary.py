@@ -758,7 +758,7 @@ class TheEndpoint(MockServerCase):
 SEGMENT_KEYS = {"tag", "name", "requirement", "maxUse", "loop", "purpose",
                 "width", "checkedTo", "elements"}
 ELEMENT_KEYS = {"position", "ref", "name", "type", "requirement", "length",
-                "codes", "components"}
+                "codes", "components", "repeats"}
 
 
 class TheEnvelope(MockServerCase):
@@ -845,7 +845,7 @@ class TheEnvelope(MockServerCase):
 
     def test_a_version_is_taken_as_it_is_for_a_set(self):
         _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=005010")
-        self.assertEqual(data["version"], "005010")
+        self.assertEqual(data["setVersion"], "005010")
         _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=003040")
         self.assertIn("error", data)
 
@@ -857,6 +857,116 @@ class TheEnvelope(MockServerCase):
                           "S008", "0058"])
         self.assertEqual([(e["ref"], e["requirement"]) for e in une["elements"]],
                          [("0060", "M"), ("0048", "M")])
+
+
+class WhatATrailerRepeats(MockServerCase):
+    """IEA02 is ISA13 again, and the dictionary says so (#210).
+
+    It is the one relationship between two segments that a reader cannot
+    work out from their names. It is declared once, on the trailer's element
+    in `schema.py`, and the validator's check reads the same declaration.
+    """
+    PAIRS = {"SE02": "ST02", "GE02": "GS06", "IEA02": "ISA13",
+             "UNT02": "UNH01", "UNE02": "UNG05", "UNZ02": "UNB05"}
+
+    def served(self):
+        found = {}
+        for path in ("/_mock/dictionary/X12/envelope", "/_mock/dictionary/X12/850",
+                     "/_mock/dictionary/EDIFACT/envelope",
+                     "/_mock/dictionary/EDIFACT/ORDERS"):
+            for segment in self.get(path)[2]["segments"]:
+                for element in segment["elements"]:
+                    if element["repeats"]:
+                        found["%s%02d" % (segment["tag"], element["position"])] = \
+                            element["repeats"]
+        return found
+
+    def test_each_pair_is_served(self):
+        self.assertEqual({label: said["label"]
+                          for label, said in self.served().items()}, self.PAIRS)
+
+    def test_as_a_tag_and_a_position_as_well_as_a_label(self):
+        self.assertEqual(self.served()["IEA02"],
+                         {"tag": "ISA", "position": 13, "label": "ISA13"})
+        self.assertEqual(self.served()["UNZ02"],
+                         {"tag": "UNB", "position": 5, "label": "UNB05"})
+
+    def test_nothing_else_claims_to_repeat_anything(self):
+        for dialect, code in sorted(schema.SETS):
+            _s, _h, data = self.get("/_mock/dictionary/%s/%s" % (dialect, code))
+            for segment in data["segments"]:
+                for element in segment["elements"]:
+                    label = "%s%02d" % (segment["tag"], element["position"])
+                    if label not in self.PAIRS:
+                        self.assertIsNone(element["repeats"], label)
+
+    def test_both_ends_are_the_same_data_element(self):
+        # SE02 and ST02 are both 329; a pair that named two different
+        # elements would be a typing mistake in the declaration.
+        for trailer in (schema.SE, schema.GE, schema.IEA, schema.UNT,
+                        schema.UNE, schema.UNZ):
+            said = schema.repeat(trailer)
+            header = getattr(schema, said.header_tag)
+            with self.subTest(pair=said.label):
+                self.assertEqual(trailer.elements[said.position - 1].ref,
+                                 header.elements[said.header_position - 1].ref)
+
+    def test_the_declared_position_is_where_the_parser_takes_the_number_from(self):
+        interchange = x12.parse(x12_order("PO-REPEATS"))
+        group = interchange.groups[0]
+        message = group.messages[0]
+        for trailer, header, parsed in (
+                (schema.IEA, interchange.header, interchange.control),
+                (schema.GE, group.header, group.control),
+                (schema.SE, message.segments[0], message.control)):
+            said = schema.repeat(trailer)
+            with self.subTest(pair=said.label):
+                self.assertEqual(header.tag, said.header_tag)
+                self.assertEqual(header.get(said.header_position), parsed)
+        interchange = edifact.parse(edifact_order("PO-REPEATS-EU"))
+        message = interchange.groups[0].messages[0]
+        for trailer, header, parsed in (
+                (schema.UNZ, interchange.header, interchange.control),
+                (schema.UNT, message.segments[0], message.control)):
+            said = schema.repeat(trailer)
+            with self.subTest(pair=said.label):
+                self.assertEqual(header.tag, said.header_tag)
+                self.assertEqual(header.get(said.header_position), parsed)
+
+    def test_the_validators_finding_is_at_the_declared_position(self):
+        text = x12_order("PO-REPEATS-BAD")
+        iea = [line for line in text.split("~") if line.strip().startswith("IEA*")][0]
+        report = validate.validate(x12.parse(
+            text.replace(iea, iea.strip()[:-9] + "000000999")))
+        said = schema.repeat(schema.IEA)
+        finding = [f for f in report.interchange_findings if f.tag == "IEA"][0]
+        self.assertEqual(finding.position, said.position)
+        self.assertIn("%s says" % said.label, finding.note)
+        self.assertIn("%s says" % said.header_label, finding.note)
+
+
+class TheEnvelopesOwnNumbers(MockServerCase):
+    """Two corrections to the envelope entry, from review of #247."""
+
+    def test_a_group_may_repeat_and_an_interchange_may_not(self):
+        for dialect, repeating in (("X12", {"GS", "GE"}), ("EDIFACT", {"UNG", "UNE"})):
+            _s, _h, data = self.get("/_mock/dictionary/%s/envelope" % dialect)
+            for segment in data["segments"]:
+                with self.subTest(segment=segment["tag"]):
+                    self.assertEqual(segment["maxUse"],
+                                     schema.MANY if segment["tag"] in repeating else 1)
+
+    def test_its_version_is_the_envelopes_own_and_not_the_sets(self):
+        # ISA12 for X12; for EDIFACT the syntax version in UNB, which is not
+        # the directory its messages are in.
+        for path, version, sets in (
+                ("/_mock/dictionary/X12/envelope", "00401", "004010"),
+                ("/_mock/dictionary/X12/envelope?version=005010", "00501", "005010"),
+                ("/_mock/dictionary/EDIFACT/envelope", "3", "D:96A:UN")):
+            with self.subTest(path=path):
+                _s, _h, data = self.get(path)
+                self.assertEqual((data["version"], data["setVersion"]),
+                                 (version, sets))
 
 
 class WhatWasServedBefore(MockServerCase):
