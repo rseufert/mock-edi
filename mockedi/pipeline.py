@@ -1008,12 +1008,19 @@ class Pipeline:
         return queued
 
     def send_document(self, partner_id: str, kind: str, po_number: str = "",
-                      delay_ms: int = 0) -> Queued:
+                      delay_ms: int = 0, shipment_id: str = "") -> Queued:
         """Send a document on demand, outside the usual choreography.
 
         `/_mock/send` uses this: it is how a test replays a lost invoice, or
         produces an unsolicited despatch advice, without arranging the whole
         order first.
+
+        A despatch advice or an invoice is about one consignment, and is
+        written from that consignment's lines, as the original was (#201):
+        the order's lines carry running totals over every consignment, and a
+        replay written from them billed the whole order's quantity against
+        one shipment's total. `shipment_id` names the consignment; without it
+        the latest is meant.
         """
         partner = partners.require(self.conn, partner_id)
         moment = self.now()
@@ -1041,19 +1048,23 @@ class Pipeline:
             body = transactions.write_response(
                 partner["dialect"], self.us, partner, order, lines, moment)
         elif kind == schema.DESPATCH:
-            shipment = documents.latest_shipment(self.conn, po_number, partner_id) or \
+            shipment = self._consignment(partner_id, po_number, shipment_id) or \
                 documents.create_shipment(self.conn, po_number, partner_id,
                                           moment) or {}
             order = documents.order_row(self.conn, po_number, partner_id)
-            lines = documents.order_lines(self.conn, po_number, partner_id)
             body = transactions.write_despatch(
-                partner["dialect"], self.us, partner, order, lines, shipment, moment)
+                partner["dialect"], self.us, partner, order,
+                self._lines_of(shipment, po_number, partner_id), shipment, moment)
         elif kind == schema.INVOICE:
-            shipment = documents.latest_shipment(self.conn, po_number, partner_id) or {}
-            invoice = db.one(self.conn, "SELECT * FROM invoice WHERE partner = ?"
-                                        " AND po_number = ?"
-                                        " ORDER BY rowid DESC LIMIT 1",
-                             (partner_id, po_number))
+            shipment = self._consignment(partner_id, po_number, shipment_id)
+            # The invoice asked for: the named consignment's, or the latest.
+            # Then the consignment is the one that invoice bills, which is
+            # not always the latest - the latest may not be billed yet.
+            invoice = db.one(
+                self.conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
+                           + (" AND shipment_id = ?" if shipment_id else "")
+                           + " ORDER BY rowid DESC LIMIT 1",
+                (partner_id, po_number) + ((shipment_id,) if shipment_id else ()))
             if invoice is None:
                 invoice = documents.create_invoice(
                     self.conn, po_number, partner_id, shipment.get("shipment_id", ""),
@@ -1061,10 +1072,12 @@ class Pipeline:
             if invoice is None:
                 raise ValueError("nothing has shipped against %r, so there is "
                                  "nothing to invoice" % po_number)
+            shipment = documents.shipment_row(
+                self.conn, invoice["shipment_id"]) or shipment
             order = documents.order_row(self.conn, po_number, partner_id)
-            lines = documents.order_lines(self.conn, po_number, partner_id)
             body = transactions.write_invoice(
-                partner["dialect"], self.us, partner, order, lines, invoice,
+                partner["dialect"], self.us, partner, order,
+                self._lines_of(shipment, po_number, partner_id), invoice,
                 shipment, moment)
         else:
             raise ValueError("unknown document kind %r; known: %s"
@@ -1073,6 +1086,34 @@ class Pipeline:
         queued = self._send(partner, kind, body, po_number, None, moment, delay_ms)
         self.release(self.now())
         return queued
+
+    def _consignment(self, partner_id: str, po_number: str,
+                     shipment_id: str) -> Dict[str, Any]:
+        """The consignment a document on demand is about: the one named, or
+        the latest, or `{}` when nothing has shipped."""
+        if not shipment_id:
+            return documents.latest_shipment(self.conn, po_number, partner_id)
+        shipment = documents.shipment_row(self.conn, shipment_id)
+        if (shipment is None or shipment["partner"] != partner_id
+                or shipment["po_number"] != po_number):
+            known = [row["shipment_id"] for row in db.rows(
+                self.conn, "SELECT shipment_id FROM shipment WHERE partner = ?"
+                           " AND po_number = ? ORDER BY rowid",
+                (partner_id, po_number))]
+            raise ValueError(
+                "purchase order %s has no shipment %r%s"
+                % (po_number, shipment_id,
+                   "; it has %s" % " and ".join(known) if known
+                   else "; nothing has shipped against it"))
+        return shipment
+
+    def _lines_of(self, shipment: Dict[str, Any], po_number: str,
+                  partner_id: str) -> List[Dict[str, Any]]:
+        """The lines a consignment carried, with its own quantities; the
+        order's, for a despatch advice sent with nothing shipped."""
+        if shipment.get("shipment_id"):
+            return documents.consignment_lines(self.conn, shipment["shipment_id"])
+        return documents.order_lines(self.conn, po_number, partner_id)
 
     # -- buying
 

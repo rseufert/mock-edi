@@ -202,7 +202,7 @@ Both are walked through, test by test, in
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
-| Send out of band | `POST /_mock/send` — replay an invoice, or send one unprompted |
+| Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
 | Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |

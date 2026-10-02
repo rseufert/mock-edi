@@ -72,7 +72,8 @@ def send(h) -> Tuple[int, int]:
         queued = h.mock.pipeline.send_document(
             payload.get("partner", ""), payload.get("kind", ""),
             payload.get("order", "") or payload.get("po", ""),
-            int(payload.get("delayMs", 0)))
+            int(payload.get("delayMs", 0)),
+            str(payload.get("shipment", "") or ""))
     except partners.UnknownPartner as error:
         return h.json(404, {"error": "no partner %s" % error})
     except ValueError as error:
