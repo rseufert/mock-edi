@@ -8,6 +8,10 @@ on:
 
 permissions:
   contents: read
+  # The changelog check needs a merged pull request's labels on a push to
+  # main, where the event carries none of its own (#193). Read-only, and the
+  # narrowest scope that allows it.
+  pull-requests: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -67,9 +71,25 @@ jobs:
           python-version: "3.12"
       - run: python tools/check_docs.py
       - name: The changelog is well formed and has lost nothing
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           BASE="${{ github.event.pull_request.base.sha || github.event.before }}"
           LABELS="${{ join(github.event.pull_request.labels.*.name, ',') }}"
+          # A push to main has no pull request in its event, so it arrives
+          # with no labels and `no changelog` cannot excuse anything (#193).
+          # The merge commit says which pull request it came from; ask that
+          # one. If the subject is not a merge, or the lookup fails, LABELS
+          # stays empty and the check fails exactly as it did before - a
+          # lookup that quietly passed would be worse than the bug.
+          if [ -z "$LABELS" ]; then
+            NUMBER="$(python tools/check_changelog.py \
+                        --merged-pull-request "$(git log -1 --pretty=%s)")"
+            if [ -n "$NUMBER" ]; then
+              LABELS="$(gh pr view "$NUMBER" --json labels \
+                          --jq '[.labels[].name] | join(",")')"
+            fi
+          fi
           python tools/check_changelog.py ${BASE:+--base "$BASE"} --labels "$LABELS"
 
   smoke:
