@@ -10,6 +10,7 @@ first.
 | --- | --- |
 | `docs/ARCHITECTURE.md` | How the pieces fit together and why they are shaped that way: the dictionary at the bottom, two dialects over one model, findings rather than messages, the loop walker, the queue, and what is deliberately absent. |
 | `docs/FILES.md` | This file. |
+| `docs/GITHUB.md` | The GitHub settings all three mocks are kept at and the reason for each: the release path, which is the only irreversible part, the rulesets on `main` and on `v*` tags, merging, labels, and the one thing that is deliberately not uniform - this repository's merge commits against the other two squashing. Identical in `mock-sap` and `mock-bank`, so a diff between copies is drift. |
 | `README.md` | The user-facing documentation: quick start, the endpoint table, the documents, partner behaviours, AS2, validation, how to extend it. |
 | `LICENSE` | MIT, verbatim, so GitHub and `licensee` detect it. The standards-body disclaimer lives in the README instead - appending anything to the licence text breaks that detection. |
 | `pyproject.toml` | Packaging metadata and the **single source of truth for the version**. Declares the `mock-edi` console script and, notably, zero dependencies. |
