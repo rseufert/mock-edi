@@ -271,10 +271,14 @@ class AnEdifactRemittance(MockServerCase):
         self.assertTrue(self.send_remadv(payload)["accepted"])
 
 
-def _utc_day(offset=0):
-    """The mock's date, from the same UTC clock it reads, moved by `offset` days."""
+def _mock_day(offset=0):
+    """The mock's date as it reads it, in the host's zone, moved by `offset` days.
+
+    Local, because BPR16 names no zone and is compared with the date the mock
+    would write on a document of its own (#196).
+    """
     import datetime
-    day = datetime.datetime.now(datetime.timezone.utc).date()
+    day = datetime.datetime.now().date()
     return (day + datetime.timedelta(days=offset)).strftime("%Y%m%d")
 
 
@@ -291,7 +295,7 @@ class SentBeforeTheMoneySettles(MockServerCase):
         return [d["rule"] for d in data["transactionSets"][0]["disagreements"]]
 
     def test_an_advice_that_takes_effect_later_is_found(self):
-        data = self.send(_utc_day(3))
+        data = self.send(_mock_day(3))
         self.assertTrue(data["accepted"])
         self.assertEqual(self.rules(data), ["remitted-before-settlement"])
         found = data["transactionSets"][0]["disagreements"][0]
@@ -300,27 +304,27 @@ class SentBeforeTheMoneySettles(MockServerCase):
         self.assertEqual(ack.find("AK5").get(1), "A")
 
     def test_one_that_has_taken_effect_is_not(self):
-        self.assertEqual(self.rules(self.send(_utc_day(0))), [])
-        self.assertEqual(self.rules(self.send(_utc_day(-1))), [])
+        self.assertEqual(self.rules(self.send(_mock_day(0))), [])
+        self.assertEqual(self.rules(self.send(_mock_day(-1))), [])
 
     def test_the_mocks_clock_decides_so_advance_moves_it(self):
         self.post("/_mock/advance?seconds=%d" % (4 * 86400))
-        self.assertEqual(self.rules(self.send(_utc_day(3))), [])
+        self.assertEqual(self.rules(self.send(_mock_day(3))), [])
 
     def settled_on_arrival(self):
         _s, _h, rows = self.get("/_mock/remittances?partner=" + ACME)
         return [row["settledOnArrival"] for row in rows]
 
     def test_the_listing_agrees_with_the_finding(self):
-        self.send(_utc_day(3))
-        self.send(_utc_day(-1))
+        self.send(_mock_day(3))
+        self.send(_mock_day(-1))
         self.assertEqual(self.settled_on_arrival(), [False, True])
 
     def test_and_keeps_agreeing_after_an_advance(self):
         # From the review of #164: judged by the real clock, the listing said
         # early for an advice the mock's advanced clock had found on time.
         self.post("/_mock/advance?seconds=%d" % (4 * 86400))
-        data = self.send(_utc_day(3))
+        data = self.send(_mock_day(3))
         self.assertEqual(self.rules(data), [])
         self.assertEqual(self.settled_on_arrival(), [True])
 
