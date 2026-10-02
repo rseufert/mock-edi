@@ -537,8 +537,8 @@ reason `/_mock/advance` exists.
 ## Changing an order
 
 A buyer changes an order it has already placed with an **860** (or an
-**ORDCHG**, or an 850 restated with `BEG01 = 04`), and the seller answers with
-an **865**. EDIFACT has no separate change acknowledgment message, so an
+**ORDCHG**, or an 850 or ORDERS restated as a change), and the seller answers
+with an **865**. EDIFACT has no separate change acknowledgment message, so an
 ORDCHG is answered by an **ORDRSP** — the difference most likely to catch out
 someone porting a mapping from X12.
 
@@ -546,7 +546,18 @@ A restated 850 (`BEG01 = 04` or `05`) is read as the whole order: a line it
 leaves out is deleted, and the 865 says so with `DI` — or refuses, if that
 line has already shipped. For `05` (Replace) that is the only reading; for
 `04` it is the mock's choice, because an 850 has no other way to drop a line.
-To change some lines and leave the rest alone, send an 860.
+To change some lines and leave the rest alone, send an 860. `BEG01 = 01`
+cancels the order, as an 860 with `BCH01 = 01` does.
+
+An ORDERS says the same in BGM's message function code, 1225, in EDIFACT's own
+values: `1` cancels, `4` changes and `5` replaces.
+
+A restated order is never a new one. One that cancels, changes or replaces an
+order the mock does not hold is refused beside the acknowledgment, as an 860
+for an unknown order is: the 997 or CONTRL accepts it, `refusals` says *no such
+purchase order*, and nothing is recorded, answered, shipped or billed. A
+cancellation that arrives before its order, or instead of it, would otherwise
+be fulfilled as the order it withdraws.
 
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100

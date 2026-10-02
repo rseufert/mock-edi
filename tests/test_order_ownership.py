@@ -78,14 +78,15 @@ class AStrangersChange(OwnedCase):
         self.assertEqual(summary["refusals"][0]["reason"], documents.NOT_FOUND)
         self.unchanged()
 
-    def test_a_restated_850_from_another_partner_is_its_own_order(self):
+    def test_a_restated_850_from_another_partner_is_refused(self):
         # BEG01 = 04 restates an order. INITECH holds none with this number,
-        # so it is read as INITECH placing one - as it would be for any
-        # number nobody holds - and ACME's is not touched.
+        # so it is refused - as it would be for any number INITECH does not
+        # hold (#198) - and ACME's is not touched.
         summary = self.send(x12_order(PO, sender=INITECH, purpose="04",
                                       lines=(("WIDGET-001", 1, "12.50"),)))
-        self.assertEqual(summary["orders"], [PO])
-        self.assertEqual(self.order_of(INITECH)["lines"][0]["quantity"], "1")
+        self.assertEqual(summary["orders"], [])
+        self.assertEqual(summary["refusals"],
+                         [{"order": PO, "reason": documents.NOT_FOUND}])
         self.unchanged()
 
     def test_no_865_is_sent_for_a_change_that_was_refused(self):
