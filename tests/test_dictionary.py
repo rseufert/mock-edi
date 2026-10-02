@@ -755,6 +755,174 @@ class TheEndpoint(MockServerCase):
         self.assertIn("error", data)
 
 
+SEGMENT_KEYS = {"tag", "name", "requirement", "maxUse", "loop", "purpose",
+                "width", "checkedTo", "elements"}
+ELEMENT_KEYS = {"position", "ref", "name", "type", "requirement", "length",
+                "codes", "components"}
+
+
+class TheEnvelope(MockServerCase):
+    """ISA to IEA and UNA to UNZ, served once for each dialect (#210).
+
+    The dictionary ran from ST to SE and from UNH to UNT. The envelope is
+    declared in `schema.py` and reported on by the validator, element by
+    element, but nothing served it - so a reader walking one raw interchange
+    had no name for its first and last segments.
+    """
+
+    def envelope(self, dialect):
+        status, _h, data = self.get("/_mock/dictionary/%s/envelope" % dialect)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def test_x12_in_the_order_it_is_on_the_wire(self):
+        data = self.envelope("X12")
+        self.assertEqual([(s["tag"], s["level"], s["role"], s["requirement"])
+                          for s in data["segments"]],
+                         [("ISA", "interchange", "header", "M"),
+                          ("GS", "group", "header", "M"),
+                          ("GE", "group", "trailer", "M"),
+                          ("IEA", "interchange", "trailer", "M")])
+
+    def test_edifact_in_the_order_it_is_on_the_wire(self):
+        data = self.envelope("EDIFACT")
+        self.assertEqual([(s["tag"], s["level"], s["role"], s["requirement"])
+                          for s in data["segments"]],
+                         [("UNA", "interchange", "advice", "O"),
+                          ("UNB", "interchange", "header", "M"),
+                          ("UNG", "group", "header", "O"),
+                          ("UNE", "group", "trailer", "O"),
+                          ("UNZ", "interchange", "trailer", "M")])
+
+    def test_each_segment_has_the_fields_any_other_has(self):
+        for dialect in schema.DIALECTS:
+            for segment in self.envelope(dialect)["segments"]:
+                with self.subTest(segment=segment["tag"]):
+                    self.assertEqual(
+                        set(segment), SEGMENT_KEYS | {"level", "role", "fixedLength"})
+                    self.assertTrue(segment["elements"])
+                    for element in segment["elements"]:
+                        self.assertEqual(set(element), ELEMENT_KEYS)
+
+    def test_the_elements_are_the_ones_schema_declares(self):
+        isa = self.envelope("X12")["segments"][0]
+        self.assertEqual(len(isa["elements"]), 16)
+        self.assertEqual((isa["elements"][12]["ref"], isa["elements"][12]["name"]),
+                         ("I12", "Interchange Control Number"))
+        iea = self.envelope("X12")["segments"][3]
+        self.assertEqual([e["ref"] for e in iea["elements"]], ["I16", "I12"])
+        unb = self.envelope("EDIFACT")["segments"][1]
+        self.assertEqual(unb["elements"][0]["components"][0]["ref"], "0001")
+        self.assertEqual([e["ref"] for e in unb["elements"]],
+                         [e.ref for e in schema.UNB.elements])
+
+    def test_the_segments_that_are_not_split_on_delimiters_say_so(self):
+        lengths = {s["tag"]: s["fixedLength"]
+                   for dialect in schema.DIALECTS
+                   for s in self.envelope(dialect)["segments"]}
+        self.assertEqual(lengths, {"ISA": 106, "GS": None, "GE": None,
+                                   "IEA": None, "UNA": 9, "UNB": None,
+                                   "UNG": None, "UNE": None, "UNZ": None})
+        una = self.envelope("EDIFACT")["segments"][0]
+        self.assertEqual([e["length"] for e in una["elements"]], ["1/1"] * 6)
+
+    def test_it_can_be_found_without_knowing_the_path(self):
+        _s, _h, everything = self.get("/_mock/dictionary")
+        self.assertEqual(
+            {e["dialect"]: (e["path"], e["segments"]) for e in everything["envelopes"]},
+            {"X12": ("/_mock/dictionary/X12/envelope", ["ISA", "GS", "GE", "IEA"]),
+             "EDIFACT": ("/_mock/dictionary/EDIFACT/envelope",
+                         ["UNA", "UNB", "UNG", "UNE", "UNZ"])})
+        for item in everything["transactionSets"]:
+            self.assertEqual(item["envelope"],
+                             "/_mock/dictionary/%s/envelope" % item["dialect"])
+        _s, _h, dialect = self.get("/_mock/dictionary/X12")
+        self.assertEqual(dialect["envelope"], "/_mock/dictionary/X12/envelope")
+        _s, _h, one = self.get("/_mock/dictionary/X12/850")
+        self.assertEqual(one["envelope"], "/_mock/dictionary/X12/envelope")
+        status, _h, data = self.get(one["envelope"])
+        self.assertEqual((status, data["code"]), (200, "envelope"))
+
+    def test_a_version_is_taken_as_it_is_for_a_set(self):
+        _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=005010")
+        self.assertEqual(data["version"], "005010")
+        _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=003040")
+        self.assertIn("error", data)
+
+    def test_ung_and_une_are_what_the_syntax_says(self):
+        # ISO 9735 version 3: eight positions and two.
+        ung, une = self.envelope("EDIFACT")["segments"][2:4]
+        self.assertEqual([e["ref"] for e in ung["elements"]],
+                         ["0038", "S006", "S007", "S004", "0048", "0051",
+                          "S008", "0058"])
+        self.assertEqual([(e["ref"], e["requirement"]) for e in une["elements"]],
+                         [("0060", "M"), ("0048", "M")])
+
+
+class WhatWasServedBefore(MockServerCase):
+    """New keys and new entries only: nothing already served changes shape (#210)."""
+
+    def test_a_set_has_the_keys_it_had_and_one_more(self):
+        for dialect, code in sorted(schema.SETS):
+            with self.subTest(set=code):
+                _s, _h, data = self.get("/_mock/dictionary/%s/%s" % (dialect, code))
+                self.assertEqual(set(data), {"dialect", "code", "name", "purpose",
+                                             "group", "version", "profile",
+                                             "segments", "envelope"})
+                for segment in data["segments"]:
+                    self.assertEqual(set(segment), SEGMENT_KEYS)
+                    for element in segment["elements"]:
+                        self.assertEqual(set(element), ELEMENT_KEYS)
+
+    def test_a_set_does_not_grow_the_envelopes_segments(self):
+        _s, _h, data = self.get("/_mock/dictionary/X12/850")
+        tags = [s["tag"] for s in data["segments"]]
+        self.assertEqual((tags[0], tags[-1]), ("ST", "SE"))
+        self.assertFalse({"ISA", "GS", "GE", "IEA"} & set(tags))
+
+    def test_the_listing_has_the_keys_it_had_and_one_more(self):
+        _s, _h, data = self.get("/_mock/dictionary")
+        self.assertEqual(set(data), {"dialects", "versions", "transactionSets",
+                                     "envelopes"})
+        for item in data["transactionSets"]:
+            self.assertEqual(set(item), {"dialect", "code", "name", "kind",
+                                         "group", "version", "purpose",
+                                         "segments", "envelope"})
+
+
+class EverySegmentSaysWhatItIsFor(MockServerCase):
+    """No served segment has an empty purpose (#210).
+
+    N3 and N4 had a name and nothing else, and so did eighteen others: a
+    reader shown `TD5` and "Carrier Details - Routing" has been told the
+    same thing twice.
+    """
+
+    def test_in_every_set(self):
+        empty = []
+        for dialect, code in sorted(schema.SETS):
+            _s, _h, data = self.get("/_mock/dictionary/%s/%s" % (dialect, code))
+            self.assertTrue(data["purpose"], code)
+            empty += ["%s %s" % (code, s["tag"]) for s in data["segments"]
+                      if not (s["purpose"] or "").strip()]
+        self.assertEqual(empty, [])
+
+    def test_in_both_envelopes(self):
+        for dialect in schema.DIALECTS:
+            _s, _h, data = self.get("/_mock/dictionary/%s/envelope" % dialect)
+            self.assertTrue(data["purpose"])
+            self.assertEqual([s["tag"] for s in data["segments"]
+                              if not (s["purpose"] or "").strip()], [])
+
+    def test_a_purpose_is_not_the_name_again(self):
+        for name in dir(schema):
+            segment = getattr(schema, name)
+            if isinstance(segment, schema.Segment) and segment.purpose:
+                with self.subTest(segment=segment.tag):
+                    self.assertNotEqual(segment.purpose.strip().lower(),
+                                        segment.name.strip().lower())
+
+
 class ValidateOnly(MockServerCase):
     def test_a_good_document_is_clean_and_changes_nothing(self):
         _s, _h, data = self.post("/_mock/validate", x12_order("PO-CHECK"))
