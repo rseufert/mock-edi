@@ -1087,6 +1087,61 @@ def _edifact_ordrsp_change(us: Party, partner: Dict, order: Dict,
 # wiring. They are pure, and `read_order` and `read_change` are the test.
 # ---------------------------------------------------------------------------
 
+# Where each field of a purchase request ends up in the document it becomes:
+# (segment, element position) to the request's own name for it. The line's
+# fields are those of the PO1, POC or LIN loop the segment sits in.
+_REQUEST_FIELDS = {
+    ("BEG", 3): "po_number", ("BCH", 3): "po_number", ("BGM", 2): "po_number",
+    ("CUR", 2): "currency", ("CUX", 1): "currency",
+    ("DTM", 2): "requested_on",
+}
+_LINE_FIELDS = {
+    ("PO1", 1): "line", ("PO1", 2): "quantity", ("PO1", 3): "uom",
+    ("PO1", 4): "price", ("PO1", 7): "sku", ("PO1", 9): "upc",
+    ("POC", 1): "line", ("POC", 3): "quantity", ("POC", 5): "uom",
+    ("POC", 6): "price", ("POC", 9): "sku", ("POC", 11): "upc",
+    ("PID", 5): "description",
+    ("LIN", 1): "line", ("LIN", 3): "sku", ("PIA", 2): "upc",
+    ("IMD", 4): "description", ("QTY", 1): "quantity", ("PRI", 1): "price",
+}
+_LINE_TRIGGERS = ("PO1", "POC", "LIN")
+
+
+def unsendable(message: Message, report) -> List[str]:
+    """What is wrong with a document the mock was about to send, in the
+    words of the request it was built from.
+
+    `report` is the mock's own verdict on `message` - the same one
+    `/_mock/validate` would give once it was on the wire (#206). Each finding
+    is traced back to the field that produced it, so the caller is told
+    `currency` and not only `CUR02`; one that comes from somewhere else, the
+    mock's own address say, is reported as the document's.
+    """
+    problems: List[str] = []
+    for finding in report.segments:
+        line = ""
+        for item in message.segments[:finding.position]:
+            if item.tag in _LINE_TRIGGERS:
+                line = item.get(1)
+        if not finding.elements:
+            problems.append("the %s it would send: %s" % (message.code, finding.note))
+        for element in finding.elements:
+            key = (finding.tag, element.position)
+            field = _LINE_FIELDS.get(key) if line else None
+            if field == "quantity" and element.component == 3:
+                field = "uom"       # QTY's composite carries both
+            if field:
+                where = "line %s: %s" % (line, field)
+            else:
+                where = _REQUEST_FIELDS.get(key) or (
+                    "the %s it would send" % message.code)
+            problems.append("%s %r: %s" % (where, element.value, element.note))
+    for _code, note in report.set_errors:
+        if not report.segments:
+            problems.append("the %s it would send: %s" % (message.code, note))
+    return problems
+
+
 def write_order(dialect: str, us: Party, partner: Dict, order: Dict,
                 lines: Sequence[Dict], when: datetime.datetime) -> List[Seg]:
     """An 850 or an ORDERS: what the mock is ordering, and from whom."""
