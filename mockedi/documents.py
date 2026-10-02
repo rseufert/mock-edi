@@ -418,7 +418,9 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             # At least one, but never more than was asked for: rounding a
             # fraction of a single unit down to zero would report a stock
             # problem, and rounding it up would ship more than the order.
-            confirmed = max(Decimal("1"), min(confirmed, line.quantity))
+            # The ceiling goes last, or the floor wins against an order for
+            # less than one unit and half a unit is billed as a whole (#206).
+            confirmed = min(max(Decimal("1"), confirmed), line.quantity)
         elif stock < line.quantity:
             confirmed = stock
 
