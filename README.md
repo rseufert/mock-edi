@@ -310,6 +310,12 @@ line's extended amount, tax, an order's or invoice's total, and the integer
 same distance from zero. A line is rounded before it is added, so a total is
 the sum of what each line says. 12.50 at `--tax-rate 0.05` is `TXI*ST*0.63`.
 
+A **unit price is not an amount** and is not rounded. It is stored, written
+and compared exactly as it was given, with at least two decimals: `12.5` is
+`12.50` and `0.125` stays `0.125`, in `PO104`, `POC06`, `IT104` and `PRI`.
+A thousand at 0.125 is an order for 125.00, and a supplier confirming at
+0.124 is a `price-differs` between 0.125 and 0.124.
+
 ## Timestamps
 
 Every timestamp the control plane returns has one shape: UTC, second
