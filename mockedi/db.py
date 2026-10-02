@@ -104,7 +104,9 @@ CREATE TABLE IF NOT EXISTS transaction_set (
     ack_code       TEXT NOT NULL DEFAULT '',
     ack_note       TEXT NOT NULL DEFAULT '',
     ack_at         TEXT NOT NULL DEFAULT '',
-    at             TEXT NOT NULL
+    ack_seq        INTEGER NOT NULL DEFAULT 0,
+    at             TEXT NOT NULL,
+    seq            INTEGER NOT NULL DEFAULT 0
 );
 
 -- An order is its partner's number. PO numbers are unique per buyer, not to
@@ -127,6 +129,7 @@ CREATE TABLE IF NOT EXISTS purchase_order (
     ship_to_country TEXT NOT NULL DEFAULT 'US',
     direction    TEXT NOT NULL DEFAULT 'received',
     at           TEXT NOT NULL,
+    seq          INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (partner, po_number)
 );
 
@@ -201,7 +204,8 @@ CREATE TABLE IF NOT EXISTS shipment (
     bol          TEXT NOT NULL DEFAULT '',
     cartons      INTEGER NOT NULL DEFAULT 0,
     weight       TEXT NOT NULL DEFAULT '0',
-    at           TEXT NOT NULL
+    at           TEXT NOT NULL,
+    seq          INTEGER NOT NULL DEFAULT 0
 );
 
 -- What each consignment carried, line by line. order_line.shipped is the
@@ -226,7 +230,8 @@ CREATE TABLE IF NOT EXISTS invoice (
     terms_days     INTEGER NOT NULL DEFAULT 30,
     discount_pct   TEXT NOT NULL DEFAULT '0',
     discount_days  INTEGER NOT NULL DEFAULT 0,
-    at             TEXT NOT NULL
+    at             TEXT NOT NULL,
+    seq            INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS outbound (
@@ -257,7 +262,10 @@ CREATE TABLE IF NOT EXISTS outbound (
     attempts     INTEGER NOT NULL DEFAULT 0,
     last_error   TEXT NOT NULL DEFAULT '',
     last_attempt_at TEXT NOT NULL DEFAULT '',
-    at           TEXT NOT NULL
+    at           TEXT NOT NULL,
+    -- When the document was queued, in the one sequence the timeline is
+    -- ordered by (#195). It is carried on to the transaction set at release.
+    seq          INTEGER NOT NULL DEFAULT 0
 );
 
 -- Work the seller has decided to do, but has not done yet. A despatch
@@ -273,7 +281,8 @@ CREATE TABLE IF NOT EXISTS scheduled (
     due_at       TEXT NOT NULL,
     done_at      TEXT NOT NULL DEFAULT '',
     note         TEXT NOT NULL DEFAULT '',
-    at           TEXT NOT NULL
+    at           TEXT NOT NULL,
+    seq          INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE TABLE IF NOT EXISTS mdn (
@@ -400,7 +409,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 11
+SCHEMA_VERSION = 12
 
 
 class DatabaseError(Exception):
@@ -610,6 +619,26 @@ def next_number(conn: sqlite3.Connection, scope: str, partner: str = "*") -> int
     return value
 
 
+def next_seq(conn: sqlite3.Connection) -> int:
+    """The next step in the one sequence the timeline is ordered by (#195).
+
+    Timestamps are second-precision on purpose (#21), so one second holds
+    most of an order and sorting by time alone has nothing to go on inside
+    it. Ranking by kind of event cannot stand in for this: a second holds
+    several steps of several kinds, and the rank said the mock invoiced
+    before it acknowledged.
+
+    So the order is recorded as it happens, in the `seq` column of every
+    table `timeline.py` reads. One counter across all of them, because the
+    question is what happened first, not what happened first of its kind.
+
+    It is a control number like the rest, and allocated the same way: on the
+    connection, so it rolls back with the unit of work, and cleared by
+    `/_mock/reset` with the others.
+    """
+    return next_number(conn, "event")
+
+
 # One clock, and one way of writing it down.
 #
 # Every timestamp the control plane returns used to be a naive local-time
@@ -654,6 +683,21 @@ def now() -> str:
 def money(value) -> str:
     """Two decimal places, always - the shape every monetary column is stored in."""
     return str(Decimal(str(value)).quantize(Decimal("0.01")))
+
+
+# The columns that order the timeline (#195) and mean nothing outside it.
+# The control plane hands back whole rows from these tables, so they are
+# dropped on the way out rather than spelled around: a counter that is the
+# mock's own bookkeeping is not something a test should be able to read, and
+# `/_mock/orders` and `/_mock/documents` keep the shape they had.
+INTERNAL = ("seq", "ack_seq")
+
+
+def public(row):
+    """A row, or a list of rows, without the mock's own bookkeeping."""
+    if isinstance(row, list):
+        return [public(each) for each in row]
+    return {name: value for name, value in row.items() if name not in INTERNAL}
 
 
 def rows(conn: sqlite3.Connection, sql: str, params: Sequence = ()) -> List[Dict[str, Any]]:
@@ -860,28 +904,30 @@ def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
             "INSERT INTO purchase_order (po_number, partner, seller_order,"
             " ordered_on, requested_on, currency, status, total, ship_to_name,"
             " ship_to_id, ship_to_street, ship_to_city, ship_to_region,"
-            " ship_to_postal, ship_to_country, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " ship_to_postal, ship_to_country, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (po_number, partner, seller_order, ordered_on.isoformat(),
              (ordered_on + datetime.timedelta(days=10)).isoformat(),
              "EUR" if partner == "EURODIS" else "USD", "invoiced", money(total),
              row["name"], partner, row["street"], row["city"], row["region"],
-             row["postal"], row["country"], now()))
+             row["postal"], row["country"], now(), next_seq(conn)))
 
         conn.execute(
             "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on,"
-            " carrier, scac, tracking, bol, cartons, weight, at)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+            " carrier, scac, tracking, bol, cartons, weight, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
             (shipment_id, po_number, partner, shipped_on.isoformat(),
              "United Parcel Service", "UPSN",
              "1Z%09d" % rng.randrange(10 ** 8, 10 ** 9), str(next_number(conn, "bol")),
              max(1, sum(q for _s, q in lines) // 24),
-             str(sum(q for _s, q in lines) * 2), now()))
+             str(sum(q for _s, q in lines) * 2), now(), next_seq(conn)))
 
         tax = (total * Decimal("0.00")).quantize(Decimal("0.01"))
         conn.execute(
             "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
             " invoiced_on, currency, subtotal, tax, total, terms_days,"
-            " discount_pct, discount_days, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " discount_pct, discount_days, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (invoice_number, po_number, partner, shipment_id, invoiced_on.isoformat(),
              "EUR" if partner == "EURODIS" else "USD", money(total), money(tax),
-             money(total + tax), 30, "2", 10, now()))
+             money(total + tax), 30, "2", 10, now(), next_seq(conn)))

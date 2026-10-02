@@ -222,10 +222,15 @@ def _record(conn: sqlite3.Connection, partner: str, dialect: str,
         return
     result.document_id = int(row["id"])
     result.reference = row["reference"]
+    # The acknowledgment's own place in the sequence, not the document's
+    # (#195): what happened here is the partner's receipt arriving, which is
+    # later than the document it answers and may be later than things the
+    # mock sent in between.
     conn.execute(
         "UPDATE transaction_set SET ack_status = ?, ack_code = ?, ack_note = ?,"
-        " ack_at = ? WHERE id = ?",
-        (result.status, result.verdict, result.note, db.now(), row["id"]))
+        " ack_at = ?, ack_seq = ? WHERE id = ?",
+        (result.status, result.verdict, result.note, db.now(),
+         db.next_seq(conn), row["id"]))
     conn.commit()
 
 

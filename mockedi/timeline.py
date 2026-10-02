@@ -21,10 +21,19 @@ from typing import Any, Dict, List, Optional
 
 from . import db
 
-# Within one second, the order things must have happened in. Timestamps are
-# second-precision on purpose (#21), so a great many events share one, and a
-# timeline whose order wobbled between calls would be worse than four
-# endpoints.
+# Within one second, the order things must have happened in - for rows
+# written before the sequence existed. Timestamps are second-precision on
+# purpose (#21), so a great many events share one, and a timeline whose
+# order wobbled between calls would be worse than four endpoints.
+#
+# Ranking by kind of event was all this had until #195, and a rank cannot
+# say what happened inside one second, because one second holds several
+# steps of several kinds: it put every document the mock sent after the
+# packing and invoicing it did, so the timeline said the mock invoiced
+# before it acknowledged. `seq` says what actually happened, and these
+# remain as the tie-break below it, which is what a database written by an
+# older mock needs - every row there has `seq` 0, so it sorts exactly as it
+# did rather than arbitrarily.
 RANK = {"received": 0, "ordered": 1, "promised": 2, "packed": 3,
         "invoiced": 4, "sent": 5, "acknowledged": 6}
 # An order the mock placed runs the other way: the order is recorded, the 850
@@ -53,8 +62,11 @@ def timeline(conn, po_number: str, partner_id: str,
     events.extend(_packed(conn, po_number, partner_id))
     events.extend(_invoiced(conn, po_number, partner_id))
     rank = PLACED_RANK if order["direction"] == "placed" else RANK
-    events.sort(key=lambda event: (event["at"], rank[event["event"]],
-                                   event.pop("_id")))
+    # `at` first, so the order and the timestamps a reader can see can never
+    # disagree; then the sequence, which is the order things happened in;
+    # then the old rank and the row's own id, for rows that have no sequence.
+    events.sort(key=lambda event: (event["at"], event.pop("_seq"),
+                                   rank[event["event"]], event.pop("_id")))
     return {"order": po_number, "partner": order["partner"],
             "direction": order["direction"], "status": order["status"],
             "events": events}
@@ -99,6 +111,7 @@ def _documents(conn, po_number: str, partner_id: str,
         findings = json.loads(row["findings"] or "[]")
         event = {
             "_id": int(row["id"]),
+            "_seq": int(row["seq"]),
             "at": row["at"],
             "event": "received" if row["direction"] == "in" else "sent",
             "direction": row["direction"],
@@ -134,6 +147,7 @@ def _documents(conn, po_number: str, partner_id: str,
         if row["ack_at"]:
             out.append({
                 "_id": int(row["id"]),
+                "_seq": int(row["ack_seq"]),
                 "at": row["ack_at"],
                 "event": "acknowledged",
                 "direction": "in",
@@ -176,6 +190,7 @@ def _ordered(conn, order) -> Dict[str, Any]:
                           " AND po_number = ?", (order["partner"], order["po_number"]))
     return {
         "_id": 0,
+        "_seq": int(order["seq"]),
         "at": order["at"],
         "event": "ordered",
         "direction": "",
@@ -202,6 +217,7 @@ def _promised(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
                              " AND po_number = ? ORDER BY id", (partner_id, po_number)):
         out.append({
             "_id": int(row["id"]),
+            "_seq": int(row["seq"]),
             "at": row["at"],
             "event": "promised",
             "direction": "",
@@ -225,6 +241,7 @@ def _packed(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
                         (row["shipment_id"],))
         out.append({
             "_id": index,
+            "_seq": int(row["seq"]),
             "at": row["at"],
             "event": "packed",
             "direction": "",
@@ -248,6 +265,7 @@ def _invoiced(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
                   " ORDER BY rowid", (partner_id, po_number))):
         out.append({
             "_id": index,
+            "_seq": int(row["seq"]),
             "at": row["at"],
             "event": "invoiced",
             "direction": "",
