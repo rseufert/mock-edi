@@ -19,8 +19,9 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import (ACME, EURODIS, INITECH, MockServerCase, acknowledge,
-                     edifact_order, x12_order)
+from support import (ACME, EURODIS, INITECH, MockServerCase, STEPS,
+                     acknowledge, edifact_order, spans_more_than_a_second,
+                     stepping, x12_order)
 
 EDIFACT = {"Content-Type": "application/edifact"}
 
@@ -262,6 +263,141 @@ class TheReleasedSecond(MockServerCase):
                     if event["event"] in ("packed", "invoiced")
                     or event.get("code") in ("856", "810")}
         self.assertEqual(len(released), 1, "the four should share one second")
+
+
+class WhenTheSecondTicksWhileAnOrderIsHandled(MockServerCase):
+    """#238: the order has to hold whichever second each step falls in.
+
+    Until this was fixed a sent document took its sequence when it was
+    queued and its `at` when the release loop reached it, a few calls later.
+    Any second boundary in between and `at` - which sorts first - put the
+    document after work that was sequenced before it. Eleven of these twelve
+    steps came back wrong, including "packed and invoiced before the 997 was
+    sent", which is the sentence #195 was filed to remove.
+    """
+
+    def timeline(self, po_number):
+        status, _headers, data = self.get("/_mock/orders/%s/timeline" % po_number)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def test_a_plain_order_reads_in_order_at_every_step(self):
+        crossed = 0
+        for step in STEPS:
+            with self.subTest(step=step):
+                self.post("/_mock/reset")
+                with stepping(step):
+                    self.send(x12_order("PO-STEP"))
+                    found = self.timeline("PO-STEP")
+                self.assertEqual(labels(found), PLAIN)
+                crossed += spans_more_than_a_second(found)
+        # The premise: the clock really is crossing seconds mid-order. Without
+        # this the test could pass by never reproducing the bug at all.
+        self.assertGreater(crossed, len(STEPS) // 2,
+                           "the stepped clock is not crossing seconds")
+
+    def test_the_times_never_run_backwards(self):
+        for step in STEPS:
+            with self.subTest(step=step):
+                self.post("/_mock/reset")
+                with stepping(step):
+                    self.send(x12_order("PO-STEP-AT"))
+                    found = self.timeline("PO-STEP-AT")
+                stamps = [event["at"] for event in found["events"]]
+                self.assertEqual(stamps, sorted(stamps), stamps)
+
+
+class WhenTheSecondTicksDuringARelease(MockServerCase):
+    """The same, for work held back and then let go by `advance`.
+
+    A release writes every document that is due in one go, so this is where
+    the gap between queueing and releasing is widest.
+    """
+
+    config_kwargs = {"despatch_delay_ms": 3600 * 1000,
+                     "invoice_delay_ms": 3600 * 1000}
+
+    def test_the_released_documents_keep_their_place(self):
+        crossed = 0
+        for step in STEPS:
+            with self.subTest(step=step):
+                self.post("/_mock/reset")
+                with stepping(step):
+                    self.send(x12_order("PO-STEP-REL"))
+                    self.post("/_mock/advance?all")
+                    status, _headers, found = self.get(
+                        "/_mock/orders/PO-STEP-REL/timeline")
+                self.assertEqual(status, 200, found)
+                self.assertEqual(labels(found), PLAIN)
+                stamps = [event["at"] for event in found["events"]]
+                self.assertEqual(stamps, sorted(stamps), stamps)
+                crossed += spans_more_than_a_second(found)
+        self.assertGreater(crossed, len(STEPS) // 2,
+                           "the stepped clock is not crossing seconds")
+
+
+class WhenADocumentIsHeldBack(MockServerCase):
+    """A held document is stamped when it went out, not when it was queued.
+
+    Being late is the whole point of the `late` behaviour, of a despatch or
+    invoice delay, and of `/_mock/send` with `delayMs`. #238's first fix
+    stamped every sent document at the moment it was queued, which took the
+    hour back out of the timeline and out of `/_mock/documents` - the two
+    places a tester goes looking for it.
+    """
+
+    def timeline(self, po_number):
+        status, _headers, data = self.get("/_mock/orders/%s/timeline" % po_number)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def sent(self, found):
+        return [event for event in found["events"] if event["event"] == "sent"]
+
+    def test_an_hour_late_shows_as_an_hour_late(self):
+        self.behaviour(ACME, "late")
+        self.send(x12_order("PO-HELD"))
+        self.post("/_mock/advance?seconds=3700")
+        found = self.timeline("PO-HELD")
+        work = [event["at"] for event in found["events"]
+                if event["event"] in ("received", "ordered", "packed", "invoiced")]
+        for event in self.sent(found):
+            self.assertGreater(event["at"], max(work),
+                               "the %s is stamped no later than the work"
+                               % event["code"])
+        # And the lateness is the hour it was configured to be, not a stamp
+        # a second after the order.
+        self.assertEqual(labels(found),
+                         ["received 850", "ordered", "promised despatch",
+                          "promised invoice", "packed", "invoiced",
+                          "sent 997", "sent 855", "sent 856", "sent 810"])
+
+    def test_nothing_is_stamped_before_it_was_due(self):
+        self.behaviour(ACME, "late")
+        self.send(x12_order("PO-HELD-DUE"))
+        self.post("/_mock/advance?seconds=3700")
+        _status, _headers, outbox = self.get("/_mock/outbox")
+        due = {row["code"]: row["due_at"] for row in outbox}
+        for event in self.sent(self.timeline("PO-HELD-DUE")):
+            self.assertGreaterEqual(event["at"], due[event["code"]],
+                                    "the %s" % event["code"])
+
+    def test_a_document_sent_on_demand_with_a_delay_is_too(self):
+        self.send(x12_order("PO-HELD-SEND"))
+        status, _headers, data = self.post(
+            "/_mock/send", {"partner": ACME, "kind": "invoice",
+                            "po": "PO-HELD-SEND", "delayMs": 3600 * 1000})
+        self.assertEqual(status, 201, data)
+        self.post("/_mock/advance?seconds=3700")
+        found = self.timeline("PO-HELD-SEND")
+        invoices = [event for event in self.sent(found)
+                    if event["code"] == "810"]
+        self.assertEqual(len(invoices), 2, labels(found))
+        # The replay is stamped an hour after the one the order produced,
+        # and reads after it.
+        self.assertGreater(invoices[1]["at"], invoices[0]["at"])
+        stamps = [event["at"] for event in found["events"]]
+        self.assertEqual(stamps, sorted(stamps), stamps)
 
 
 # Every GET the index advertises, so that a route added later cannot put the

@@ -31,6 +31,8 @@ sys.path.insert(0, HERE)
 
 from mockedi.testing import Document, Mock
 
+from support import STEPS, spans_more_than_a_second, stepping
+
 # Every test uses purchase order numbers of its own. Orders are keyed by number
 # alone today and by partner and number shortly; distinct numbers mean nothing
 # here has to change when they are.
@@ -444,6 +446,76 @@ class TheBuyersTimelineOfTheConversation(BothDialects):
                 pair.exchange()
                 self.assertEqual(self.timeline(pair, po_number)[:2],
                                  ["ordered", "sent " + self.ORDER[dialect]])
+
+
+# What the seller's side of a clean exchange did, in the order it did it.
+SELLER = ["received {order}", "ordered", "sent {ack}", "sent {confirm}",
+          "promised", "promised", "packed", "sent {despatch}", "invoiced",
+          "sent {invoice}", "acknowledged {confirm}", "acknowledged {despatch}",
+          "acknowledged {invoice}"]
+CODES = {"X12": {"order": "850", "ack": "997", "confirm": "855",
+                 "despatch": "856", "invoice": "810"},
+         "EDIFACT": {"order": "ORDERS", "ack": "CONTRL", "confirm": "ORDRSP",
+                     "despatch": "DESADV", "invoice": "INVOIC"}}
+
+
+class TheTimelineWhenTheSecondTicks(BothDialects):
+    """#238, against a real supplier and a shared stepped clock.
+
+    The seller's side is the evidence: it sends five documents, so it is
+    where a sequence taken at queueing and a moment taken at release can
+    disagree. The buyer's assertions below pass without the fix - its side
+    sends one document, so nothing can reorder around it - and are here as a
+    pin, not as proof.
+    """
+
+    def timeline(self, mock, po_number, partner):
+        found = mock.expect("GET", "/_mock/orders/%s/timeline?partner=%s"
+                            % (po_number, partner))
+        return found, [("%s %s" % (event["event"],
+                                  event.get("code", ""))).strip()
+                       for event in found["events"]]
+
+    def test_the_sellers_side_holds_its_order(self):
+        crossed = 0
+        for dialect in self.dialects:
+            for step in STEPS[::3]:
+                with self.subTest(dialect=dialect, step=step):
+                    pair = self.pair(dialect)
+                    po_number = "PO-STEP-%s-%d" % (dialect[:3], step)
+                    with stepping(step):
+                        pair.place(po_number)
+                        pair.exchange()
+                        found, events = self.timeline(pair.seller, po_number,
+                                                      "BUYCO")
+                    self.assertEqual(
+                        events, [line.format(**CODES[dialect])
+                                 for line in SELLER])
+                    stamps = [event["at"] for event in found["events"]]
+                    self.assertEqual(stamps, sorted(stamps), stamps)
+                    crossed += spans_more_than_a_second(found)
+        self.assertGreater(crossed, 2,
+                           "the stepped clock is not crossing seconds")
+
+    def test_and_the_buyers_side_does_too(self):
+        for dialect in self.dialects:
+            for step in STEPS[::4]:
+                with self.subTest(dialect=dialect, step=step):
+                    pair = self.pair(dialect)
+                    po_number = "PO-STEP-B-%s-%d" % (dialect[:3], step)
+                    codes = CODES[dialect]
+                    with stepping(step):
+                        pair.place(po_number)
+                        pair.exchange()
+                        found, events = self.timeline(pair.buyer, po_number,
+                                                      "SELLCO")
+                    self.assertEqual(events[:2],
+                                     ["ordered", "sent " + codes["order"]])
+                    self.assertLess(
+                        events.index("acknowledged " + codes["order"]),
+                        events.index("received " + codes["confirm"]), events)
+                    stamps = [event["at"] for event in found["events"]]
+                    self.assertEqual(stamps, sorted(stamps), stamps)
 
 
 class ADisagreementIsNotASyntaxError(unittest.TestCase):
