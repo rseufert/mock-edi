@@ -590,7 +590,9 @@ ships as a **second consignment**: its own 856 carrying the difference, and its
 own 810 naming it. Every consignment is billed by one invoice, so an order that
 shipped twice is invoiced twice — which is the buyer-side matching worth
 testing. A change that revives a cancelled order is packed and billed the same
-way.
+way. The second consignment is advised before it is billed: when the first
+invoice comes due before the new despatch, it bills what has shipped, and the
+second consignment gets an invoice of its own after its 856.
 
 **Give yourself a window.** A change is only meaningful before the goods
 leave, and with every delay at zero the order is invoiced before the POST
