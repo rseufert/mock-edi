@@ -1,7 +1,6 @@
 """What has crossed the wire: transaction sets, whole interchanges, and receipts.
 
-Each is registered for `ANY` method with the `rest` of the path read as
-the control plane's old `if` chain read it (#182).
+Each listing is one route and each row another, `/_mock/documents/<id>`.
 """
 from __future__ import annotations
 
@@ -9,11 +8,12 @@ import json
 from typing import Dict, List, Tuple
 
 from .. import db
-from . import ANY, first, flag, limit, route
+from . import first, flag, limit, route
 
 
-@route(ANY, "/_mock/documents", rest=True)
-def documents(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/documents")
+@route("GET", "/_mock/documents/<id>")
+def documents(h, *rest: str) -> Tuple[int, int]:
     conn = h.mock.conn
     if rest:
         row = db.one(conn, "SELECT * FROM transaction_set WHERE id = ?",
@@ -31,8 +31,9 @@ def documents(h, rest: List[str]) -> Tuple[int, int]:
                            _document_params(h.query))])
 
 
-@route(ANY, "/_mock/interchanges", rest=True)
-def interchanges(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/interchanges")
+@route("GET", "/_mock/interchanges/<id>")
+def interchanges(h, *rest: str) -> Tuple[int, int]:
     conn = h.mock.conn
     if rest:
         row = db.one(conn, "SELECT * FROM interchange WHERE id = ?", (rest[0],))
@@ -56,8 +57,8 @@ def interchanges(h, rest: List[str]) -> Tuple[int, int]:
               " ORDER BY id DESC LIMIT ?", (limit(h.query),)))
 
 
-@route(ANY, "/_mock/mdns", rest=True)
-def mdns(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/mdns")
+def mdns(h) -> Tuple[int, int]:
     return h.json(200, db.rows(
         h.mock.conn, "SELECT id, partner, direction, original_id, message_id,"
                      " disposition, mic, mode, url, status, at FROM mdn"

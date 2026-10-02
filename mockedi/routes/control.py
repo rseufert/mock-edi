@@ -1,23 +1,19 @@
 """The control plane's own endpoints: health, state, behaviours, requests, reset.
 
-Each is registered for `ANY` method with the `rest` of the path ignored,
-because the control plane's old `if` chain answered them that way (#182); #188 decides whether they
-should be stricter. `reset` alone refuses a method, and says so as it did.
-
-A `/_mock` path that no module has taken is answered by the catch-all at the
-foot of this module, with the 404 the control plane has always given.
+A `/_mock` path that nothing is registered for is a 404 that lists what
+there is; `routes.not_found` builds it from the table.
 """
 from __future__ import annotations
 
 import sqlite3
-from typing import List, Tuple
+from typing import Tuple
 
 from .. import db, partners
-from . import ANY, CONTROL, limit, route
+from . import limit, route
 
 
-@route(ANY, "/_mock/health", rest=True)
-def health(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/health")
+def health(h) -> Tuple[int, int]:
     conn = h.mock.conn
     return h.json(200, {
         "status": "ok", "as2Id": h.config.as2_id,
@@ -27,8 +23,8 @@ def health(h, rest: List[str]) -> Tuple[int, int]:
     })
 
 
-@route(ANY, "/_mock/state", rest=True)
-def state(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/state")
+def state(h) -> Tuple[int, int]:
     conn = h.mock.conn
     return h.json(200, {
         "as2Id": h.config.as2_id,
@@ -56,22 +52,20 @@ def state(h, rest: List[str]) -> Tuple[int, int]:
     })
 
 
-@route(ANY, "/_mock/behaviours", rest=True)
-def behaviours(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/behaviours")
+def behaviours(h) -> Tuple[int, int]:
     return h.json(200, partners.BEHAVIOURS)
 
 
-@route(ANY, "/_mock/requests", rest=True)
-def requests(h, rest: List[str]) -> Tuple[int, int]:
+@route("GET", "/_mock/requests")
+def requests(h) -> Tuple[int, int]:
     return h.json(200, db.rows(
         h.mock.conn, "SELECT * FROM request_log ORDER BY id DESC LIMIT ?",
         (limit(h.query),)))
 
 
-@route(ANY, "/_mock/reset", rest=True)
-def reset(h, rest: List[str]) -> Tuple[int, int]:
-    if h.method != "POST":
-        return h.text(405, "POST to reset")
+@route("POST", "/_mock/reset", refuse="POST to reset")
+def reset(h) -> Tuple[int, int]:
     h.mock.reset()
     return h.json(200, {"reset": True})
 
@@ -79,20 +73,3 @@ def reset(h, rest: List[str]) -> Tuple[int, int]:
 def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:
     sql = "SELECT COUNT(*) AS n FROM %s%s" % (table, " WHERE " + where if where else "")
     return int(conn.execute(sql).fetchone()["n"])
-
-
-@route(ANY, CONTROL, rest=True)
-def unknown(h, rest: List[str]) -> Tuple[int, int]:
-    """Every `/_mock` path no other route has taken: a 404 that lists them.
-
-    The list is the one the control plane has always answered with, as
-    written. Deriving it from the table would add the endpoints it leaves
-    out, which is a change for #188 to make.
-    """
-    return h.json(404, {
-        "error": "no control endpoint %r" % (rest[0] if rest else ""),
-        "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
-                      "catalog", "orders", "documents", "interchanges",
-                      "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
-                      "unacknowledged", "remittances", "requests", "validate",
-                      "reset"]})

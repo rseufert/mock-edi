@@ -375,12 +375,16 @@ class Handler(BaseHTTPRequestHandler):
             self._log_before_answering(status, written)
 
     def _route(self, method: str, path: str) -> Tuple[int, int]:
-        found, arguments = routes.find(method, path)
+        found, arguments, allowed = routes.find(method, path)
         if found is None:
-            return self.json(404, {"error": "no route for %s %s" % (method, path),
-                                    "try": ["/as2", "/edi", "/_mock/health", "/"]})
-        if found.method not in (routes.ANY, method):
-            return self.text(405, found.refuse)
+            return self.json(404, routes.not_found(method, path))
+        if allowed:
+            # A GET is answered to a HEAD as well, so the header says so.
+            takes = [name for each in allowed
+                     for name in ((each, "HEAD") if each == "GET" else (each,))]
+            line = routes.refusal(found, allowed) + "\n"
+            return self.raw(405, line.encode("utf-8"),
+                            {"Content-Type": TEXT, "Allow": ", ".join(takes)})
         return found.function(self, *arguments)
 
     # -- the control plane

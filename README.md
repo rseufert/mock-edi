@@ -218,6 +218,14 @@ Both are walked through, test by test, in
 | Reset | `POST /_mock/reset` |
 | Index page | `GET /` |
 
+**A request is matched on its method and its path exactly.** The method is the
+one in the table: a read sent with `POST`, or an action sent with `GET`, is a
+`405` that says what to send and carries an `Allow` header. The path is the
+one in the table, segment for segment: a trailing slash, a segment too many
+or a path that only begins with `/_mock` is a `404` that lists what there is.
+The three doors also answer under the names a partner's AS2 software may
+have been configured with: `/as2/`, `/as2/receive`, `/as2/mdn/` and `/edi/`.
+
 Every `GET` also answers `HEAD`, for a liveness probe, and `OPTIONS` answers
 with the methods the mock takes. A query value that cannot be read -
 `?seconds=abc`, `?limit=ten` - is a `400` naming the parameter. A `500` is

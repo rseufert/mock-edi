@@ -4,10 +4,10 @@ from __future__ import annotations
 from typing import Tuple
 
 from .. import partners
-from . import ANY, route
+from . import route
 
 
-@route(ANY, "/", aliases=("/index.html",))
+@route("GET", "/", aliases=("/index.html",), refuse="GET the index page")
 def index(h) -> Tuple[int, int]:
     return h.html(200, page(h.mock, h.base()))
 
