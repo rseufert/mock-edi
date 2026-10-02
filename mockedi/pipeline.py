@@ -263,18 +263,22 @@ class Pipeline:
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
                     # A buyer may restate a whole order rather than send an
-                    # 860, and BEG01 says so. Against an order the mock already
-                    # holds that is a change, not a replacement.
+                    # 860, and BEG01 or BGM 1225 says so. That is a change to
+                    # an order the mock holds, not a replacement - and when
+                    # the mock holds none it is refused as a change to an
+                    # unknown order is, not taken as a new one: fulfilling a
+                    # cancellation ships what the buyer withdrew (#198).
                     # This partner's own order with the number: another
                     # partner's order with it is a different order (#132).
                     known = documents.order_row(self.conn, order.po_number,
                                                 partner["id"])
-                    if order.purpose in transactions.CHANGE_PURPOSES and known:
+                    restated = transactions.restated_purpose(order, dialect)
+                    if restated:
                         held = [row["line"] for row in documents.order_lines(
                             self.conn, order.po_number, partner["id"])]
                         self._apply_change(
-                            partner, transactions.change_from_order(order, held),
-                            receipt)
+                            partner, transactions.change_from_order(
+                                order, held, restated), receipt)
                     elif known is not None and (
                             known["direction"] == documents.PLACED
                             or (known["status"] != documents.RECEIVED
