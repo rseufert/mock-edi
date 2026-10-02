@@ -1081,7 +1081,7 @@ everything in memory.
 | Flag | What it is for |
 | --- | --- |
 | `--ack-delay`, `--response-delay`, `--despatch-delay`, `--invoice-delay MS` | Hold each document back; see [Timing](#timing). |
-| `--tax-rate RATE` | Tax on invoices, as a fraction: `0.0825` (default `0`). |
+| `--tax-rate RATE` | Tax on invoices, as a fraction: `0.0825` (default `0`). Checked at startup: anything that is not a number from 0 to 1 is refused there, so `8.25` is not billed as 825%. |
 | `--allow-duplicates` | Accept a control number a partner has used before; see [A replayed interchange is refused](#a-replayed-interchange-is-refused). |
 | `--no-mdn` | Never return an MDN, whatever the sender asks for - for testing a client that waits for one. |
 | `--any-receiver` | Accept an interchange addressed to someone other than `--as2-id`. The usual first-run failure is an interchange addressed to the real partner's id; this is the switch for it. |
@@ -1095,7 +1095,7 @@ everything in memory.
 
 | Flag | What it is for |
 | --- | --- |
-| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. |
+| `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. The password may hold any characters; a client may send it as UTF-8 or as Latin-1. |
 | `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed: a partner `as2_url` outside the list is refused by the control plane with a `400`, a document already bound for one fails without being posted, and a `Receipt-Delivery-Option` outside it is refused with a failure MDN. |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
