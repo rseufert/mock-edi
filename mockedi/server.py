@@ -34,8 +34,8 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (claims, db, delivery, documents, drop, partners, pipeline,
-               profiles, reconcile, remittance, routes, timeline, transactions)
+from . import (db, delivery, drop, partners, pipeline, reconcile, routes,
+               transactions)
 from .routes import BadQuery
 from .routes import first as _first, flag as _flag, json_body as _json_body
 from .routes import limit as _limit, number as _number, split as _split
@@ -395,88 +395,6 @@ class Handler(BaseHTTPRequestHandler):
         rest = parts[1:]
         conn = self.mock.conn
 
-        if head == "partners":
-            return self._partners(method, rest, query, body)
-
-        if head == "catalog":
-            return self._json(200, db.rows(conn, "SELECT * FROM catalog ORDER BY sku"))
-
-        if head == "orders":
-            if rest:
-                order, refusal = _which_order(conn, rest[0], query)
-                if order is None:
-                    return self._json(*refusal)
-            if len(rest) == 2 and rest[1] == "timeline":
-                # Everything that happened to this order, in order. Four
-                # endpoints' worth of rows, sorted, which is what anyone
-                # debugging one was assembling by hand.
-                return self._json(200, timeline.timeline(
-                    conn, order["po_number"], order["partner"],
-                    raw=_flag(query, "raw")))
-            if rest:
-                key = (order["partner"], order["po_number"])
-                order["lines"] = documents.order_lines(conn, order["po_number"],
-                                                       order["partner"])
-                order["shipments"] = db.rows(
-                    conn, "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
-                          " ORDER BY rowid", key)
-                order["invoices"] = db.rows(
-                    conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
-                          " ORDER BY rowid", key)
-                if order["direction"] == documents.PLACED:
-                    # What was asked for beside what the supplier said, line by
-                    # line, and where the two disagree (#126).
-                    order["reconciliation"] = [
-                        {"line": row["line"], "sku": row["sku"],
-                         "ordered": row["quantity"], "confirmed": row["confirmed"],
-                         "shipped": row["shipped"], "billed": row["invoiced"],
-                         "status": row["status"]}
-                        for row in order["lines"]]
-                    order["disagreements"] = [
-                        claims.as_json(row) for row in
-                        claims.disagreements(conn, *key)]
-                return self._json(200, order)
-            return self._json(200, db.rows(
-                conn, "SELECT * FROM purchase_order ORDER BY rowid DESC LIMIT ?",
-                (_limit(query),)))
-
-        if head == "documents":
-            if rest:
-                row = db.one(conn, "SELECT * FROM transaction_set WHERE id = ?",
-                             (rest[0],))
-                if row is None:
-                    return self._json(404, {"error": "no document %r" % rest[0]})
-                interchange = db.one(conn, "SELECT * FROM interchange WHERE id = ?",
-                                     (row["interchange_id"],))
-                row["findings"] = json.loads(row["findings"] or "[]")
-                row["payload"] = interchange["payload"] if interchange else ""
-                return self._json(200, row)
-            return self._json(200, [
-                dict(row, findings=json.loads(row["findings"] or "[]"))
-                for row in db.rows(conn, _document_query(query), _document_params(query))])
-
-        if head == "interchanges":
-            if rest:
-                row = db.one(conn, "SELECT * FROM interchange WHERE id = ?", (rest[0],))
-                if row is None:
-                    return self._json(404, {"error": "no interchange %r" % rest[0]})
-                if _flag(query, "raw"):
-                    # The bytes as they arrived or left; a row from before
-                    # they were kept has only its text.
-                    raw = row["raw"] if row["raw"] is not None \
-                        else row["payload"].encode("utf-8")
-                    content_type = _edi_type(row["dialect"])
-                    if row["charset"]:
-                        content_type += "; charset=%s" % row["charset"]
-                    return self._raw(200, bytes(raw), {"Content-Type": content_type})
-                row = dict(row)
-                row.pop("raw", None)
-                return self._json(200, row)
-            return self._json(200, db.rows(
-                conn, "SELECT id, direction, dialect, partner, control, transport,"
-                      " message_id, mic, at, length(payload) AS bytes FROM interchange"
-                      " ORDER BY id DESC LIMIT ?", (_limit(query),)))
-
         if head == "mailbox":
             rows = self.mock.pipeline.collect(
                 partner_id=_first(query, "partner"), kind=_first(query, "kind"),
@@ -576,61 +494,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._json(201, {"id": queued.id, "kind": queued.kind,
                                     "code": queued.code, "dueAt": queued.due_at})
 
-        if head == "purchase":
-            # The mock as buyer: place an order with a supplier, or change one.
-            if method != "POST":
-                return self._text(405, "POST an order to place it")
-            payload = _json_body(body)
-            try:
-                if not rest:
-                    order, queued = self.mock.pipeline.place(
-                        str(payload.get("partner") or ""), payload)
-                    status = 201
-                elif len(rest) == 2 and rest[1] == "change":
-                    order, refusal = _which_order(conn, rest[0], query,
-                                                  documents.PLACED)
-                    if order is None:
-                        return self._json(*refusal)
-                    order, queued = self.mock.pipeline.change_placed(
-                        rest[0], order["partner"], payload)
-                    status = 200
-                else:
-                    return self._json(404, {"error": "no route for %s %s"
-                                                     % (method, path)})
-            except partners.UnknownPartner as error:
-                return self._json(404, {"error": "no partner %s" % error})
-            except LookupError as error:
-                return self._json(404, {"error": str(error)})
-            except documents.Refused as error:
-                return self._json(400, {"error": str(error),
-                                        "problems": error.problems})
-            order["lines"] = documents.order_lines(conn, order["po_number"],
-                                                   order["partner"])
-            order["sent"] = {"id": queued.id, "kind": queued.kind,
-                             "code": queued.code, "dueAt": queued.due_at}
-            return self._json(status, order)
-
-        if head == "disagreements":
-            # Only the business findings, for a test that wants nothing else.
-            return self._json(200, [claims.as_json(row) for row in
-                                    claims.disagreements(
-                                        conn, _first(query, "partner"),
-                                        _first(query, "po"), _limit(query, 1000))])
-
-        if head == "remittances":
-            # Every remittance advice received, and what became of it.
-            return self._json(200, remittance.listing(conn, _first(query, "partner")))
-
         if head == "unacknowledged":
             return self._json(200, reconcile.unacknowledged(
                 conn, _number(query, "older-than"),
                 _first(query, "partner"), _limit(query)))
-
-        if head == "mdns":
-            return self._json(200, db.rows(
-                conn, "SELECT id, partner, direction, original_id, message_id,"
-                      " disposition, mic, mode, url, status, at FROM mdn"
-                      " ORDER BY id DESC LIMIT ?", (_limit(query),)))
 
         return self._json(404, {
             "error": "no control endpoint %r" % head,
@@ -639,82 +506,6 @@ class Handler(BaseHTTPRequestHandler):
                           "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
                           "unacknowledged", "remittances", "requests", "validate",
                           "reset"]})
-
-    def _partners(self, method: str, rest: List[str], query, body: bytes):
-        conn = self.mock.conn
-        if not rest:
-            if method == "GET":
-                return self._json(200, partners.listing(conn))
-            if method == "POST":
-                payload = _json_body(body)
-                identifier = payload.pop("id", "")
-                if not identifier:
-                    return self._json(400, {"error": "a partner needs an id"})
-                refused = self._refused_url(payload)
-                if refused:
-                    return self._json(400, {"error": refused})
-                try:
-                    row = partners.create(conn, identifier, payload.pop("name", ""),
-                                          **payload)
-                except ValueError as error:
-                    return self._json(400, {"error": str(error)})
-                return self._json(201, row)
-            return self._text(405, "GET or POST partners")
-
-        identifier = rest[0]
-        if rest[1:] == ["profile"]:
-            return self._profile(method, identifier, body)
-        if method == "GET":
-            row = partners.get(conn, identifier)
-            if row is None:
-                return self._json(404, {"error": "no partner %r" % identifier})
-            return self._json(200, row)
-        if method in ("PATCH", "PUT"):
-            payload = _json_body(body)
-            refused = self._refused_url(payload)
-            if refused:
-                return self._json(400, {"error": refused})
-            try:
-                row = partners.update(conn, identifier, **payload)
-            except partners.UnknownPartner:
-                return self._json(404, {"error": "no partner %r" % identifier})
-            except ValueError as error:
-                return self._json(400, {"error": str(error)})
-            return self._json(200, row)
-        if method == "DELETE":
-            outcome = partners.delete(conn, identifier)
-            return self._json(200 if outcome["deleted"] else 404, outcome)
-        return self._text(405, "GET, PATCH or DELETE a partner")
-
-    def _profile(self, method: str, identifier: str, body: bytes):
-        """A partner's implementation guide: PUT one, GET it, DELETE it.
-
-        Held with the partner, so it survives a restart on a file database.
-        A file is loaded the same way: `curl -T guide.json`.
-        """
-        conn = self.mock.conn
-        partner = partners.get(conn, identifier)
-        if partner is None:
-            return self._json(404, {"error": "no partner %r" % identifier})
-        if method == "GET":
-            found = profiles.load(conn, identifier)
-            if found is None:
-                return self._json(404, {"error": "%s has no profile; the "
-                                                 "dictionary applies as it stands"
-                                                 % identifier})
-            return self._json(200, found.as_json())
-        if method in ("PUT", "POST"):
-            try:
-                found = profiles.check(partner, _json_body(body))
-            except profiles.Invalid as error:
-                return self._json(400, {"error": "profile refused",
-                                        "problems": error.problems})
-            profiles.save(conn, found)
-            return self._json(200, found.as_json())
-        if method == "DELETE":
-            removed = profiles.remove(conn, identifier)
-            return self._json(200 if removed else 404, {"deleted": removed})
-        return self._text(405, "GET, PUT or DELETE a partner's profile")
 
     # -- responses
 
@@ -821,21 +612,6 @@ class Handler(BaseHTTPRequestHandler):
 
     # -- authentication
 
-    def _refused_url(self, payload: Dict[str, Any]) -> str:
-        """An `as2_url` the courier would refuse to post to, refused now.
-
-        Accepting it and failing every delivery later is the "PATCH answers
-        200 and changes nothing" this control plane stopped doing (#40): the
-        partner would look configured and nothing would ever arrive.
-        """
-        url = payload.get("as2_url")
-        if not url or not isinstance(url, str):
-            return ""
-        if delivery.permitted(url, self.config.deliver_to):
-            return ""
-        return ("as2_url %s is not a host this mock may post to; it was started "
-                "with --deliver-to %s" % (url, ",".join(self.config.deliver_to)))
-
     def _authorised(self) -> bool:
         if not self.config.basic_auth:
             return True
@@ -923,69 +699,6 @@ class Handler(BaseHTTPRequestHandler):
                     self.mock.prune()
         except sqlite3.Error:            # pragma: no cover - logging must not fail a request
             pass
-
-
-# ---------------------------------------------------------------------------
-# Small helpers
-# ---------------------------------------------------------------------------
-
-def _which_order(conn, po_number: str, query, direction: str = ""):
-    """The order a URL names: `(row, None)`, or `(None, (status, body))`.
-
-    A PO number is unique per partner, not to the world (#132), so `?partner=`
-    picks one. Without it the number has to be unambiguous; when two partners
-    hold it the answer is a 409 naming them, rather than a guess.
-    """
-    partner_id = _first(query, "partner")
-    if partner_id:
-        found = [documents.order_row(conn, po_number, partner_id)]
-        found = [row for row in found if row is not None]
-    else:
-        found = documents.orders_numbered(conn, po_number)
-    if direction:
-        found = [row for row in found if row["direction"] == direction]
-    what = "purchase order %r%s" % (po_number, " placed" if direction else "")
-    if not found:
-        return None, (404, {"error": "no %s%s" % (
-            what, " with %s" % partner_id if partner_id else "")})
-    if len(found) > 1:
-        holders = [row["partner"] for row in found]
-        return None, (409, {"error": "%s is held by %s; add ?partner= to say whose"
-                                     % (what, " and ".join(holders)),
-                            "partners": holders})
-    return found[0], None
-
-
-def _edi_type(dialect: str) -> str:
-    return "application/edi-x12" if dialect == "X12" else "application/edifact"
-
-
-def _document_query(query: Dict[str, List[str]]) -> str:
-    clauses = []
-    if "acknowledged" in query:
-        # `?acknowledged=false` is the useful one: what have we sent that
-        # nobody has answered for?
-        clauses.append("ack_status %s ''"
-                       % ("!=" if _flag(query, "acknowledged") else "="))
-    if _first(query, "direction"):
-        clauses.append("direction = ?")
-    if _first(query, "partner"):
-        clauses.append("partner = ?")
-    if _first(query, "kind"):
-        clauses.append("kind = ?")
-    if _first(query, "code"):
-        clauses.append("code = ?")
-    if _first(query, "reference"):
-        clauses.append("reference = ?")
-    where = (" WHERE " + " AND ".join(clauses)) if clauses else ""
-    return ("SELECT * FROM transaction_set%s ORDER BY id DESC LIMIT %d"
-            % (where, _limit(query)))
-
-
-def _document_params(query: Dict[str, List[str]]) -> List[str]:
-    return [_first(query, name) for name in
-            ("direction", "partner", "kind", "code", "reference")
-            if _first(query, name)]
 
 
 # ---------------------------------------------------------------------------
