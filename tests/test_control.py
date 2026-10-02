@@ -452,6 +452,33 @@ class EncodedPathSegments(MockServerCase):
         self.assertIn("'PO/NONE'", data["error"])
 
 
+class AuthenticationOutsideAscii(MockServerCase):
+    """A password with an umlaut made every request a 500, right or wrong (#207)."""
+    config_kwargs = {"basic_auth": "edi:p\u00e4ssw\u00f6rd"}
+
+    def setUp(self):
+        pass        # reset itself needs credentials
+
+    def health(self, credential: bytes):
+        import base64
+        token = base64.b64encode(credential).decode()
+        status, _h, _body = self.get(
+            "/_mock/health", headers={"Authorization": "Basic " + token}, raw=True)
+        return status
+
+    def test_the_right_one_works_as_utf8(self):
+        self.assertEqual(self.health("edi:p\u00e4ssw\u00f6rd".encode("utf-8")), 200)
+
+    def test_and_as_latin1_which_a_client_may_send_instead(self):
+        self.assertEqual(self.health("edi:p\u00e4ssw\u00f6rd".encode("latin-1")), 200)
+
+    def test_a_wrong_one_is_challenged(self):
+        for attempt in (b"edi:password", "edi:p\u00e4ssword".encode("utf-8"),
+                        b"", b"\xff"):
+            with self.subTest(attempt=attempt):
+                self.assertEqual(self.health(attempt), 401)
+
+
 class BadQueryValues(MockServerCase):
     """A value that cannot be read is the client's mistake: 400, named (#31)."""
 
@@ -552,6 +579,19 @@ class Authentication(MockServerCase):
                                     headers={"Authorization": "Basic " + token})
         self.assertEqual(status, 200)
         self.assertEqual(data["status"], "ok")
+
+    def test_an_attempt_outside_ascii_is_wrong_and_not_a_500(self):
+        # `compare_digest` on two strings refuses anything outside ASCII, so
+        # this was a 500 where a 401 belongs (#207).
+        import base64
+        for attempt in ("edi:s\u00e9cret".encode("utf-8"),
+                        "edi:s\u00e9cret".encode("latin-1"), b"\xff\xfe:\x80"):
+            with self.subTest(attempt=attempt):
+                token = base64.b64encode(attempt).decode()
+                status, _h, _body = self.get(
+                    "/_mock/health", headers={"Authorization": "Basic " + token},
+                    raw=True)
+                self.assertEqual(status, 401)
 
     def test_a_preflight_is_answered_without_them(self):
         # A CORS preflight never carries credentials.
