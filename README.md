@@ -454,6 +454,9 @@ and releases whatever that makes due. The clock stays moved: two advances of
 dates, due times, MDN dates - is dated by the moved clock. The response says
 where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
+It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
+that would take it further is a 400 that says how much room is left, and
+leaves the clock where it was.
 
 ## AS2
 
@@ -1023,15 +1026,17 @@ mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
 mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
-mockedi/server.py        HTTP: the handler, the mock's state, and the control plane
+mockedi/server.py        HTTP: the handler and the mock's state
 mockedi/routes/__init__.py  the route table every endpoint registers with
 mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
 mockedi/routes/index.py     the index page
-mockedi/routes/control.py   health, state, reset; the rest of /_mock until #182 moves it
+mockedi/routes/control.py   health, state, reset, and the 404 for an unknown /_mock path
 mockedi/routes/validate.py  /_mock/validate and the dictionary served as data
 mockedi/routes/orders.py    orders, their timelines, purchasing, disagreements
 mockedi/routes/documents.py documents, interchanges and MDNs as they crossed the wire
 mockedi/routes/partners.py  partners, their guides, and the catalog
+mockedi/routes/mailbox.py   the mailbox, the outbox and the drop directory
+mockedi/routes/clock.py     scheduled work, advance, send, and what is unacknowledged
 ```
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how they fit together;
