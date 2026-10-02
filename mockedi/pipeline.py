@@ -121,7 +121,9 @@ class Pipeline:
         # How far `advance?seconds=` has moved the mock's clock past the real
         # one. Every due time, document date and MDN date reads `now()`, so
         # all of them see the moved clock; a reset puts it back.
-        self.offset = datetime.timedelta(0)
+        # It is kept in the file as well as here, so a mock restarted on a
+        # file database comes back as far ahead as it was stopped (#228).
+        self._offset = db.clock_offset(self.conn)
         # The connection tells everything that writes a stamp what time it
         # is, and it is this clock (#196): `db.now(conn)` anywhere below the
         # pipeline is `self.now()`, moved by the same advance.
@@ -136,6 +138,18 @@ class Pipeline:
     @property
     def us(self) -> Party:
         return partners.us(self.config)
+
+    @property
+    def offset(self) -> datetime.timedelta:
+        return self._offset
+
+    @offset.setter
+    def offset(self, value: datetime.timedelta) -> None:
+        # Every change is written down as it is made - an advance, each step
+        # of `advance?all`, a reset - so there is no moment at which the file
+        # holds stamps from a clock it could not put back.
+        self._offset = value
+        db.keep_clock_offset(self.conn, value)
 
     def now(self) -> datetime.datetime:
         """The mock's clock: the real time in UTC, plus how far it was advanced.
