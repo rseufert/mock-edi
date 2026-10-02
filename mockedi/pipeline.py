@@ -1192,31 +1192,41 @@ class Pipeline:
             # The transaction set's own control number, not the interchange's:
             # an inbound 997 quotes ST02 in AK202, and matching it against
             # ISA13 - which is what this recorded before - matches nothing.
-            # Both the moment and the sequence are the ones taken when the
-            # document was queued, not fresh ones (#195, #238).
+            # The moment and the sequence come from one instant, always, because
+            # a timeline sorted on `(at, seq)` cannot have the two disagree
+            # (#238). Every other event in the mock takes both in one
+            # statement; this row is the only one with a choice to make, and
+            # it turns on whether the document was held back.
             #
-            # The sequence, because a release hands over everything that is
-            # due at once: a number taken here would put the 856 and the 810
-            # after the invoice raised between them.
+            # **Due the moment it was queued** - the ordinary document: the
+            # queued pair. A release hands over everything that is due at once,
+            # so a sequence taken here would put the 856 and the 810 after the
+            # invoice raised between them (#195). Taking the sequence there and
+            # the moment here, which is what this did until #238, let the two
+            # disagree: a few milliseconds apart, and when they crossed a
+            # second the document sorted after work sequenced before it.
             #
-            # The moment, because it has to be the *same* instant as the
-            # sequence. Taken here it was a few milliseconds later, and when
-            # those milliseconds crossed a second the timeline sorted the
-            # document after work sequenced before it - "packed and invoiced
-            # before the 997 was sent", which is what #195 was filed to
-            # remove. Every other event takes its `at` and its `seq` in one
-            # statement; this row was the exception.
-            #
-            # What goes is the moment the release loop reached the row, which
-            # nothing asked for: `released_at` below still records it, and the
-            # timeline's `delivery` carries its own.
+            # **Held** - the `late` behaviour, a despatch or invoice delay,
+            # `/_mock/send` with `delayMs`: this moment, and a sequence taken
+            # now. Being late is the whole point of those settings, and
+            # stamping such a document when it was queued - which the first
+            # attempt at #238 did to all of them - took the hour back out of
+            # the timeline and out of `/_mock/documents`, the two places a
+            # tester goes looking for it. The release moment rather than the
+            # due moment because it is what actually happened - the poller
+            # finds the row some seconds after it falls due, and `released_at`
+            # has always said so. Never earlier than `due_at`, which #196
+            # requires of anything the mock stamps.
+            held = row["due_at"] > row["at"]
+            sent_at = db.now(self.conn) if held else row["at"]
+            sent_seq = db.next_seq(self.conn) if held else row["seq"]
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
                 " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", row["at"], row["seq"]))
+                 row["reference"], 1, "", sent_at, sent_seq))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(self.conn), row["id"]))
