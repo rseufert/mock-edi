@@ -38,6 +38,10 @@ Older.
 """
 
 
+# The `gh pr list` flags that GitHub answers from its search index.
+SEARCHED = ("--search", "--label", "--author", "--assignee")
+
+
 class World:
     """The repository, GitHub and PyPI, as far as the tool can see them."""
 
@@ -54,6 +58,11 @@ class World:
         self.head, self.origin = "h3ad", "h3ad"
         self.ci = ["completed success"]
         self.labelled = []
+        # How many asks through GitHub's search miss what is new: a pull
+        # request just opened, and a label just put on one.
+        self.search_lag = 0
+        self.label_lag = 0
+        self.lag_after_create = 0
         self.intro_written = True
         self.checks = [["pending"], ["pass", "pass", "skipping"]]
         self.publish = [[], ["in_progress "], ["completed success"]]
@@ -113,9 +122,18 @@ class World:
 
     def gh(self, a):
         ok = tool.Result(0, "")
-        if a[:2] == ["pr", "list"] and "--label" in a:
-            return tool.Result(0, "\n".join(self.labelled))
         if a[:2] == ["pr", "list"]:
+            # `--search` and `--label` are answered from GitHub's search
+            # index, which is behind what was just created or labelled;
+            # `--head` and a plain listing are not (#190).
+            if "--label" in a and self.label_lag > 0:
+                self.label_lag -= 1
+                return tool.Result(0, "")
+            if "--search" in a and self.search_lag > 0:
+                self.search_lag -= 1
+                return tool.Result(0, "")
+            if "--label" in a or "number,labels" in a:
+                return tool.Result(0, "\n".join(self.labelled))
             return tool.Result(0, str(self.open_pr) if self.open_pr else "")
         if a[:2] == ["release", "view"]:
             return tool.Result(0 if self.gh_release else 1, "")
@@ -130,6 +148,8 @@ class World:
             return tool.Result(0, "\n".join(now))
         if a[:2] == ["pr", "create"]:
             self.open_pr = 42
+            # New to GitHub, and so not yet in its search index.
+            self.search_lag = max(self.search_lag, self.lag_after_create)
             return ok
         if a[:2] == ["pr", "checks"]:
             now = self.checks.pop(0) if len(self.checks) > 1 else self.checks[0]
@@ -239,6 +259,52 @@ class ItRefusesAMainNotFitToRelease(ReleaseCase):
         world = World(dirty=True)
         self.assertStops(world, "uncommitted")
         self.assertEqual(world.ran("switch"), [])
+
+
+class GitHubsSearchIsBehind(ReleaseCase):
+    """Nothing the tool needs to know is asked of the search index (#190).
+
+    Releasing 0.6.0, the tool opened the release pull request, looked for it
+    by title through search, did not find it, and stopped. Search lags a new
+    pull request by seconds to minutes, so the ask straight after the create
+    was the one most likely to miss.
+    """
+
+    def test_the_new_pull_request_is_found_without_waiting_for_search(self):
+        # The case from the issue: search misses it on the first ask only.
+        world = World(lag_after_create=1)
+        self.assertEqual(self.release(world), 0)
+        self.assertTrue(world.tag and world.gh_release and world.pypi)
+        self.assertIn("opened #42.", self.said)
+
+    def test_however_far_behind_it_is(self):
+        world = World(search_lag=1000)
+        self.assertEqual(self.release(world), 0)
+        self.assertTrue(world.pypi)
+
+    def test_a_pull_request_labelled_a_moment_ago_still_stops_the_release(self):
+        # The same index answers `--label`. Missing one here is worse than
+        # stopping: the release would go out with it still open.
+        self.assertStops(World(labelled=["77"], label_lag=1), "#77")
+
+    def test_an_open_release_pull_request_is_resumed_through_it_too(self):
+        world = World(branch=True, remote_branch=True, open_pr=42,
+                      search_lag=1000)
+        self.assertEqual(self.release(world, resume=True), 0)
+
+    def test_it_asks_for_nothing_that_goes_through_search(self):
+        world = World()
+        self.release(world)
+        asked = [call for call in world.calls if call.startswith("gh pr list")
+                 and any(" %s" % flag in call for flag in SEARCHED)]
+        self.assertEqual(asked, [])
+
+    def test_the_pull_request_is_asked_for_by_its_branch(self):
+        world = World()
+        self.release(world)
+        self.assertTrue([call for call in world.calls
+                         if call.startswith("gh pr list")
+                         and "--head release/%s" % VERSION in call])
 
 
 class TheOneDeliberateStop(ReleaseCase):
