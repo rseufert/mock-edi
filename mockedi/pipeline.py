@@ -310,6 +310,14 @@ class Pipeline:
                              "reason": documents.NUMBER_IN_USE})
                         receipt.refused_orders[order.po_number] = order
                     else:
+                        if known is not None:
+                            # The order this one replaces was promised a
+                            # despatch and an invoice, and this one is about
+                            # to be promised its own. Left waiting, the first
+                            # pair come due too, and the same shipment is
+                            # advised twice (#200).
+                            self._withdraw_fulfilment(partner, order.po_number,
+                                                      "order restated")
                         documents.record_order(self.conn, partner, order,
                                                self.now())
                         receipt.orders.append(order.po_number)
@@ -446,13 +454,22 @@ class Pipeline:
         receipt.change_outcomes[change.po_number] = outcome
         if outcome.cancelled:
             # Nothing more will be packed or billed for a cancelled order.
-            self.conn.execute(
-                "UPDATE scheduled SET done_at = ?, note = 'order cancelled'"
-                " WHERE partner = ? AND po_number = ? AND done_at = ''",
-                (db.now(), partner["id"], change.po_number))
-            self.conn.commit()
+            self._withdraw_fulfilment(partner, change.po_number,
+                                      "order cancelled")
             return
         self._schedule_the_difference(partner, change.po_number, self.now())
+
+    def _withdraw_fulfilment(self, partner, po_number, note: str) -> None:
+        """Close what an order is still waiting for, unkept, and say why.
+
+        The rows stay, marked done with the note, so `/_mock/scheduled?all`
+        shows a promise that was withdrawn rather than one that never was.
+        """
+        self.conn.execute(
+            "UPDATE scheduled SET done_at = ?, note = ?"
+            " WHERE partner = ? AND po_number = ? AND done_at = ''",
+            (db.now(), note, partner["id"], po_number))
+        self.conn.commit()
 
     def _schedule_the_difference(self, partner, po_number, moment) -> None:
         """Keep what a change confirmed: pack and bill it if nothing will.

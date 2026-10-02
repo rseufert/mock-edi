@@ -736,7 +736,10 @@ naming a number the sender holds no order under is answered exactly as one
 against an order that does not exist, in the same words, because a customer
 has no business learning which numbers its competitors use. The same partner
 may send a number again while the order is still only *received*, and it
-replaces its own order as it always has.
+replaces its own order as it always has. The despatch and invoice the first
+was promised are withdrawn - `/_mock/scheduled?all` shows them closed with
+the note *order restated* - and the restated order is promised its own, so
+the goods are packed, advised and billed once.
 
 Once that order has been acted on - shipped, invoiced, cancelled or refused -
 the number is spoken for, and a fresh 850 under it is refused with an 855 that
