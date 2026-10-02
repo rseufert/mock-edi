@@ -26,6 +26,11 @@ from mockedi import db, edifact, x12                  # noqa: E402
 from mockedi.envelope import seg                      # noqa: E402
 from mockedi.testing import Mock, MockError           # noqa: E402
 
+# The behaviours the mock has, as they were when the suite was imported.
+# They are module state, shared by every test in the process, so one that
+# leaves them changed breaks whichever file happens to run after it (#252).
+REGISTRY = (dict(db.BEHAVIOURS), dict(db.BEHAVIOUR_ROLES))
+
 ACME = "ACME"          # X12, accepts everything
 GLOBEX = "GLOBEX"      # X12 005010, short-ships
 INITECH = "INITECH"    # X12, rejects a line
@@ -65,6 +70,22 @@ class MockServerCase(unittest.TestCase):
     @classmethod
     def tearDownClass(cls):
         cls.mock.close()
+        # Fail here, in the class that did it, and put the registry back so
+        # that the files after this one are not failed for it as well.
+        left = (dict(db.BEHAVIOURS), dict(db.BEHAVIOUR_ROLES))
+        if left != REGISTRY:
+            db.BEHAVIOURS.clear()
+            db.BEHAVIOURS.update(REGISTRY[0])
+            db.BEHAVIOUR_ROLES.clear()
+            db.BEHAVIOUR_ROLES.update(REGISTRY[1])
+            changed = sorted(set(left[0]) ^ set(REGISTRY[0])) or sorted(
+                name for name in REGISTRY[0]
+                if left[0].get(name) != REGISTRY[0][name]
+                or left[1].get(name) != REGISTRY[1].get(name))
+            raise AssertionError(
+                "%s left the behaviour registry changed (%s); a test that "
+                "alters db.BEHAVIOURS must put back what was there"
+                % (cls.__name__, ", ".join(changed)))
 
     def setUp(self):
         # Each test starts from a freshly seeded partner, so that one test
