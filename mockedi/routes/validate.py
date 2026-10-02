@@ -74,7 +74,12 @@ def dictionary(h, *rest: str) -> Tuple[int, int]:
         if partners.get(h.mock.conn, partner_id) is None:
             return h.json(404, {"error": "no partner %r" % partner_id})
         profile = profiles.load(h.mock.conn, partner_id)
-    return h.json(200, _dictionary(list(rest), first(h.query, "version"), profile))
+    found = _dictionary(list(rest), first(h.query, "version"), profile)
+    # A set, version or dialect the mock does not have is not there: 404,
+    # with the same body. It used to be a 200 whose body said "error", which
+    # a client checking the status took for the dictionary (#207).
+    missing = isinstance(found, dict) and set(found) == {"error"}
+    return h.json(404 if missing else 200, found)
 
 
 def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
@@ -108,6 +113,9 @@ def _dictionary(rest: List[str], version: str = "", profile=None) -> Any:
                 for dialect, uses in schema.ENVELOPES.items()],
         }
     dialect = rest[0].upper()
+    if dialect not in schema.DIALECTS:
+        return {"error": "no dialect %s; this mock speaks %s"
+                         % (dialect, " and ".join(schema.DIALECTS))}
     if len(rest) == 1:
         return {"dialect": dialect,
                 "transactionSets": sorted(code for d, code in schema.SETS
@@ -168,11 +176,14 @@ def _envelope(dialect: str, version: str = "") -> Dict[str, Any]:
             "purpose": "What goes round the %s: the interchange, and the "
                        "functional group inside it."
                        % ("transaction sets" if dialect == "X12" else "messages"),
-            # The envelope's own: ISA12 for the X12 version asked for, and
-            # the syntax version for EDIFACT, whatever directory its
-            # messages are in. `setVersion` is the one `?version=` named.
-            "version": _envelope_version(dialect, _set_version(dialect, version)),
-            "setVersion": _set_version(dialect, version),
+            # `version` is the sets' version, as it has been since the
+            # envelope was first served: what `?version=` named, or the
+            # dialect's own. `envelopeVersion` is the envelope's: ISA12 for
+            # that X12 version, and for EDIFACT the syntax version, whatever
+            # directory its messages are in.
+            "version": version or schema.VERSIONS[dialect][0],
+            "envelopeVersion": _envelope_version(
+                dialect, _set_version(dialect, version)),
             "segments": segments}
 
 

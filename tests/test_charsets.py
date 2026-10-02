@@ -14,6 +14,8 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
+from mockedi.envelope import EDIFACT_DEFAULTS, split_elements
+
 from support import ACME, EURODIS, MockServerCase, edifact_order, x12_order
 
 NAME = "Müller Lager 1"                 # Müller, with a real u-umlaut
@@ -66,6 +68,95 @@ class Latin1Edifact(CharsetCase):
         self.assertIn(b"UNB+UNOC:3", body)
         self.assertIn(NAME.encode("iso-8859-1"), body)
         self.assertNotIn(NAME.encode("utf-8"), body)
+
+
+# Ł and ź are not in ISO 8859-1; ó is. A Polish partner in a UNOC interchange
+# is the plainest case of a name the declared charset cannot carry.
+POLISH = {"id": "POLDIS", "name": "Poldis Sp. z o.o.", "dialect": "EDIFACT",
+          "street": "Piotrkowska 1", "city": "\u0141\u00f3d\u017a",
+          "region": "LD", "postal": "90-001", "country": "PL"}
+
+
+class WhatTheCharsetCannotCarry(CharsetCase):
+    """It is substituted, and the substitute is escaped (#199).
+
+    `?` is EDIFACT's release character. Substituting it after the segment had
+    been rendered left it escaping the separator that followed: a reader got
+    eight elements where nine were written, with the region swallowed into the
+    city, the postcode in the region's place and the country gone. The data a
+    charset cannot carry is lost either way - that is what a downgrade is -
+    but the structure must survive, or the loss spreads to every element after
+    it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        status, _headers, data = self.post("/_mock/partners", POLISH)
+        self.assertEqual(status, 201, data)
+
+    def nad(self, code="ORDRSP"):
+        """The Polish party's NAD from a document the mock wrote.
+
+        Found by its postcode rather than by its qualifier, because the party
+        this partner is differs by document - `BY` on an ORDRSP, the delivery
+        party on a DESADV - and the test is about the address, not the role.
+        """
+        body = self.collected("POLDIS", code)
+        for chunk in body.split(b"'"):
+            segment = chunk.lstrip(b"\r\n")
+            if segment.startswith(b"NAD") and b"90-001" in segment:
+                text = segment.decode("iso-8859-1")
+                return text, split_elements(text, EDIFACT_DEFAULTS)
+        self.fail("no NAD with the postcode in the %s: %r" % (code, body[:300]))
+
+    def order(self):
+        self.send(edifact_order("PO-CHARSET", sender="POLDIS"),
+                  headers={"Content-Type": EDIFACT})
+
+    def test_the_segment_keeps_every_element_it_was_written_with(self):
+        self.order()
+        _text, elements = self.nad()
+        self.assertEqual(len(elements), 9)
+
+    def test_and_each_one_is_still_the_element_it_was(self):
+        self.order()
+        _text, elements = self.nad()
+        self.assertEqual(elements[6], "LD")
+        self.assertEqual(elements[7], "90-001")
+        self.assertEqual(elements[8], "PL")
+
+    def test_the_city_reads_as_a_question_mark_not_as_an_escape(self):
+        self.order()
+        text, elements = self.nad()
+        # Doubled on the wire, single when read: a literal question mark.
+        self.assertIn("??\u00f3d??", text)
+        self.assertEqual(elements[5], "?\u00f3d?")
+
+    def test_every_document_that_names_this_partner_is_the_same(self):
+        # Not the DESADV: its delivery party is the order's ship-to, which
+        # this fixture sets to a German warehouse, so the Polish address is
+        # not in it to be mangled.
+        self.order()
+        self.post("/_mock/advance?all")
+        for code in ("ORDRSP", "INVOIC"):
+            with self.subTest(code=code):
+                _text, elements = self.nad(code)
+                self.assertEqual(len(elements), 9)
+                self.assertEqual(elements[8], "PL")
+
+    def test_the_bytes_are_the_charset_the_envelope_declares(self):
+        self.order()
+        body = self.collected("POLDIS", "ORDRSP")
+        self.assertIn(b"UNB+UNOC", body)
+        # Nothing is left for the encoder to replace: the document already
+        # holds only what UNOC can carry, so a strict encode of it succeeds.
+        body.decode("iso-8859-1").encode("iso-8859-1")
+
+    def test_a_name_the_charset_does_carry_is_untouched(self):
+        # The guard on the substitution: ó survives, and so does Müller.
+        self.order()
+        _text, elements = self.nad()
+        self.assertIn("\u00f3", elements[5])
 
 
 class Utf8Edifact(CharsetCase):

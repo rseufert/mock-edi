@@ -754,6 +754,34 @@ class TheEndpoint(MockServerCase):
         _s, _h, data = self.get("/_mock/dictionary/X12/999")
         self.assertIn("error", data)
 
+    def test_what_is_not_there_is_a_404(self):
+        # A 200 whose body said "error" was taken for the dictionary by any
+        # client that checked the status and nothing else (#207).
+        for path, fragment in (
+                ("/_mock/dictionary/X12/999", "no transaction set X12/999"),
+                ("/_mock/dictionary/X12/850?version=003050", "version 003050"),
+                ("/_mock/dictionary/X12/envelope?version=003050", "version 003050"),
+                ("/_mock/dictionary/KLINGON", "no dialect KLINGON"),
+                ("/_mock/dictionary/KLINGON/850", "no dialect KLINGON"),
+                ("/_mock/dictionary/KLINGON/envelope", "no dialect KLINGON"),
+                ("/_mock/dictionary/EDIFACT/850", "no transaction set EDIFACT/850")):
+            with self.subTest(path=path):
+                status, _h, data = self.get(path)
+                self.assertEqual(status, 404, data)
+                self.assertEqual(set(data), {"error"})
+                self.assertIn(fragment, data["error"])
+
+    def test_what_is_there_is_still_a_200(self):
+        for path in ("/_mock/dictionary", "/_mock/dictionary/X12",
+                     "/_mock/dictionary/edifact", "/_mock/dictionary/X12/850",
+                     "/_mock/dictionary/x12/850?version=005010",
+                     "/_mock/dictionary/EDIFACT/envelope",
+                     "/_mock/dictionary/X12/850?partner=ACME"):
+            with self.subTest(path=path):
+                status, _h, data = self.get(path)
+                self.assertEqual(status, 200, data)
+                self.assertNotIn("error", data)
+
 
 SEGMENT_KEYS = {"tag", "name", "requirement", "maxUse", "loop", "purpose",
                 "width", "checkedTo", "elements"}
@@ -845,7 +873,7 @@ class TheEnvelope(MockServerCase):
 
     def test_a_version_is_taken_as_it_is_for_a_set(self):
         _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=005010")
-        self.assertEqual(data["setVersion"], "005010")
+        self.assertEqual(data["version"], "005010")
         _s, _h, data = self.get("/_mock/dictionary/X12/envelope?version=003040")
         self.assertIn("error", data)
 
@@ -956,17 +984,27 @@ class TheEnvelopesOwnNumbers(MockServerCase):
                     self.assertEqual(segment["maxUse"],
                                      schema.MANY if segment["tag"] in repeating else 1)
 
-    def test_its_version_is_the_envelopes_own_and_not_the_sets(self):
-        # ISA12 for X12; for EDIFACT the syntax version in UNB, which is not
-        # the directory its messages are in.
-        for path, version, sets in (
-                ("/_mock/dictionary/X12/envelope", "00401", "004010"),
-                ("/_mock/dictionary/X12/envelope?version=005010", "00501", "005010"),
-                ("/_mock/dictionary/EDIFACT/envelope", "3", "D:96A:UN")):
+    def test_the_envelopes_own_version_sits_beside_the_sets(self):
+        # `version` is the sets' version, as 0.7.0 serves it, and does not
+        # change. `envelopeVersion` is new: ISA12 for X12, and for EDIFACT
+        # the syntax version in UNB, which is not the directory its messages
+        # are in.
+        for path, sets, own in (
+                ("/_mock/dictionary/X12/envelope", "004010", "00401"),
+                ("/_mock/dictionary/X12/envelope?version=005010", "005010", "00501"),
+                ("/_mock/dictionary/EDIFACT/envelope", "D:96A:UN", "3")):
             with self.subTest(path=path):
                 _s, _h, data = self.get(path)
-                self.assertEqual((data["version"], data["setVersion"]),
-                                 (version, sets))
+                self.assertEqual((data["version"], data["envelopeVersion"]),
+                                 (sets, own))
+                self.assertNotIn("setVersion", data)
+
+    def test_the_envelope_entry_keeps_every_key_it_was_released_with(self):
+        for dialect in schema.DIALECTS:
+            _s, _h, data = self.get("/_mock/dictionary/%s/envelope" % dialect)
+            self.assertEqual(set(data), {"dialect", "code", "name", "purpose",
+                                         "version", "segments",
+                                         "envelopeVersion"})
 
 
 class AVersionWithAnIndustrySuffix(MockServerCase):
@@ -983,8 +1021,10 @@ class AVersionWithAnIndustrySuffix(MockServerCase):
                 status, _h, envelope = self.get(
                     "/_mock/dictionary/X12/envelope?version=" + asked)
                 self.assertEqual(status, 200, envelope)
-                self.assertEqual((envelope["version"], envelope["setVersion"]),
-                                 (own, sets))
+                # `version` echoes what was asked, as it did before this
+                # change; the envelope's own is worked out from its base.
+                self.assertEqual((envelope["version"], envelope["envelopeVersion"]),
+                                 (asked, own))
                 status, _h, one = self.get(
                     "/_mock/dictionary/X12/850?version=" + asked)
                 self.assertEqual((status, one["version"]), (200, sets))
@@ -993,7 +1033,8 @@ class AVersionWithAnIndustrySuffix(MockServerCase):
         status, _h, data = self.get(
             "/_mock/dictionary/EDIFACT/envelope?version=D:96A:UN")
         self.assertEqual(status, 200, data)
-        self.assertEqual((data["version"], data["setVersion"]), ("3", "D:96A:UN"))
+        self.assertEqual((data["version"], data["envelopeVersion"]),
+                         ("D:96A:UN", "3"))
 
     def test_no_version_any_set_accepts_is_a_500_for_the_envelope(self):
         for dialect, versions in schema.VERSIONS.items():
