@@ -366,6 +366,10 @@ curl -X PATCH -H 'Content-Type: application/json' \
      http://127.0.0.1:8080/_mock/partners/ACME
 ```
 
+`POST /_mock/partners` adds a partner and only ever adds one: for an id that
+is already there it answers 409 and changes nothing. `PATCH` is how an
+existing partner is changed, and it changes only the fields it is given.
+
 A partner is refused anything the mock could not then act on: an unknown
 field is named rather than dropped, a `version` has to match the dialect
 (`004010` or `D:96A:UN`), `test` is a flag, `as2_url` needs a scheme the

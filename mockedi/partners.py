@@ -107,6 +107,23 @@ class Invalid(ValueError):
     """A partner field the mock would not be able to act on."""
 
 
+class Exists(Exception):
+    """A partner was created under an id that is already taken.
+
+    Not a `ValueError`: nothing in what was sent is wrong, and the answer is
+    a 409 rather than the 400 a bad field gets. Creating over a partner used
+    to replace it, which went round every refusal `update` makes and reset
+    each field the caller had not repeated (#204).
+    """
+
+    def __init__(self, identifier: str):
+        super().__init__(
+            "partner %s already exists, and POST only creates: to change it, "
+            "PATCH /_mock/partners/%s with the fields that should change"
+            % (identifier, identifier))
+        self.identifier = identifier
+
+
 def _known_fields() -> str:
     return ", ".join(sorted(FIELDS))
 
@@ -280,7 +297,14 @@ def listing(conn: sqlite3.Connection) -> List[Dict[str, Any]]:
 
 def create(conn: sqlite3.Connection, identifier: str, name: str = "",
            **fields: Any) -> Dict[str, Any]:
-    """Register a partner, refusing anything the mock could not then act on."""
+    """Register a partner, refusing anything the mock could not then act on.
+
+    Only ever a new one. An id that is taken is refused before the fields are
+    looked at, so a caller is not walked through fixing a body that was never
+    going to be accepted.
+    """
+    if get(conn, identifier) is not None:
+        raise Exists(identifier)
     given = dict(fields)
     if name:
         given["name"] = name
@@ -295,7 +319,7 @@ def create(conn: sqlite3.Connection, identifier: str, name: str = "",
 
     keys = ["id"] + sorted(columns)
     values = [identifier] + [columns[k] for k in sorted(columns)]
-    conn.execute("INSERT OR REPLACE INTO partner (%s) VALUES (%s)"
+    conn.execute("INSERT INTO partner (%s) VALUES (%s)"
                  % (", ".join(keys), ", ".join("?" * len(keys))), values)
     conn.commit()
     return require(conn, identifier)
