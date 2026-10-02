@@ -165,6 +165,19 @@ def limit(query: Dict[str, List[str]], default: int = 50) -> int:
     return max(1, min(1000, value))
 
 
+def only(query: Dict[str, List[str]], *names: str) -> None:
+    """Refuse a query parameter the endpoint does not take.
+
+    One that is ignored reads as one that worked: `advance?days=30` answered
+    200 and moved nothing (#203). The first unknown name is the one reported,
+    in the order a caller would look for it.
+    """
+    unknown = sorted(name for name in query if name not in names)
+    if unknown:
+        raise BadQuery(unknown[0], "%r is not a parameter here; this takes %s"
+                       % (unknown[0], ", ".join(names)))
+
+
 def json_body(body: bytes) -> Dict[str, Any]:
     if not body:
         return {}

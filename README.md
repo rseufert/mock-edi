@@ -452,7 +452,10 @@ where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
 It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
 that would take it further is a 400 that says how much room is left, and
-leaves the clock where it was.
+leaves the clock where it was. A parameter the endpoint does not take is a
+400 as well, naming the ones it does - `seconds`, `all`, `failed`, and
+`partner` with `failed` - so `?days=30` is refused and told what it is in
+seconds, where it used to answer 200 and move nothing.
 
 ## AS2
 
