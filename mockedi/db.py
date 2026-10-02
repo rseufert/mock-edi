@@ -739,6 +739,30 @@ def wall_now() -> str:
     return stamp(utcnow())
 
 
+def json_kind(value) -> str:
+    """What a JSON value is, in the words a refusal uses: "a list", "null".
+
+    For telling a client which type it sent where another was wanted (#207).
+    `bool` before the numbers: in Python, `True` is an `int`.
+
+    It lives here, and not with the routes that answer the 400, because
+    `partners` and `documents` need it too and neither may import `routes`.
+    """
+    if value is None:
+        return "null"
+    if isinstance(value, bool):
+        return "true or false"
+    if isinstance(value, (int, float)):
+        return "a number"
+    if isinstance(value, str):
+        return "a string"
+    if isinstance(value, list):
+        return "a list"
+    if isinstance(value, dict):
+        return "an object"
+    return type(value).__name__
+
+
 def money(value) -> str:
     """Two decimal places, always - the shape every monetary column is stored in."""
     return str(cents(value))

@@ -36,7 +36,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import db, delivery, drop, pipeline, routes
-from .routes import BadQuery
+from .routes import BadBody, BadQuery
 from .routes import split as _split
 
 JSON = "application/json; charset=utf-8"
@@ -375,6 +375,8 @@ class Handler(BaseHTTPRequestHandler):
         except BadQuery as error:
             status, written = self.json(400, {"error": str(error),
                                                "parameter": error.parameter})
+        except BadBody as error:
+            status, written = self.json(400, {"error": str(error)})
         except Exception as error:       # pragma: no cover - last resort
             # A bug, then, and the one place it can be seen: the access log
             # has only the status line, so the traceback goes to stderr.

@@ -202,7 +202,7 @@ Both are walked through, test by test, in
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
-| Send out of band | `POST /_mock/send` — replay an invoice, or send one unprompted |
+| Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
 | Buying | `POST /_mock/purchase`, `POST /_mock/purchase/<po>/change` |
@@ -257,7 +257,8 @@ to no set, so it is served once for each dialect: `GET
 each described as any other segment is, in the order they are on the wire,
 with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
 or `advice` for `UNA`). Every set's entry names its envelope's path, so the
-whole of one interchange can be read from two requests.
+whole of one interchange can be read from two requests. A set, version or
+dialect the mock does not have is a 404 saying which.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
 is read against the version its group's `GS08` names — an industry suffix such
@@ -411,6 +412,12 @@ curl -X PATCH -H 'Content-Type: application/json' \
 `POST /_mock/partners` adds a partner and only ever adds one: for an id that
 is already there it answers 409 and changes nothing. `PATCH` is how an
 existing partner is changed, and it changes only the fields it is given.
+
+A body of the wrong shape is the caller's mistake and is answered as one: a
+`null`, a list or a number where a field is text, a line that is not an
+object, or a body that is not a JSON object at all, is a 400 that names the
+field and says what it was given - `id must be a string, not a number` - on
+`/_mock/partners`, `/_mock/purchase` and `/_mock/send` alike.
 
 A partner is refused anything the mock could not then act on: an unknown
 field is named rather than dropped, a `version` has to match the dialect
