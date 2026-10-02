@@ -31,12 +31,11 @@ suite's own harness move onto this without touching a single test.
 """
 from __future__ import annotations
 
+import http.client
 import json
 import threading
 import time
-import urllib.error
 import urllib.parse
-import urllib.request
 from typing import Any, Dict, List, NamedTuple, Optional
 
 X12 = "application/edi-x12"
@@ -151,14 +150,43 @@ class Document:
                                      ",".join(self.interchange.codes()))
 
 
+# What a kept connection raises when the server has hung up on it: closed
+# while idle, or after an answer that said `Connection: close` was not read
+# as one. `RemoteDisconnected` is both a `ConnectionError` and a
+# `BadStatusLine`; the improper states are `http.client` noticing the
+# connection is not where a new request can start.
+_HUNG_UP = (ConnectionError, http.client.BadStatusLine,
+            http.client.ImproperConnectionState)
+
+# `urllib` gave a body this type when the caller named none, and the mock has
+# always been sent it. Kept, so that keeping the connection changes nothing
+# the server sees.
+_UNNAMED_BODY = "application/x-www-form-urlencoded"
+
+
 class Mock:
-    """A mock, over HTTP, whether or not this process is running it."""
+    """A mock, over HTTP, whether or not this process is running it.
+
+    It keeps its connection. The mock speaks HTTP/1.1 and leaves a
+    connection open; a client that opened one for every request left a
+    socket in `TIME_WAIT` each time, and a suite of a few thousand requests
+    run twice in a row used every ephemeral port the host had (#220). There
+    is one connection for each thread that uses the client, because a
+    connection cannot be shared between two, and `close()` closes them.
+    """
 
     def __init__(self, base: str = "http://127.0.0.1:8080",
                  timeout: float = TIMEOUT):
         self.base = base.rstrip("/")
         self.timeout = timeout
         self._httpd = None
+        self._url = urllib.parse.urlsplit(self.base)
+        self._local = threading.local()
+        self._kept: List[http.client.HTTPConnection] = []
+        self._guard = threading.Lock()
+        # How many times a socket was opened, over the client's life. A test
+        # of the client reads it; nothing else does.
+        self.connections_opened = 0
 
     # -- lifecycle
 
@@ -185,6 +213,9 @@ class Mock:
         return self._httpd
 
     def close(self) -> None:
+        # The connections first: a handler thread serving one would otherwise
+        # outlive the server it belongs to, waiting for a request.
+        self.disconnect()
         if self._httpd is not None:
             self._httpd.shutdown()
             self._httpd.server_close()
@@ -201,29 +232,74 @@ class Mock:
     def request(self, method: str, path: str, body: Any = None,
                 headers: Optional[Dict[str, str]] = None,
                 raw: bool = False) -> Response:
-        """One request. Never raises for a status: the caller decides."""
+        """One request. Never raises for a status: the caller decides.
+
+        It does raise when the mock cannot be reached or does not answer in
+        time, with the `OSError` that says which.
+
+        A connection the server has closed since it was last used - it drops
+        an idle one after `--request-timeout`, and closes after some refusals
+        - is reopened and the request sent again, once. Only then: a failure
+        on a connection just opened is the mock being down, and is raised.
+        """
         data = body
         if isinstance(data, (dict, list)):
             data = json.dumps(data).encode()
         elif isinstance(data, str):
             data = data.encode()
-        request = urllib.request.Request(
-            self.base + path.replace(" ", "%20"), data=data, method=method)
-        for name, value in (headers or {}).items():
-            request.add_header(name, value)
-        try:
-            with urllib.request.urlopen(request, timeout=self.timeout) as reply:
+        sent = dict(headers or {})
+        if data is not None and not any(name.lower() == "content-type"
+                                        for name in sent):
+            sent["Content-Type"] = _UNNAMED_BODY
+        target = (self._url.path + path).replace(" ", "%20")
+        while True:
+            connection = self._connection()
+            reused = connection.sock is not None
+            try:
+                connection.request(method, target, body=data, headers=sent)
+                reply = connection.getresponse()
                 payload = reply.read()
-                return Response(reply.status, dict(reply.headers),
-                                payload if raw else _maybe_json(payload))
-        except urllib.error.HTTPError as error:
-            # Read *and* close: an unclosed HTTPError leaves a temporary file
-            # behind, and a test that expects a 4xx should not also produce a
-            # ResourceWarning.
-            with error:
-                payload = error.read()
-            return Response(error.code, dict(error.headers),
+            except _HUNG_UP:
+                connection.close()
+                if reused:
+                    continue        # the next pass opens a new one, and is not `reused`
+                raise
+            except BaseException:
+                # A timeout, or anything else: the connection is in no state
+                # to carry another request.
+                connection.close()
+                raise
+            return Response(reply.status, dict(reply.getheaders()),
                             payload if raw else _maybe_json(payload))
+
+    def _connection(self) -> http.client.HTTPConnection:
+        """This thread's connection, made the first time it is asked for."""
+        connection = getattr(self._local, "connection", None)
+        if connection is None:
+            secure = self._url.scheme == "https"
+            kind = _SecureConnection if secure else _Connection
+            connection = kind(self._url.hostname,
+                              self._url.port or (443 if secure else 80),
+                              timeout=self.timeout)
+            connection.owner = self
+            self._local.connection = connection
+            with self._guard:
+                self._kept.append(connection)
+        return connection
+
+    def disconnect(self) -> None:
+        """Close every connection this client holds. The next request opens one."""
+        with self._guard:
+            kept, self._kept = self._kept, []
+        for connection in kept:
+            connection.close()
+        self._local = threading.local()
+
+    def __del__(self) -> None:
+        try:
+            self.disconnect()
+        except Exception:       # pragma: no cover - interpreter shutdown
+            pass
 
     def get(self, path: str, **kw) -> Response:
         return self.request("GET", path, **kw)
@@ -445,6 +521,27 @@ class Mock:
                         {"error": "still undelivered after %gs: %s"
                                   % (timeout, [(r["code"], r["status"])
                                                for r in rows])})
+
+
+class _Connection(http.client.HTTPConnection):
+    """A connection that tells its client each time it opens a socket."""
+    owner: Any = None
+
+    def connect(self) -> None:
+        super().connect()
+        if self.owner is not None:
+            with self.owner._guard:
+                self.owner.connections_opened += 1
+
+
+class _SecureConnection(http.client.HTTPSConnection):
+    owner: Any = None
+
+    def connect(self) -> None:
+        super().connect()
+        if self.owner is not None:
+            with self.owner._guard:
+                self.owner.connections_opened += 1
 
 
 def _query(**parameters) -> str:
