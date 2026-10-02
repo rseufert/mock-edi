@@ -24,6 +24,7 @@ import datetime
 import hmac
 import json
 import random
+import socket
 import socketserver
 import sqlite3
 import sys
@@ -253,11 +254,30 @@ class Handler(BaseHTTPRequestHandler):
     server_version = "mock-edi"
     protocol_version = "HTTP/1.1"
 
+    # Whether a request has been read and is being answered, as opposed to
+    # the connection being kept open and waiting for one.
+    answering = False
+
     def setup(self) -> None:
         # A socket timeout, so a client that sends headers and then nothing
         # is let go of rather than holding a thread for as long as it likes.
         self.timeout = self.server.mock.config.request_timeout or None
         super().setup()
+        self.server.connected(self)
+
+    def finish(self) -> None:
+        self.server.disconnected(self)
+        super().finish()
+
+    def parse_request(self) -> bool:
+        self.answering = super().parse_request()
+        return self.answering
+
+    def handle_one_request(self) -> None:
+        try:
+            super().handle_one_request()
+        finally:
+            self.answering = False
 
     # -- plumbing
 
@@ -607,6 +627,13 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
     allow_reuse_address = True
     mock: Mock
 
+    def __init__(self, *args, **kwargs):
+        # Before the bind, which can fail and call `server_close`.
+        self._open: set = set()
+        self._open_guard = threading.Lock()
+        self._stopping = False
+        super().__init__(*args, **kwargs)
+
     def server_bind(self):
         # HTTPServer.server_bind reverse-resolves the address it just bound to
         # fill in `server_name`. Nothing here reads it, and on a host whose
@@ -620,6 +647,51 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
         self.server_name = host
         self.server_port = port
 
+    def connected(self, handler) -> None:
+        with self._open_guard:
+            self._open.add(handler)
+
+    def disconnected(self, handler) -> None:
+        with self._open_guard:
+            self._open.discard(handler)
+
+    def hang_up(self) -> None:
+        """Let go of every connection a client has kept open.
+
+        The mock speaks HTTP/1.1 and keeps a connection for as long as its
+        client does, each on a thread of its own. Stopping the listener does
+        not stop those threads: a client holding a connection went on being
+        answered by a mock that had closed its database (#220). One waiting
+        for a request is closed now. One in the middle of answering is left
+        to finish and told to close afterwards - nearly always: `answering`
+        is read without a lock, so a request that arrives in the instant
+        between the look and the close is cut off. The mock is stopping, and
+        a lock on every request would be a high price for that instant.
+
+        On Windows a thread already waiting in `recv` is not woken by this;
+        its client is refused all the same when it next speaks, and the
+        thread goes then, or when the client closes or the request timeout
+        runs out.
+        """
+        self._stopping = True
+        with self._open_guard:
+            handlers = list(self._open)
+        for handler in handlers:
+            handler.close_connection = True
+            if not handler.answering:
+                try:
+                    handler.connection.shutdown(socket.SHUT_RDWR)
+                except OSError:
+                    pass            # already gone
+
+    def handle_error(self, request, client_address):
+        # A connection this server closed on its way down breaks under the
+        # handler that was waiting on it. That is the hang-up working, not a
+        # fault to print a traceback for.
+        if self._stopping and isinstance(sys.exc_info()[1], OSError):
+            return
+        super().handle_error(request, client_address)
+
     def server_close(self):
         # `socketserver` calls this from its own constructor when binding
         # fails, before `make_server` has attached the mock - so asking for
@@ -627,6 +699,7 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
         # AttributeError and hide the actual problem.
         mock = getattr(self, "mock", None)
         try:
+            self.hang_up()
             if mock is not None:
                 mock.close()
         finally:

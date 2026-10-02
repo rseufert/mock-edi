@@ -250,5 +250,147 @@ class TheQueryBuilder(unittest.TestCase):
         self.assertEqual(_query(**{"older-than": 0}), "?older-than=0")
 
 
+class TheClientKeepsItsConnection(unittest.TestCase):
+    """One socket for a client's requests, not one for each (#220).
+
+    A socket closed after every request sits in `TIME_WAIT` for the best part
+    of a minute. The suite makes several thousand requests, and two runs in a
+    row used every ephemeral port the host had; what failed then was
+    everything, with nothing pointing here.
+    """
+
+    def test_a_few_hundred_requests_open_one_connection(self):
+        with Mock.start() as mock:
+            for number in range(300):
+                self.assertEqual(mock.get("/_mock/health").status, 200)
+            mock.post("/edi", x12_order("PO-KEPT-1"),
+                      headers={"Content-Type": "application/edi-x12"})
+            mock.patch("/_mock/partners/ACME", {"behaviour": "accept"})
+            self.assertEqual(mock.get("/_mock/nothing").status, 404)
+            self.assertEqual(mock.request("HEAD", "/_mock/health").status, 200)
+            self.assertEqual(mock.connections_opened, 1)
+
+    def test_a_connection_the_server_let_go_of_is_reopened_unseen(self):
+        # The server drops a connection that has been idle for longer than
+        # --request-timeout. The next request finds it gone, and goes again.
+        with Mock.start(request_timeout=0.2) as mock:
+            self.assertEqual(mock.get("/_mock/health").status, 200)
+            import time
+            time.sleep(0.6)
+            reply = mock.post("/edi", x12_order("PO-KEPT-2"),
+                              headers={"Content-Type": "application/edi-x12"})
+            self.assertEqual(reply.status, 200)
+            self.assertEqual(reply.body["orders"], ["PO-KEPT-2"])
+            self.assertEqual(mock.connections_opened, 2)
+            # Sent once and acted on once, not once per attempt.
+            self.assertEqual(len(mock.get("/_mock/orders").body), 3)
+
+    def test_a_connection_that_breaks_while_an_answer_is_read_is_not_sent_again(self):
+        # From Eddie's review of this change. Once a status line has arrived
+        # the mock has acted on the request; sending it again advanced the
+        # clock by 120 seconds for one call that asked for 60.
+        import http.client
+        real = http.client.HTTPResponse.read
+        broken = []
+
+        def read(response, *args):
+            if not broken:
+                broken.append(True)
+                raise ConnectionResetError("reset while reading the answer")
+            return real(response, *args)
+
+        with Mock.start() as mock:
+            mock.get("/_mock/health")           # so the connection is a reused one
+            http.client.HTTPResponse.read = read
+            try:
+                with self.assertRaises(ConnectionResetError):
+                    mock.post("/_mock/advance?seconds=60")
+            finally:
+                http.client.HTTPResponse.read = real
+            moved = mock.post("/_mock/advance?seconds=0").body["advancedSeconds"]
+            self.assertAlmostEqual(moved, 60, delta=1)
+
+    def test_a_refusal_that_closes_the_connection_is_followed_by_an_answer(self):
+        # A body over --max-body is refused with `Connection: close`.
+        with Mock.start(max_body_bytes=64) as mock:
+            refused = mock.post("/edi", "X" * 200)
+            self.assertEqual(refused.status, 413)
+            self.assertEqual(mock.get("/_mock/health").status, 200)
+            self.assertEqual(mock.connections_opened, 2)
+
+    def test_each_thread_keeps_its_own(self):
+        import threading
+        with Mock.start() as mock:
+            mock.get("/_mock/health")
+            answers = []
+
+            def elsewhere():
+                for _ in range(20):
+                    answers.append(mock.get("/_mock/health").status)
+
+            thread = threading.Thread(target=elsewhere)
+            thread.start()
+            for _ in range(20):
+                answers.append(mock.get("/_mock/health").status)
+            thread.join()
+            self.assertEqual(answers, [200] * 40)
+            self.assertEqual(mock.connections_opened, 2)
+
+    def test_a_mock_that_is_not_there_raises_and_is_not_asked_twice(self):
+        mock = Mock("http://127.0.0.1:1", timeout=2.0)
+        with self.assertRaises(OSError):
+            mock.get("/_mock/health")
+        self.assertEqual(mock.connections_opened, 0)
+
+    def test_closing_leaves_no_connection_open(self):
+        mock = Mock.start()
+        mock.get("/_mock/health")
+        kept = list(mock._kept)
+        self.assertEqual(len(kept), 1)
+        mock.close()
+        self.assertIsNone(kept[0].sock)
+        self.assertEqual(mock._kept, [])
+
+    def test_a_base_with_a_path_in_front_keeps_it(self):
+        with Mock.start() as mock:
+            behind = Mock(mock.base + "/_mock")
+            self.addCleanup(behind.disconnect)
+            self.assertEqual(behind.get("/health").status, 200)
+
+
+class AStoppedMockAnswersNobody(unittest.TestCase):
+    """The server lets go of the connections its clients kept (#220)."""
+
+    def test_a_second_client_holding_a_connection_is_not_answered(self):
+        # It went on being answered - with a 500, the database having been
+        # closed - by a thread the stopped server had left serving it.
+        first = Mock.start()
+        second = Mock(first.base, timeout=2.0)
+        self.addCleanup(second.disconnect)
+        self.assertEqual(second.get("/_mock/health").status, 200)
+        first.close()
+        with self.assertRaises(OSError):
+            second.get("/_mock/health")
+
+    def test_no_handler_is_left_holding_a_connection(self):
+        mock = Mock.start()
+        server = mock.server
+        other = Mock(mock.base, timeout=2.0)
+        self.addCleanup(other.disconnect)
+        other.get("/_mock/health")
+        mock.get("/_mock/health")
+        self.assertEqual(len(server._open), 2)
+        mock.close()
+        if sys.platform == "win32":
+            # A thread already waiting in `recv` is not woken by the server's
+            # side closing there; it goes when its client does.
+            other.disconnect()
+        import time
+        deadline = time.time() + 2.0
+        while server._open and time.time() < deadline:
+            time.sleep(0.01)
+        self.assertEqual(len(server._open), 0)
+
+
 if __name__ == "__main__":
     unittest.main()
