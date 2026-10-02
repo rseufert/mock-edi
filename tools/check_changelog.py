@@ -256,6 +256,15 @@ def check_structure(text: str, pyproject: str):
             "paragraph saying why anyone should upgrade, and delete the two "
             "lines holding it" % INTRO_TODO)
 
+    missing = undefined_references(text)
+    if missing:
+        problems.append(
+            "%d issue reference(s) have no link definition at the foot of the "
+            "file, so they render as literal text: %s. A release adds them; "
+            "run `python tools/check_changelog.py --release <version>`, or add "
+            "the lines by hand if this is not a release."
+            % (len(missing), ", ".join("#" + number for number in missing)))
+
     declared = re.search(r'^version = "([^"]+)"', pyproject, re.M)
     if declared and ordered and declared.group(1) != ordered[0]:
         problems.append(
@@ -362,7 +371,7 @@ def assemble(text: str, version: str, waiting: Dict[str, str],
         out.append(line)
     if not placed:
         out.append("\n" + section)
-    return _relink("".join(out), version)
+    return _define_references(_relink("".join(out), version))
 
 
 def _fragment_key(name: str):
@@ -380,6 +389,50 @@ def _fragment_key(name: str):
 
 def db_today() -> str:
     return datetime.date.today().isoformat()
+
+
+# A reference an entry uses, `[#44]`, against the definition at the foot of
+# the file that turns it into a link. The negative lookahead is what keeps a
+# definition from counting as a use of itself.
+REFERENCE = re.compile(r"\[#(\d+)\](?!:)")
+DEFINITION = re.compile(r"^\[#(\d+)\]:", re.M)
+ISSUE_URL = "https://github.com/rseufert/mock-edi/issues/%s"
+
+
+def undefined_references(text: str):
+    """The numbers the changelog links to and never defines, lowest first.
+
+    Eight of them had accumulated by 0.6.0, so the released section rendered
+    `[#181]` as that literal text (#226). The rule asked every author to add
+    the definition by hand at the foot of `CHANGELOG.md` - the one shared line
+    range that `changelog.d/` exists to keep people out of - so following it
+    brought back the conflicts it was meant to end. Nobody followed it and
+    nothing noticed.
+    """
+    defined = set(DEFINITION.findall(text))
+    return sorted({number for number in REFERENCE.findall(text)
+                   if number not in defined}, key=int)
+
+
+def _define_references(text: str) -> str:
+    """Every reference the text uses given a definition, if it lacks one.
+
+    The new lines go at the end of the issue links, before the version links
+    that close the file, which is where the existing ones sit. A release does
+    this so that an author never has to.
+    """
+    missing = undefined_references(text)
+    if not missing:
+        return text
+    lines = text.splitlines(keepends=True)
+    where = len(lines)
+    for index, line in enumerate(lines):
+        found = LINK.match(line)
+        if found and not found.group(1).startswith("#"):
+            where = index       # the version links; they end the block
+            break
+    added = ["[#%s]: %s\n" % (number, ISSUE_URL % number) for number in missing]
+    return "".join(lines[:where] + added + lines[where:])
 
 
 def _relink(text: str, version: str) -> str:

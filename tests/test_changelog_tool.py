@@ -247,10 +247,6 @@ class TheRealReleaseRoundTrips(unittest.TestCase):
                          re.findall(r"^### (\w+)", self.body, flags=re.M))
 
 
-if __name__ == "__main__":
-    unittest.main()
-
-
 class TheMergeCommitAPushCameFrom(unittest.TestCase):
     """Reading a pull request number off a merge subject (#193).
 
@@ -322,3 +318,75 @@ class TheMergeCommitAPushCameFrom(unittest.TestCase):
         finally:
             sys.argv = argv
         self.assertEqual((code, said.getvalue()), (0, ""))
+
+
+class AReferenceNeedsADefinition(unittest.TestCase):
+    """`[#44]` is only a link if the foot of the file says what it points at.
+
+    Eight had gone unlinked by 0.6.0, rendering as that literal text, because
+    the rule asked every author to edit the one shared line range that
+    `changelog.d/` exists to keep them out of (#226). The release writes them
+    now and the check refuses a reference without one, so neither drifts.
+    """
+
+    MISSING = CHANGELOG.replace("- Something was wrong ([#1]).",
+                                "- Something was wrong ([#1]).\n"
+                                "- And something else ([#44]).")
+
+    def test_a_number_used_and_never_defined_is_found(self):
+        self.assertEqual(tool.undefined_references(self.MISSING), ["44"])
+
+    def test_a_definition_is_not_read_as_a_use_of_itself(self):
+        # `[#1]: https://…` must not make #1 look used-but-undefined; the
+        # negative lookahead in REFERENCE is the whole reason that holds.
+        self.assertEqual(tool.undefined_references(CHANGELOG), [])
+
+    def test_they_come_back_in_number_order_not_string_order(self):
+        text = self.MISSING.replace("([#44])", "([#44]) and ([#7]) and ([#300])")
+        self.assertEqual(tool.undefined_references(text), ["7", "44", "300"])
+
+    def test_the_check_refuses_them_and_names_them(self):
+        problems = tool.check_structure(self.MISSING, PYPROJECT)
+        named = [p for p in problems if "#44" in p]
+        self.assertEqual(len(named), 1, problems)
+        self.assertIn("no link definition", named[0])
+
+    def test_defining_them_writes_one_line_each_for_the_issue(self):
+        fixed = tool._define_references(self.MISSING)
+        self.assertIn("[#44]: https://github.com/rseufert/mock-edi/issues/44",
+                      fixed)
+        self.assertEqual(tool.undefined_references(fixed), [])
+
+    def test_and_puts_them_before_the_version_links(self):
+        fixed = tool._define_references(self.MISSING)
+        lines = fixed.splitlines()
+        self.assertLess(lines.index("[#44]: https://github.com/rseufert/"
+                                    "mock-edi/issues/44"),
+                        lines.index("[Unreleased]: https://example.test"
+                                    "/compare/v1.2.3...HEAD"))
+
+    def test_defining_them_changes_nothing_when_none_are_missing(self):
+        self.assertEqual(tool._define_references(CHANGELOG), CHANGELOG)
+
+    def test_a_release_defines_every_reference_its_section_introduces(self):
+        """The property that lets the check be enforced at all.
+
+        If the release did not write these, the first release after this
+        change would be refused by the mock's own tooling.
+        """
+        waiting = {"44.fixed.md": "- **A thing** ([#44]).\n",
+                   "77.added.md": "- **Another** ([#77]), see also [#44].\n"}
+        assembled = tool.assemble(CHANGELOG, "1.3.0", waiting,
+                                  today="2026-02-03")
+        self.assertEqual(tool.undefined_references(assembled), [])
+        self.assertIn("[#77]: https://github.com/rseufert/mock-edi/issues/77",
+                      assembled)
+
+    def test_the_real_changelog_defines_every_reference_it_uses(self):
+        """The regression guard, on the file people actually read."""
+        self.assertEqual(tool.undefined_references(tool._read(tool.CHANGELOG)),
+                         [])
+
+
+if __name__ == "__main__":
+    unittest.main()
