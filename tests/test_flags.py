@@ -66,6 +66,71 @@ class TheCommandLine(unittest.TestCase):
             max_body_bytes=1024, request_timeout=2.5))
 
 
+class TheTaxRate(unittest.TestCase):
+    """`--tax-rate abc` was accepted, and the first invoice was a 500 (#207)."""
+
+    def refused(self, value):
+        import contextlib
+        import io
+        said = io.StringIO()
+        with contextlib.redirect_stderr(said):
+            with self.assertRaises(SystemExit) as stopped:
+                build_parser().parse_args(["--tax-rate", value])
+        self.assertEqual(stopped.exception.code, 2)
+        self.assertIn("--tax-rate", said.getvalue())
+        return said.getvalue()
+
+    def test_something_that_is_not_a_number(self):
+        self.assertIn("not a number", self.refused("abc"))
+        self.assertIn("not a number", self.refused(""))
+
+    def test_a_number_that_cannot_be_a_rate(self):
+        self.assertIn("finite", self.refused("nan"))
+        self.assertIn("finite", self.refused("inf"))
+        self.assertIn("negative", self.refused("-0.05"))
+
+    def test_a_percentage_where_a_fraction_belongs(self):
+        # 8.25 is 825%. Nobody means that, and it used to be billed.
+        self.assertIn("0.0825 for 8.25%", self.refused("8.25"))
+
+    def test_a_rate_is_kept_as_it_was_typed(self):
+        for value in ("0", "0.0825", "1", ".05"):
+            with self.subTest(value=value):
+                args = build_parser().parse_args(["--tax-rate", value])
+                self.assertEqual(config_from_args(args).tax_rate, value)
+
+    def test_a_config_built_in_code_is_held_to_the_same(self):
+        from mockedi.server import make_server
+        for value in ("abc", "8.25", "-1"):
+            with self.subTest(value=value):
+                with self.assertRaises(ValueError) as refused:
+                    make_server(Config(port=0, db_path=":memory:", tax_rate=value))
+                self.assertIn("tax rate", str(refused.exception))
+
+    def test_main_says_so_and_does_not_start(self):
+        import contextlib
+        import io
+        from mockedi import __main__ as cli
+        from unittest import mock
+        said = io.StringIO()
+        real = cli.make_server
+
+        def must_refuse(config):
+            # If it starts, `main` would serve for ever and this test with
+            # it: close what was opened and fail here.
+            real(config).server_close()
+            raise AssertionError("the mock started with tax_rate %r"
+                                 % config.tax_rate)
+
+        with mock.patch.object(cli, "config_from_args",
+                               return_value=Config(port=0, db_path=":memory:",
+                                                   tax_rate="abc")), \
+                mock.patch.object(cli, "make_server", must_refuse):
+            with contextlib.redirect_stderr(said):
+                self.assertEqual(cli.main([]), 2)
+        self.assertIn("tax rate", said.getvalue())
+
+
 class AddressedToSomeoneElse(MockServerCase):
     def test_it_is_refused_by_default(self):
         status, _h, data = self.post(

@@ -31,6 +31,7 @@ import threading
 import time
 import traceback
 from dataclasses import dataclass, field
+from decimal import Decimal
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -501,13 +502,28 @@ class Handler(BaseHTTPRequestHandler):
         if not header.startswith("Basic "):
             return False
         try:
-            decoded = base64.b64decode(header[6:]).decode("utf-8")
+            given = base64.b64decode(header[6:])
         except Exception:
             return False
-        # Constant time, so that the comparison does not leak how much of the
-        # credential was right. This is a mock and the stakes are low, but the
-        # one-line version of the right answer costs nothing.
-        return hmac.compare_digest(decoded, self.config.basic_auth)
+        # As bytes. `compare_digest` on two `str` refuses anything outside
+        # ASCII, so a password with an umlaut made every request a 500, right
+        # or wrong, and so did a wrong attempt with one against an ASCII
+        # password (#207). A client is free to send the credential as UTF-8
+        # or as Latin-1 - Basic authentication never said which - so both
+        # spellings of the right one are accepted.
+        #
+        # Constant time, and both comparisons made whatever the first says,
+        # so that neither leaks how much of the credential was right. This
+        # is a mock and the stakes are low, but the right answer costs
+        # nothing.
+        matched = False
+        for encoding in ("utf-8", "latin-1"):
+            try:
+                expected = self.config.basic_auth.encode(encoding)
+            except UnicodeEncodeError:
+                continue
+            matched = hmac.compare_digest(given, expected) or matched
+        return matched
 
     def _challenge(self) -> Tuple[int, int]:
         self._log_before_answering(401, 0)
@@ -617,8 +633,34 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
             HTTPServer.server_close(self)
 
 
+def tax_rate_problem(value: Any) -> str:
+    """What is wrong with a tax rate, or "" when it can be used.
+
+    A fraction, as text: 0.0825 is 8.25%. `abc` used to be accepted at
+    startup and to fail the first invoice with a 500 (#207), and a rate
+    typed as a percentage - 8.25 - would have billed 825% without a word.
+    """
+    try:
+        rate = Decimal(str(value))
+    except ArithmeticError:
+        return "%r is not a number; give a fraction such as 0.0825" % (value,)
+    if not rate.is_finite():
+        return "%r is not a finite number" % (value,)
+    if rate < 0:
+        return "%s is negative; a tax rate is 0 or more" % value
+    if rate > 1:
+        return ("%s is more than 1; give the rate as a fraction, 0.0825 for "
+                "8.25%%" % value)
+    return ""
+
+
 def make_server(config: Config) -> _Server:
     """Build a server. It is not listening until `serve_forever` is called."""
+    problem = tax_rate_problem(config.tax_rate)
+    if problem:
+        # Before the port is taken: a mock that starts and then cannot write
+        # an invoice is worse than one that does not start.
+        raise ValueError("tax rate %s" % problem)
     httpd = _Server((config.host, config.port), Handler)
     try:
         httpd.mock = Mock(config)

@@ -8,7 +8,15 @@ import sys
 
 from . import __version__, db
 from .partners import BEHAVIOUR_ROLES, BEHAVIOURS
-from .server import Config, make_server
+from .server import Config, make_server, tax_rate_problem
+
+
+def tax_rate(text: str) -> str:
+    """`--tax-rate`, checked where it is typed and kept as the text it was."""
+    problem = tax_rate_problem(text)
+    if problem:
+        raise argparse.ArgumentTypeError(problem)
+    return text
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -42,7 +50,7 @@ def build_parser() -> argparse.ArgumentParser:
                            default=0, metavar="MS", help="delay before the 856/DESADV")
     behaviour.add_argument("--invoice-delay", dest="invoice_delay_ms", type=int,
                            default=0, metavar="MS", help="delay before the 810/INVOIC")
-    behaviour.add_argument("--tax-rate", default="0",
+    behaviour.add_argument("--tax-rate", default="0", type=tax_rate,
                            help="tax applied to invoices, e.g. 0.0825 (default: 0)")
     behaviour.add_argument("--allow-duplicates", action="store_true",
                            help="accept an interchange control number a partner "
@@ -184,6 +192,9 @@ def main(argv=None) -> int:
               % (args.host, args.port, error), file=sys.stderr)
         return 2
     except db.DatabaseError as error:
+        print("mock-edi: %s" % error, file=sys.stderr)
+        return 2
+    except ValueError as error:
         print("mock-edi: %s" % error, file=sys.stderr)
         return 2
     except sqlite3.DatabaseError as error:
