@@ -177,4 +177,5 @@ def json_body(body: bytes) -> Dict[str, Any]:
 
 # Imported last, so that `route` and the helpers above exist when each module
 # asks for them. The order here is the order of the table.
-from . import transport, control, validate, index  # noqa: E402,F401
+from . import (transport, control, validate, orders, documents,  # noqa: E402,F401
+               partners, index)
