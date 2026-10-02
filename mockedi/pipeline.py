@@ -28,7 +28,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import (ack, charsets, claims, db, documents, edifact, partners,
                profiles, reconcile, remittance, schema, transactions, x12)
-from .envelope import EdiSyntaxError, Interchange, Seg, sniff
+from .envelope import EdiSyntaxError, Interchange, Seg, local, sniff
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
                        SegmentFinding, validate, validate_message)
@@ -335,7 +335,8 @@ class Pipeline:
                 # add up is a business finding, beside the 997 (#156).
                 message_report.disagreements.extend(remittance.record(
                     self.conn, partner, message, dialect, message_report.kind,
-                    interchange.control, today=self.now().date()))
+                    interchange.control,
+                    today=local(self.now()).date()))
             elif (message_report.kind == schema.ACKNOWLEDGMENT
                   and not message_report.envelope_rejected):
                 # A receipt for something the mock sent, rather than something
