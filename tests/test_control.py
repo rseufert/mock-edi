@@ -184,6 +184,76 @@ class TheClockMoves(MockServerCase):
         self.assertIn("negative", data["error"])
 
 
+class TheClockHasALimit(MockServerCase):
+    """A `seconds` the clock cannot hold is refused, and moves nothing (#203).
+
+    The offset used to be added to before anything checked that `now()` could
+    still be computed, so one oversized advance made every request after it a
+    500 until `/_mock/reset`.
+    """
+    LIMIT = 100 * 365 * 86400       # a hundred years of seconds
+
+    def advanced(self):
+        _s, _h, data = self.post("/_mock/advance?seconds=0")
+        return data["advancedSeconds"]
+
+    def test_more_than_the_clock_can_hold_is_refused_naming_the_limit(self):
+        for seconds in ("300000000000", "1e300", str(self.LIMIT + 1)):
+            with self.subTest(seconds=seconds):
+                status, _h, data = self.post("/_mock/advance?seconds=" + seconds)
+                self.assertEqual(status, 400, data)
+                self.assertEqual(data["parameter"], "seconds")
+                self.assertIn(str(self.LIMIT), data["error"])
+                self.assertIn("/_mock/reset", data["error"])
+
+    def test_a_refused_advance_leaves_the_clock_where_it_was(self):
+        self.post("/_mock/advance?seconds=3600")
+        for seconds in ("300000000000", "1e300", "inf"):
+            self.post("/_mock/advance?seconds=" + seconds)
+        self.assertEqual(self.advanced(), 3600.0)
+
+    def test_the_mock_still_answers_an_order_afterwards(self):
+        self.post("/_mock/advance?seconds=300000000000")
+        self.send(x12_order("PO-AFTER-OVERFLOW"))
+        status, _h, data = self.post("/_mock/advance?all")
+        self.assertEqual(status, 200, data)
+        self.assertEqual([r["code"] for r in self.mailbox(ACME, "invoice")],
+                         ["810"])
+
+    def test_the_pipeline_refuses_what_is_not_a_finite_number(self):
+        # The endpoint turns these away before they get here; a caller of
+        # `advance` itself would otherwise meet an OverflowError.
+        import datetime
+        from mockedi import db, pipeline
+        from mockedi.server import Config
+        conn = db.connect(":memory:")
+        self.addCleanup(conn.close)
+        clock = pipeline.Pipeline(conn, Config(db_path=":memory:"))
+        for seconds in (float("inf"), float("-inf"), float("nan"), 1e300):
+            with self.subTest(seconds=seconds):
+                with self.assertRaises(ValueError):
+                    clock.advance(seconds)
+                self.assertEqual(clock.offset, datetime.timedelta(0))
+
+    def test_the_limit_is_on_the_total_not_on_one_call(self):
+        self.post("/_mock/advance?seconds=%d" % (self.LIMIT - 60))
+        status, _h, data = self.post("/_mock/advance?seconds=61")
+        self.assertEqual(status, 400, data)
+        # It says how much room is left, which is what the caller can act on.
+        self.assertIn("60", data["error"])
+        self.assertEqual(self.advanced(), float(self.LIMIT - 60))
+
+    def test_exactly_the_limit_is_allowed_and_the_mock_still_works(self):
+        status, _h, data = self.post("/_mock/advance?seconds=%d" % self.LIMIT)
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data["advancedSeconds"], float(self.LIMIT))
+        self.send(x12_order("PO-A-CENTURY-ON"))
+        status, _h, data = self.post("/_mock/advance?all")
+        self.assertEqual(status, 200, data)
+        self.assertEqual([r["code"] for r in self.mailbox(ACME, "invoice")],
+                         ["810"])
+
+
 class SendOnDemand(MockServerCase):
     def setUp(self):
         super().setUp()

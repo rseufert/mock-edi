@@ -450,6 +450,9 @@ and releases whatever that makes due. The clock stays moved: two advances of
 dates, due times, MDN dates - is dated by the moved clock. The response says
 where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
+It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
+that would take it further is a 400 that says how much room is left, and
+leaves the clock where it was.
 
 ## AS2
 
