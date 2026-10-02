@@ -132,6 +132,32 @@ class AnEightFiveFiveFromSomebodyElse(unittest.TestCase):
         self.assertEqual(len(response.lines), 1)
 
 
+class TheSellersOrderNumberInAnEightSixFive(unittest.TestCase):
+    """BCA09, as BAK08 is in an 855 - with REF*VN for a sender that uses it (#232)."""
+
+    def read(self, bca09="", *extra):
+        return transactions.read_change_response(x12_message("865", [
+            seg("BCA", "00", "AC", "PO-65", "", "1", "20260101", "", "", bca09,
+                "20260103", "20260102"),
+            *extra,
+            seg("POC", "1", "QD", "6", "", "EA", "5.00", "", "VP", "A"),
+            seg("ACK", "IA", "6", "EA"),
+        ]), "X12")
+
+    def test_it_is_read_from_bca09(self):
+        self.assertEqual(self.read("SO-BCA").seller_order, "SO-BCA")
+
+    def test_or_from_ref_vn_when_bca09_is_empty(self):
+        self.assertEqual(self.read("", seg("REF", "VN", "SO-REF")).seller_order,
+                         "SO-REF")
+
+    def test_bca09_is_the_one_the_standard_names(self):
+        self.assertEqual(
+            self.read("SO-BCA", seg("REF", "VN", "SO-REF")).seller_order,
+            "SO-BCA")
+
+    def test_an_865_with_neither_has_none(self):
+        self.assertEqual(self.read().seller_order, "")
 class TheThreeDatesOfADespatch(unittest.TestCase):
     """When it shipped, when the notice was written, and when it should arrive
     are three dates, and a reader that folds them together is a day out

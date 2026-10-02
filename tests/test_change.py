@@ -54,7 +54,10 @@ class ChangingAQuantity(MockServerCase):
         self.send(x12_change("PO-CHANGE", [("1", "CA", 60, "12.50")],
                              ordered_on="20260924", changed_on="20260925"))
         bca = self.document(ACME, "change-response").groups[0].messages[0].find("BCA")
-        self.assertEqual([bca.get(7), bca.get(8), bca.get(9)], ["", "", ""])
+        self.assertEqual([bca.get(7), bca.get(8)], ["", ""])
+        # 09 is the seller's order number, as BAK08 is in the 855 (#232).
+        self.assertEqual(bca.get(9), self.order("PO-CHANGE")["seller_order"])
+        self.assertTrue(bca.get(9))
         self.assertEqual(bca.get(6), "20260924")     # the order's date
         self.assertEqual(bca.get(11), "20260925")    # the change it answers
         # BCA10 is this acknowledgment's own date, so it is whenever the mock

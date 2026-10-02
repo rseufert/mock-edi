@@ -152,6 +152,9 @@ class Change:
     changed_on: Optional[datetime.date] = None
     ordered_on: Optional[datetime.date] = None
     currency: str = ""
+    # BCH09: the number the seller filed the order under, when the buyer
+    # quotes it back (#232).
+    seller_order: str = ""
     lines: List[ChangeLine] = field(default_factory=list)
 
     @property
@@ -920,6 +923,7 @@ def _read_change_x12(message: Message) -> Change:
         change.po_number = bch.get(3)
         change.sequence = bch.get(5)
         change.ordered_on = parse_date(bch.get(6))
+        change.seller_order = bch.get(9)
         change.changed_on = parse_date(bch.get(11))
     cur = message.find("CUR")
     if cur is not None and cur.get(2):
@@ -1030,11 +1034,13 @@ def write_change_response(dialect: str, us: Party, partner: Dict, order: Dict,
 def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
              change: Change, when: datetime.datetime) -> List[Seg]:
     out: List[Seg] = [seg(
-        # 06 the date the purchaser gave the order, 10 the date this
-        # acknowledgment was given, 11 the date of the change it answers
-        # (#178). BCH says the same three things in the same three places.
+        # 06 the date the purchaser gave the order, 09 the seller's order
+        # number (#232), 10 the date this acknowledgment was given, 11 the
+        # date of the change it answers (#178). BCH says the same four
+        # things in the same four places.
         "BCA", "00", acknowledgment_type(lines, "X12"), order["po_number"],
-        "", change.sequence, _iso(order.get("ordered_on")), "", "", "",
+        "", change.sequence, _iso(order.get("ordered_on")), "", "",
+        order.get("seller_order") or "",
         when.strftime("%Y%m%d"),
         date_text(change.changed_on))]
     out.append(seg("CUR", "SE", order.get("currency") or "USD"))
@@ -1239,7 +1245,10 @@ def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
         # acknowledgment - so it is empty here, an 860 being a request and not
         # an acknowledgment - and 11 the date of the change request (#178).
         date_text(change.ordered_on) or _iso(order.get("ordered_on")),
-        "", "", "", "",
+        "", "",
+        # 09 is the seller's order number, once the seller has given one.
+        change.seller_order or order.get("seller_order") or "",
+        "",
         date_text(change.changed_on) or when.strftime("%Y%m%d"))]
     out.append(seg("CUR", "BY", change.currency or order.get("currency") or "USD"))
     for line in change.lines:
@@ -1479,6 +1488,9 @@ def _read_change_response_x12(message: Message) -> Response:
         response.po_number = bca.get(3)
         response.sequence = bca.get(5)
         response.ordered_on = parse_date(bca.get(6))
+        # BCA09 is the seller's order number, as BAK08 is in an 855; a sender
+        # that gives it only in REF*VN is read from there, below.
+        response.seller_order = bca.get(9)
         response.responded_on = parse_date(bca.get(10))
     _finish_response_x12(message, response, "POC", 8)
     return response

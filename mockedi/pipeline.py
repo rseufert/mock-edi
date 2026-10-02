@@ -1138,6 +1138,11 @@ class Pipeline:
             change = documents.change_placed(self.conn, po_number, partner_id,
                                              request, moment)
             order = documents.order_row(self.conn, po_number, partner_id)
+            # The supplier's own number for the order, once its 855 has given
+            # one: BCH09 is where a buyer quotes it back (#232). Only for the
+            # document - the order's row is the mock's record, not theirs.
+            change.seller_order = claims.sellers_order(self.conn, partner_id,
+                                                       po_number)
             body = transactions.write_change(partner["dialect"], self.us, partner,
                                              order, change, moment)
             self._refuse_unsendable(partner, schema.CHANGE, body)

@@ -322,6 +322,26 @@ class PlacingOverHttp(BuyingCase):
         self.assertTrue(change.cancels)
         self.assertEqual(self.order("PO-CHG")["status"], "cancelled")
 
+    def test_an_860_quotes_the_suppliers_order_number_once_it_has_one(self):
+        """BCH09 is the seller's order number (#232).
+
+        Empty until the supplier's 855 has given one - there is nothing to
+        quote - and from then on the number the supplier files the order
+        under goes back with every change to it.
+        """
+        self.placed(po_number="PO-REF")
+        change = {"lines": [{"line": "1", "quantity": "80"}]}
+        self.post("/_mock/purchase/PO-REF/change", change)
+        bch = parse(self.sent(schema.CHANGE)).groups[0].messages[0].find("BCH")
+        self.assertEqual(bch.get(9), "")
+        self.send(supplier_sends(schema.RESPONSE, "PO-REF"))
+        self.post("/_mock/purchase/PO-REF/change",
+                  {"lines": [{"line": "1", "quantity": "70"}]})
+        bch = parse(self.sent(schema.CHANGE)).groups[0].messages[0].find("BCH")
+        self.assertEqual(bch.get(9), "SO-77")
+        # The order's own row is the mock's record, and stays as it was.
+        self.assertEqual(self.order("PO-REF")["seller_order"], "")
+
     def test_the_860s_dates_are_where_004010_says(self):
         """Positionally, not through our own reader (#178).
 
