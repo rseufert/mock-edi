@@ -45,6 +45,24 @@ def group_reports(interchange: Interchange,
             for group in interchange.groups if not group.implicit]
 
 
+def trailer_counts(interchange: Interchange) -> Dict[Tuple[str, str], str]:
+    """What each group's own trailer said it held: GE01, by (GS01, GS06).
+
+    Only a count that can be quoted. AK902 is numeric and mandatory, so a
+    group with no GE, or a GE01 that is empty, not digits or longer than the
+    six an element 97 may be, is left out, and the 997 falls back to the
+    number of sets that arrived rather than carry something invalid itself.
+    """
+    counts: Dict[Tuple[str, str], str] = {}
+    for group in interchange.groups:
+        if group.implicit or group.trailer is None:
+            continue
+        said = (group.trailer.get(1) or "").strip()
+        if said.isdigit() and len(said) <= 6:
+            counts[(group.functional_id, group.control)] = str(int(said))
+    return counts
+
+
 # ---------------------------------------------------------------------------
 # X12 997
 # ---------------------------------------------------------------------------
@@ -53,12 +71,15 @@ def functional_acknowledgment(functional_id: str, group_control: str,
                               version: str,
                               messages: Sequence[MessageReport],
                               group_errors: Sequence[Tuple[str, str]] = (),
-                              carries_version: bool = False) -> List[Seg]:
+                              carries_version: bool = False,
+                              included: str = "") -> List[Seg]:
     """The body of a 997, acknowledging one functional group.
 
     AK9's three counts are the part receivers actually check: transaction sets
-    included in this acknowledgment, received in the group, and accepted.  When
-    they disagree with the 850s that were sent, someone's envelope is wrong.
+    the sender's trailer said the group held, received in it, and accepted.
+    When they disagree with the 850s that were sent, someone's envelope is
+    wrong. `included` is that trailer count, GE01, from `trailer_counts`; with
+    none to quote, AK902 is the number received (#221).
 
     `group_errors` are the group's own faults - a missing GE, a count or
     control number that does not match - and go in AK905 onward. Any of them
@@ -91,7 +112,8 @@ def functional_acknowledgment(functional_id: str, group_control: str,
             accepted += 1
 
     verdict = "R" if group_errors else _group_code(messages)
-    out.append(seg("AK9", verdict, str(len(messages)), str(len(messages)),
+    out.append(seg("AK9", verdict, included or str(len(messages)),
+                   str(len(messages)),
                    str(accepted), *[code for code, _note in group_errors[:5]]))
     return out
 

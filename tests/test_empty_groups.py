@@ -123,6 +123,8 @@ class AGroupWithNoTransactionSet(MockServerCase):
         self.send(payload)
         ak9 = self.document(ACME, "acknowledgment").groups[0].messages[0].find("AK9")
         self.assertEqual((ak9.get(1), ak9.get(5)), ("R", "5"))
+        # One in the trailer, none in the group, none accepted (#221).
+        self.assertEqual(ak9.elements[1:4], ["1", "0", "0"])
 
     def test_nothing_is_fulfilled(self):
         summary = self.send(self.payload)

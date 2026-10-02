@@ -533,6 +533,7 @@ class Pipeline:
                 return
             answers_itself = schema.lookup("X12", schema.set_code(
                 "X12", schema.ACKNOWLEDGMENT)).group
+            said = ack.trailer_counts(interchange)
             for functional_id, control, version, messages in ack.group_reports(
                     interchange, report):
                 if functional_id == answers_itself:
@@ -542,7 +543,8 @@ class Pipeline:
                 body = ack.functional_acknowledgment(
                     functional_id, control, version, messages,
                     report.group_errors.get((functional_id, control), []),
-                    carries_version=self._x12_version(partner) >= "005010")
+                    carries_version=self._x12_version(partner) >= "005010",
+                    included=said.get((functional_id, control), ""))
                 self._send(partner, schema.ACKNOWLEDGMENT, body, interchange.control,
                            receipt, moment, delay, dialect="X12")
         else:

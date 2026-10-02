@@ -41,7 +41,8 @@ class X12GroupTrailers(MockServerCase):
         summary = self.send(x12_order("GE-COUNT").replace("GE*1*", "GE*9*"))
         self.assertEqual([q["code"] for q in summary["queued"]], ["997"])
         ak9 = self.document(ACME, "acknowledgment").groups[0].messages[0].find("AK9")
-        self.assertEqual(ak9.elements, ["R", "1", "1", "0", "5"])
+        # Nine in the trailer, one in the group: AK902 quotes the trailer.
+        self.assertEqual(ak9.elements, ["R", "9", "1", "0", "5"])
 
     def test_a_ge_control_number_that_disagrees_with_gs06_is_ak905_4(self):
         text = x12_order("GE-CONTROL")
@@ -106,7 +107,7 @@ class The997ForARejectedGroup(MockServerCase):
                  if line.strip().startswith("GS*")][0].split("*")[6]
         self.assertEqual(self.body(text.replace("GE*1*", "GE*9*")),
                          ["AK1*PO*%s" % group, "AK2*850*0001", "AK5*R",
-                          "AK9*R*1*1*0*5"])
+                          "AK9*R*9*1*0*5"])
 
     def test_the_same_when_the_ge_control_number_is_wrong(self):
         text = x12_order("GE-CONTROL-BYTES")
@@ -118,7 +119,7 @@ class The997ForARejectedGroup(MockServerCase):
     def test_every_set_is_named_and_none_says_accepted(self):
         body = self.body(two_orders().replace("GE*2*", "GE*9*"))
         self.assertEqual(body[1:], ["AK2*850*0001", "AK5*R",
-                                    "AK2*850*0002", "AK5*R", "AK9*R*2*2*0*5"])
+                                    "AK2*850*0002", "AK5*R", "AK9*R*9*2*0*5"])
 
     def test_a_set_with_an_error_of_its_own_still_says_what_it_was(self):
         body = self.body(two_orders(second_purpose="ZZ").replace("GE*2*", "GE*9*"))
@@ -126,7 +127,7 @@ class The997ForARejectedGroup(MockServerCase):
         self.assertEqual(body[3], "AK2*850*0002")
         self.assertTrue(body[4].startswith("AK3*BEG*"), body)
         self.assertTrue(body[5].startswith("AK4*1*353*7"), body)
-        self.assertEqual(body[6:], ["AK5*R*5", "AK9*R*2*2*0*5"])
+        self.assertEqual(body[6:], ["AK5*R*5", "AK9*R*9*2*0*5"])
 
     def test_nothing_in_any_rejected_group_says_a_or_e(self):
         for payload in (x12_order("GE-A").replace("GE*1*", "GE*9*"),
@@ -147,6 +148,63 @@ class The997ForARejectedGroup(MockServerCase):
         body = self.body(two_orders(second_purpose="ZZ"))
         self.assertEqual(body[1:3], ["AK2*850*0001", "AK5*A"])
         self.assertEqual(body[-2:], ["AK5*E*5", "AK9*E*2*2*2"])
+
+
+class AK902QuotesTheTrailer(MockServerCase):
+    """AK902 is the sender's own count, GE01; AK903 is what arrived (#221).
+
+    The two were written as the same number, so the one 997 that exists to
+    say they differ - `AK905 = 5` - showed them equal, and a sender could not
+    see which way its count was out.
+    """
+
+    def ak9(self, payload):
+        self.send(payload)
+        sent = self.mailbox(ACME, "acknowledgment")[0]["payload"]
+        return [line.strip() for line in sent.split("~")
+                if line.strip().startswith("AK9")][0]
+
+    def test_a_count_that_is_too_high_is_quoted(self):
+        self.assertEqual(self.ak9(x12_order("GE-HIGH").replace("GE*1*", "GE*9*")),
+                         "AK9*R*9*1*0*5")
+
+    def test_a_count_that_is_too_low_is_quoted(self):
+        self.assertEqual(self.ak9(two_orders().replace("GE*2*", "GE*1*")),
+                         "AK9*R*1*2*0*5")
+
+    def test_a_count_that_is_right_reads_as_it_did(self):
+        self.assertEqual(self.ak9(x12_order("GE-RIGHT")), "AK9*A*1*1*1")
+        self.post("/_mock/reset")
+        self.assertEqual(self.ak9(two_orders()), "AK9*A*2*2*2")
+
+    def test_leading_zeros_are_not_carried_over(self):
+        # 009 is nine, and a mismatch: AK902 is a number, so it says 9.
+        self.assertEqual(self.ak9(x12_order("GE-ZEROS").replace("GE*1*", "GE*009*")),
+                         "AK9*R*9*1*0*5")
+
+    def test_a_count_that_is_not_a_number_is_not_quoted(self):
+        # AK902 is numeric and mandatory: quoting `X` would make the 997
+        # itself invalid, so it falls back to what arrived.
+        for bad in ("X", "", "1234567"):
+            with self.subTest(ge01=bad):
+                self.assertEqual(
+                    self.ak9(x12_order("GE-BAD").replace("GE*1*", "GE*%s*" % bad)),
+                    "AK9*R*1*1*0*5")
+                self.post("/_mock/reset")
+
+    def test_a_group_with_no_ge_has_no_count_to_quote(self):
+        text = x12_order("GE-NONE")
+        ge = [line for line in text.split("~") if line.strip().startswith("GE*")][0]
+        self.assertEqual(self.ak9(text.replace(ge + "~", "")), "AK9*R*1*1*0*3")
+
+    def test_the_997_is_valid_whatever_ge01_said(self):
+        for bad in ("9", "X", "", "1234567", "009"):
+            with self.subTest(ge01=bad):
+                self.send(x12_order("GE-VALID").replace("GE*1*", "GE*%s*" % bad))
+                sent = self.mailbox(ACME, "acknowledgment")[0]["payload"]
+                report = validate.validate(x12.parse(sent))
+                self.assertTrue(report.clean, report)
+                self.post("/_mock/reset")
 
 
 class X12InterchangeTrailers(MockServerCase):
