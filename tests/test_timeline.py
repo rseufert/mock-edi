@@ -20,7 +20,7 @@ sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
 from support import (ACME, EURODIS, INITECH, MockServerCase, STEPS,
-                     acknowledge, edifact_order, parse,
+                     acknowledge, edifact_order, frozen, parse,
                      spans_more_than_a_second, stepping, x12_order)
 
 EDIFACT = {"Content-Type": "application/edifact"}
@@ -222,11 +222,15 @@ class TheOrderInsideOneSecond(MockServerCase):
         return data
 
     def test_a_plain_order_reads_in_the_order_it_happened(self):
-        self.send(x12_order("TL-SEQ"))
-        found = self.timeline("TL-SEQ")
+        # The clock is held still, so that the premise - all of it inside one
+        # second, with nothing but the recorded sequence to order it - is
+        # arranged rather than hoped for. Asserting it instead turned a slow
+        # runner into a red run that said nothing about the order (#238's
+        # tests cover the crossing case on purpose).
+        with frozen():
+            self.send(x12_order("TL-SEQ"))
+            found = self.timeline("TL-SEQ")
         self.assertEqual(labels(found), PLAIN)
-        # The premise: all of it inside one second, so nothing but the
-        # recorded sequence can be putting it in this order.
         self.assertEqual(len({event["at"] for event in found["events"]}), 1)
 
     def test_the_sequence_is_the_same_on_a_second_call(self):
@@ -254,9 +258,12 @@ class TheReleasedSecond(MockServerCase):
                      "invoice_delay_ms": 3600 * 1000}
 
     def test_each_document_stays_with_the_work_that_produced_it(self):
-        self.send(x12_order("TL-HELD"))
-        self.post("/_mock/advance?all")
-        status, _headers, found = self.get("/_mock/orders/TL-HELD/timeline")
+        # Held still for the same reason: the four released documents share a
+        # second by arrangement, not by luck on the runner.
+        with frozen():
+            self.send(x12_order("TL-HELD"))
+            self.post("/_mock/advance?all")
+            status, _headers, found = self.get("/_mock/orders/TL-HELD/timeline")
         self.assertEqual(status, 200, found)
         self.assertEqual(labels(found), PLAIN)
         released = {event["at"] for event in found["events"]
