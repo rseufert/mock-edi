@@ -178,6 +178,19 @@ class TheClockMoves(MockServerCase):
         _s, _h, data = self.post("/_mock/advance?seconds=0")
         self.assertEqual(data["advancedSeconds"], 0.0)
 
+    def test_a_parameter_it_does_not_take_moves_and_releases_nothing(self):
+        # `?all&days=30` would release the invoice if the refusal came after
+        # the work; `?seconds=60&second=1` would move the clock (#203).
+        self.send(x12_order("PO-UNKNOWN-PARAMETER"))
+        for query in ("days=30", "all&days=30", "seconds=60&second=1",
+                      "failed&Partner=ACME"):
+            with self.subTest(query=query):
+                status, _h, data = self.post("/_mock/advance?" + query)
+                self.assertEqual(status, 400, data)
+        self.assertEqual(self.mailbox(ACME, "invoice"), [])
+        _s, _h, data = self.post("/_mock/advance?seconds=0")
+        self.assertEqual(data["advancedSeconds"], 0.0)
+
     def test_it_does_not_go_backwards(self):
         status, _h, data = self.post("/_mock/advance?seconds=-60")
         self.assertEqual(status, 400, data)
@@ -453,6 +466,31 @@ class BadQueryValues(MockServerCase):
 
     def test_a_number_that_is_not_finite(self):
         self.assertRefused("/_mock/advance?seconds=nan", "seconds")
+
+    def test_advance_refuses_a_parameter_it_does_not_take(self):
+        # It used to answer 200 and advance nothing: mock-bank's clock takes
+        # days, and a tester moving between the mocks was told all was well.
+        status, _h, data = self.post("/_mock/advance?days=30")
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["parameter"], "days")
+        for name in ("seconds", "all", "failed", "partner"):
+            self.assertIn(name, data["error"])
+
+    def test_and_says_what_days_would_be_in_seconds(self):
+        _s, _h, data = self.post("/_mock/advance?days=30")
+        self.assertIn("seconds=2592000", data["error"])
+        # Only where there is a figure to give, and one `seconds` would take.
+        for days in ("soon", "nan", "-1", "1e300"):
+            with self.subTest(days=days):
+                status, _h, data = self.post("/_mock/advance?days=" + days)
+                self.assertEqual(status, 400, data)
+                self.assertNotIn("seconds=", data["error"])
+
+    def test_every_parameter_it_does_take_still_works(self):
+        for query in ("", "seconds=1", "all", "failed", "failed&partner=ACME"):
+            with self.subTest(query=query):
+                status, _h, data = self.post("/_mock/advance?" + query)
+                self.assertEqual(status, 200, data)
 
     def test_unacknowledged_older_than(self):
         self.assertRefused("/_mock/unacknowledged?older-than=soon", "older-than")

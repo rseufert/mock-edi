@@ -8,8 +8,8 @@ from __future__ import annotations
 
 from typing import List, Tuple
 
-from .. import db, partners, reconcile
-from . import ANY, first, flag, json_body, limit, number, route
+from .. import db, partners, pipeline, reconcile
+from . import ANY, BadQuery, first, flag, json_body, limit, number, only, route
 
 
 @route(ANY, "/_mock/scheduled", rest=True)
@@ -28,6 +28,11 @@ def scheduled(h, rest: List[str]) -> Tuple[int, int]:
 def advance(h, rest: List[str]) -> Tuple[int, int]:
     if h.method != "POST":
         return h.text(405, "POST to advance the queue")
+    try:
+        only(h.query, "seconds", "all", "failed", "partner")
+    except BadQuery as error:
+        raise BadQuery(error.parameter, "%s (partner goes with failed)%s"
+                       % (error, _in_seconds(h.query))) from None
     if flag(h.query, "failed"):
         # Everything a partner's listener missed while it was down,
         # in queue order, unchanged.
@@ -46,6 +51,21 @@ def advance(h, rest: List[str]) -> Tuple[int, int]:
         "released": released, "count": len(released),
         "clock": clock.now().isoformat(timespec="seconds"),
         "advancedSeconds": clock.offset.total_seconds()})
+
+
+def _in_seconds(query) -> str:
+    """What `days=N` would be in seconds, for the caller who came from a
+    clock that takes days. Nothing, where there is no figure to give."""
+    try:
+        days = float(first(query, "days"))
+    except ValueError:
+        return ""
+    # Only a figure `seconds` would itself accept: not nan, not negative,
+    # and not past how far the clock may be moved.
+    if not 0 <= days <= pipeline.MAX_ADVANCE.days:
+        return ""
+    return ". The clock moves in seconds: days=%g is seconds=%d" % (
+        days, round(days * 86400))
 
 
 @route(ANY, "/_mock/send", rest=True)
