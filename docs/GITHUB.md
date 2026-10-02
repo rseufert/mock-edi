@@ -30,7 +30,7 @@ for good — the only remedy is yanking it and burning the number.
 
 | Setting | Required | Why |
 | --- | --- | --- |
-| Branch ruleset, all refs | no deletion, no non-fast-forward | The guardrail against a bad `git push --force`, not a statement about trust. A ruleset that exists but is set to `disabled` provides none of this; check the enforcement, not the presence. |
+| Branch ruleset, **default branch only** | no deletion, no non-fast-forward | The guardrail against a bad `git push --force`, not a statement about trust. A ruleset that exists but is set to `disabled` provides none of this; check the enforcement, not the presence. Scope it to `main` and **not** to all refs: `mock-bank`'s `CONTRIBUTING.md` tells you to rebase a branch onto `main` as often as you like while it is still only yours, and rebasing a pushed branch is a force-push. A non-fast-forward rule across every ref forbids the workflow the project documents. What must never be rewritten is `main`. |
 | Required status check | one aggregating job | Make "merge it when green" something the repository enforces rather than something a person remembers. Require a single job that `needs:` the others — the matrix check names (`tests (py3.12 on macos-latest)`) are generated and change whenever the matrix does, so requiring them by name breaks on the next Python release. |
 | Direct pushes to `main` | allowed, but not the habit | With one maintainer, required reviews would mean either blocking the only person who can approve or granting a bypass that makes the rule decorative. The convention is a branch and a pull request; the ruleset above is what stops the irreversible kinds of mistake. |
 
@@ -56,7 +56,7 @@ repository, not here.
 
 | Repository | Merge method | Where the reason is written |
 | --- | --- | --- |
-| `mock-sap` | squash | `CONTRIBUTING.md` |
+| `mock-sap` | squash | **Nowhere yet.** It is the practice — every merge to `main`, including the one outside contribution taken so far — but no file states it or gives the reason. Until it is written into `CONTRIBUTING.md`, it is a habit, and this table is the only place it is recorded. |
 | `mock-edi` | merge commit | `CONTRIBUTING.md` — squash and rebase are switched off so the rule cannot be bypassed by habit |
 | `mock-bank` | squash | `CONTRIBUTING.md` |
 
