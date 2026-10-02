@@ -49,7 +49,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from . import schema
-from .money import cents
+from .money import cents, unit_price
 from .envelope import Message, Seg, ccyymmdd, hhmm, seg, parse_date
 
 # The date and the time a document is written at, as the wire carries them:
@@ -251,7 +251,14 @@ class DespatchItem:
 class Despatch:
     """What a seller says it has shipped: an 856, or a DESADV."""
     shipment_id: str = ""
+    # Three dates, and three fields: when the goods left (DTM 011, DTM+11),
+    # when the notice was written (BSN03, DTM+137) and when they should
+    # arrive (DTM 017, DTM+17). A notice sent the day after is a day out for
+    # a reader that takes one for another (#230), so a date the document does
+    # not give is left empty rather than filled in from its neighbour.
     shipped_on: Optional[datetime.date] = None
+    written_on: Optional[datetime.date] = None
+    estimated_delivery: Optional[datetime.date] = None
     po_number: str = ""
     ordered_on: Optional[datetime.date] = None
     carrier: str = ""
@@ -375,6 +382,7 @@ def quantity_text(value: Decimal) -> str:
 
 
 def price_text(value: Decimal) -> str:
+    """An amount of money, to the cent. For a unit price, `unit_price`."""
     return str(cents(value))
 
 
@@ -652,7 +660,7 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
 
     for row in lines:
         out.append(seg("PO1", row["line"], quantity_text(number(row["quantity"])),
-                       row["uom"], price_text(number(row["price"], "0.00")), "",
+                       row["uom"], unit_price(number(row["price"], "0.00")), "",
                        "VP", row["sku"], *(("UP", row["upc"]) if row.get("upc") else ())))
         status = row.get("status") or ACCEPTED
         confirmed = quantity_text(number(str(row.get("confirmed") or "0")))
@@ -742,7 +750,7 @@ def _x12_810(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
     for row in billed:
         out.append(seg("IT1", row["line"],
                        quantity_text(number(str(row["invoiced"]))), row["uom"],
-                       price_text(number(row["price"], "0.00")), "",
+                       unit_price(number(row["price"], "0.00")), "",
                        "VP", row["sku"], *(("UP", row["upc"]) if row.get("upc") else ())))
         if row.get("description"):
             out.append(seg("PID", "F", "", "", "", row["description"]))
@@ -825,7 +833,7 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
             out.append(seg("QTY", ["83", quantity_text(ordered - confirmed), unit]))
         if row.get("scheduled_on") and confirmed > 0:
             out.append(seg("DTM", ["2", _iso(row["scheduled_on"]), "102"]))
-        out.append(seg("PRI", ["AAA", price_text(number(row["price"], "0.00"))]))
+        out.append(seg("PRI", ["AAA", unit_price(number(row["price"], "0.00"))]))
         if row.get("reason"):
             out.append(seg("FTX", "AAO", "", "", [row["reason"]]))
 
@@ -889,7 +897,7 @@ def _edifact_invoic(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
             out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
         out.append(seg("QTY", ["47", quantity_text(invoiced), unit]))
         out.append(seg("MOA", ["203", price_text(invoiced * price)]))
-        out.append(seg("PRI", ["AAA", price_text(price)]))
+        out.append(seg("PRI", ["AAA", unit_price(price)]))
 
     out.append(seg("UNS", "S"))
     # Every EDIFACT total is named; X12 puts the same numbers in fixed
@@ -1047,7 +1055,7 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
     for row in lines:
         out.append(seg("POC", row["line"], row.get("change_action") or CHANGE_LINE,
                        quantity_text(number(row["quantity"])), "", row["uom"],
-                       price_text(number(row["price"], "0.00")), "",
+                       unit_price(number(row["price"], "0.00")), "",
                        "VP", row["sku"],
                        *(("UP", row["upc"]) if row.get("upc") else ())))
         status = row.get("status") or ACCEPTED
@@ -1205,7 +1213,7 @@ def _buyer_parties_x12(us: Party, partner: Dict, order: Dict) -> List[Seg]:
 
 def _order_line_x12(row: Dict) -> List[Seg]:
     out = [seg("PO1", row["line"], quantity_text(number(row["quantity"])),
-               row["uom"], price_text(number(row.get("price"), "0.00")), "",
+               row["uom"], unit_price(number(row.get("price"), "0.00")), "",
                "VP", row["sku"],
                *(("UP", row["upc"]) if row.get("upc") else ()))]
     if row.get("description"):
@@ -1247,7 +1255,7 @@ def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
     for line in change.lines:
         out.append(seg("POC", line.number, line.action,
                        quantity_text(line.quantity), "", line.uom,
-                       price_text(line.price), "",
+                       unit_price(line.price), "",
                        "VP", line.sku,
                        *(("UP", line.upc) if line.upc else ())))
         if line.description:
@@ -1282,7 +1290,7 @@ def _edifact_order_line(row: Dict) -> List[Seg]:
     if row.get("description"):
         out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
     out.append(seg("QTY", ["21", quantity_text(number(row["quantity"])), unit]))
-    out.append(seg("PRI", ["AAA", price_text(number(row.get("price"), "0.00"))]))
+    out.append(seg("PRI", ["AAA", unit_price(number(row.get("price"), "0.00"))]))
     return out
 
 
@@ -1334,7 +1342,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
         if line.description:
             out.append(seg("IMD", "F", "", ["", "", "", line.description]))
         out.append(seg("QTY", ["21", quantity_text(line.quantity), unit]))
-        out.append(seg("PRI", ["AAA", price_text(line.price)]))
+        out.append(seg("PRI", ["AAA", unit_price(line.price)]))
     out.append(seg("UNS", "S"))
     out.append(seg("CNT", ["2", str(len(change.lines))]))
     return out
@@ -1530,7 +1538,9 @@ def _read_despatch_x12(message: Message) -> Despatch:
     bsn = message.find("BSN")
     if bsn is not None:
         despatch.shipment_id = bsn.get(2)
-        despatch.shipped_on = parse_date(bsn.get(3))
+        # The date the notice was created, by BSN03's semantic note - not
+        # the day the goods left, which is a DTM of its own.
+        despatch.written_on = parse_date(bsn.get(3))
 
     # The HL tree, by parent pointer rather than by position: a real 856 puts
     # pack and tare levels between the order and the item, and a reader that
@@ -1594,8 +1604,11 @@ def _despatch_shipment_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
             despatch.bol = item.get(2)
         elif item.tag == "REF" and item.get(1) == "CN":
             despatch.tracking = item.get(2)
-        elif item.tag == "DTM" and item.get(1) in ("011", "017"):
+        elif item.tag == "DTM" and item.get(1) == "011":
             despatch.shipped_on = parse_date(item.get(2)) or despatch.shipped_on
+        elif item.tag == "DTM" and item.get(1) == "017":
+            despatch.estimated_delivery = (parse_date(item.get(2))
+                                           or despatch.estimated_delivery)
 
 
 def _despatch_order_x12(segments: Sequence[Seg], despatch: Despatch) -> None:
@@ -1869,7 +1882,9 @@ def _read_despatch_edifact(message: Message) -> Despatch:
     if bgm is not None:
         despatch.shipment_id = bgm.comp(2, 1)
     header = _edifact_header(body)
-    despatch.shipped_on = _edifact_dtm(header, ("11", "17", "137"))
+    despatch.shipped_on = _edifact_dtm(header, ("11",))
+    despatch.written_on = _edifact_dtm(header, ("137",))
+    despatch.estimated_delivery = _edifact_dtm(header, ("17",))
     order_reference = _edifact_rff(header, "ON")
     if order_reference is not None:
         despatch.po_number = order_reference.comp(1, 2)

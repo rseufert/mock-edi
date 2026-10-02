@@ -132,6 +132,69 @@ class AnEightFiveFiveFromSomebodyElse(unittest.TestCase):
         self.assertEqual(len(response.lines), 1)
 
 
+class TheThreeDatesOfADespatch(unittest.TestCase):
+    """When it shipped, when the notice was written, and when it should arrive
+    are three dates, and a reader that folds them together is a day out
+    (#230).
+
+    `BSN03` is the date the 856 was created - the standard's own note - and
+    was read as the ship date whenever no `DTM*011` followed. `DTM*017`, an
+    estimated delivery, was read as the ship date too, and the DESADV reader
+    did the same with `DTM+17` and `DTM+137`.
+    """
+    WRITTEN, SHIPPED, EXPECTED = (datetime.date(2026, 2, 4),
+                                  datetime.date(2026, 2, 3),
+                                  datetime.date(2026, 2, 9))
+
+    def x12(self, *dated):
+        return transactions.read_despatch(x12_message("856", [
+            seg("BSN", "00", "SH-9", "20260204", "0915", "0004"),
+            seg("HL", "1", "", "S", "1"), *dated,
+            seg("HL", "2", "1", "O", "1"),
+            seg("PRF", "PO-99"),
+        ]), "X12")
+
+    def edifact(self, *dated):
+        return transactions.read_despatch(edifact_message("DESADV", [
+            seg("BGM", ["351"], ["SH-9"], "9"), *dated,
+            seg("RFF", ["ON", "PO-99"]),
+        ]), "EDIFACT")
+
+    def dates(self, despatch):
+        return (despatch.written_on, despatch.shipped_on,
+                despatch.estimated_delivery)
+
+    def test_an_856_with_all_three(self):
+        despatch = self.x12(seg("DTM", "011", "20260203"),
+                            seg("DTM", "017", "20260209"))
+        self.assertEqual(self.dates(despatch),
+                         (self.WRITTEN, self.SHIPPED, self.EXPECTED))
+
+    def test_a_desadv_with_all_three(self):
+        despatch = self.edifact(seg("DTM", ["137", "20260204", "102"]),
+                                seg("DTM", ["11", "20260203", "102"]),
+                                seg("DTM", ["17", "20260209", "102"]))
+        self.assertEqual(self.dates(despatch),
+                         (self.WRITTEN, self.SHIPPED, self.EXPECTED))
+
+    def test_the_date_a_notice_was_written_is_not_when_it_shipped(self):
+        self.assertEqual(self.dates(self.x12()), (self.WRITTEN, None, None))
+        self.assertEqual(
+            self.dates(self.edifact(seg("DTM", ["137", "20260204", "102"]))),
+            (self.WRITTEN, None, None))
+
+    def test_nor_is_the_date_it_should_arrive(self):
+        self.assertIsNone(self.x12(seg("DTM", "017", "20260209")).shipped_on)
+        self.assertIsNone(
+            self.edifact(seg("DTM", ["17", "20260209", "102"])).shipped_on)
+
+    def test_the_order_of_the_dtms_does_not_matter(self):
+        despatch = self.x12(seg("DTM", "017", "20260209"),
+                            seg("DTM", "011", "20260203"))
+        self.assertEqual(self.dates(despatch),
+                         (self.WRITTEN, self.SHIPPED, self.EXPECTED))
+
+
 class AnEightFiveSixWithAPackLevel(unittest.TestCase):
     """An 856 whose hierarchy is not the three flat levels the mock writes."""
 

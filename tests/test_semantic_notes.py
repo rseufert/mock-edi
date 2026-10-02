@@ -19,8 +19,9 @@ publishers or more for each, listed position by position in the table on
 Every date below is different, so a value in the wrong position is the wrong
 value and not a coincidence.
 
-Three positions disagree and are marked as expected failures, each naming the
-issue that fixes it: #230, #231 and #232.
+Two positions still disagree and are marked as expected failures, each naming
+the issue that fixes it: #231 and #232. (#230, the 856 reader taking BSN03 as
+the ship date, is fixed.)
 """
 import datetime
 import os
@@ -238,9 +239,10 @@ class BSN(Written):
         self.assertEqual(self.read(seg("DTM", "011", SHIPPED)).shipped_on,
                          day(SHIPPED))
 
-    @unittest.expectedFailure       # #230: BSN03 is taken as the ship date
     def test_the_date_the_notice_was_written_is_not_a_ship_date(self):
-        self.assertIsNone(self.read().shipped_on)
+        despatch = self.read()
+        self.assertIsNone(despatch.shipped_on)
+        self.assertEqual(despatch.written_on, day(WRITTEN))
 
 
 class PRF(Written):
