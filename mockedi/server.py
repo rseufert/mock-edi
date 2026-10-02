@@ -633,6 +633,15 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
             HTTPServer.server_close(self)
 
 
+class BadConfig(ValueError):
+    """A configuration the mock cannot start with.
+
+    Its own class, so that `main` can print this - and only this - as one
+    line and exit. Any other `ValueError` at start-up is a bug, and keeps
+    its traceback.
+    """
+
+
 def tax_rate_problem(value: Any) -> str:
     """What is wrong with a tax rate, or "" when it can be used.
 
@@ -660,7 +669,7 @@ def make_server(config: Config) -> _Server:
     if problem:
         # Before the port is taken: a mock that starts and then cannot write
         # an invoice is worse than one that does not start.
-        raise ValueError("tax rate %s" % problem)
+        raise BadConfig("tax rate %s" % problem)
     httpd = _Server((config.host, config.port), Handler)
     try:
         httpd.mock = Mock(config)

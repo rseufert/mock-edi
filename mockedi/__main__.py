@@ -8,7 +8,7 @@ import sys
 
 from . import __version__, db
 from .partners import BEHAVIOUR_ROLES, BEHAVIOURS
-from .server import Config, make_server, tax_rate_problem
+from .server import BadConfig, Config, make_server, tax_rate_problem
 
 
 def tax_rate(text: str) -> str:
@@ -194,7 +194,7 @@ def main(argv=None) -> int:
     except db.DatabaseError as error:
         print("mock-edi: %s" % error, file=sys.stderr)
         return 2
-    except ValueError as error:
+    except BadConfig as error:
         print("mock-edi: %s" % error, file=sys.stderr)
         return 2
     except sqlite3.DatabaseError as error:
