@@ -26,6 +26,7 @@ import datetime
 from typing import List, Optional, Sequence
 
 from . import schema
+from .charsets import EDIFACT_SYNTAX
 from .envelope import (Delimiters, EDIFACT_DEFAULTS, EdiSyntaxError, Group,
                        cut_interchanges,
                        Interchange, Message, Seg, ccyymmdd, hhmm,
@@ -221,12 +222,26 @@ def wrap(messages: Sequence[Message], sender: str, receiver: str, control: str,
 
 
 def render(interchange: Interchange, newline: bool = False,
-           una: bool = True, application_reference: str = "") -> str:
-    """The interchange as it goes on the wire, UNA first unless asked otherwise."""
+           una: bool = True, application_reference: str = "",
+           charset: Optional[str] = None) -> str:
+    """The interchange as it goes on the wire, UNA first unless asked otherwise.
+
+    Every value is fitted to the character set the UNB it is about to write
+    declares, *before* the release character is applied (#199). The document
+    then holds only what it says it holds, and a substituted character cannot
+    escape a separator - which is what happened while the substitution was
+    left to the encoder, downstream of the only code that protects the
+    delimiters.
+
+    `charset` overrides what S001 implies; `""` fits nothing, which is how a
+    caller asks for what this did before.
+    """
     delims = interchange.delimiters
     syntax = (interchange.version or "UNOC:3").split(":")
     while len(syntax) < 2:
         syntax.append("3")
+    if charset is None:
+        charset = EDIFACT_SYNTAX.get(syntax[0], "iso-8859-1")
 
     out: List[str] = []
     out.append(render_segment(seg(
@@ -242,15 +257,16 @@ def render(interchange: Interchange, newline: bool = False,
         "1" if interchange.ack_requested else "",
         "",
         "1" if interchange.test else "",
-    ), delims))
+    ), delims, charset))
     for group in interchange.groups:
         for item in group.messages:
             segments = (item.segments if delims.decimal in (".", "")
                         else _decimals(item, ".", delims.decimal))
             for element in segments:
-                out.append(render_segment(element, delims))
+                out.append(render_segment(element, delims, charset))
     out.append(render_segment(
-        seg("UNZ", str(interchange.message_count), interchange.control), delims))
+        seg("UNZ", str(interchange.message_count), interchange.control),
+        delims, charset))
 
     joiner = delims.segment + ("\n" if newline else "")
     body = joiner.join(out) + delims.segment + ("\n" if newline else "")

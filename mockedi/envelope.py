@@ -387,17 +387,38 @@ def escape(value: str, delims: Delimiters) -> str:
     return "".join(out)
 
 
-def render_segment(seg: Seg, delims: Delimiters) -> str:
+def fit(value: str, charset: str) -> str:
+    """`value` with every character `charset` cannot carry replaced by `?`.
+
+    This belongs *before* `escape` and that is the whole point (#199). The
+    substitution used to happen on the way to bytes, after the segment had
+    been rendered, where nothing was left to protect the delimiters: in
+    EDIFACT `?` is the release character, so a city of `Łódź` in a UNOC
+    interchange went out as `?ód?+LD` and a conforming reader got eight
+    elements where nine were written - the region swallowed, the postcode in
+    its place and the country gone. Substituting first and escaping after
+    turns that into a literal `?ód?`, which is lossy in the way any charset
+    downgrade is and correct in its structure.
+
+    An empty `charset` fits nothing, for the callers that do not know one.
+    """
+    text = "" if value is None else str(value)
+    if not charset:
+        return text
+    return text.encode(charset, "replace").decode(charset)
+
+
+def render_segment(seg: Seg, delims: Delimiters, charset: str = "") -> str:
     """One segment, trailing empty elements trimmed as every real sender does."""
     parts: List[str] = []
     for value in seg.elements:
         if isinstance(value, list):
-            components = [escape(v, delims) for v in value]
+            components = [escape(fit(v, charset), delims) for v in value]
             while components and components[-1] == "":
                 components.pop()
             parts.append(delims.component.join(components))
         else:
-            parts.append(escape(value, delims))
+            parts.append(escape(fit(value, charset), delims))
     while parts and parts[-1] == "":
         parts.pop()
     return delims.element.join([seg.tag] + parts)

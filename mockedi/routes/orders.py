@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import Tuple
 
 from .. import claims, db, documents, partners, remittance, timeline
-from . import first, flag, json_body, limit, route
+from . import first, flag, json_body, limit, route, text
 
 
 @route("GET", "/_mock/orders")
@@ -67,7 +67,7 @@ def purchase(h, *rest: str) -> Tuple[int, int]:
     try:
         if not rest:
             order, queued = h.mock.pipeline.place(
-                str(payload.get("partner") or ""), payload)
+                text(payload, "partner"), payload)
             status = 201
         else:
             order, refusal = which_order(conn, rest[0], h.query,

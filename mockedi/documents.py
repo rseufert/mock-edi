@@ -136,6 +136,13 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
     return order_row(conn, order.po_number, partner["id"])
 
 
+def _not_text(request: Dict[str, Any], *names: str) -> List[str]:
+    """Which of `names` the request gives as something other than a string."""
+    return ["%s must be a string, not %s" % (name, db.json_kind(request[name]))
+            for name in names
+            if name in request and not isinstance(request[name], str)]
+
+
 class Refused(ValueError):
     """An order the mock will not place or change, with every reason at once."""
 
@@ -160,7 +167,13 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
     the database alone.
     """
     moment = when or db.moment(conn)
-    problems: List[str] = []
+    problems: List[str] = _not_text(request, "po_number", "currency",
+                                    "requested_on")
+    if problems:
+        # Nothing below can be said about a value of the wrong type: a list
+        # for a PO number was looked up as one, and an object stored as its
+        # repr (#207).
+        raise Refused(problems)
     po_number = str(request.get("po_number") or "").strip()
     if po_number and order_row(conn, po_number, partner["id"]) is not None:
         problems.append("purchase order %s already exists; change it with "
@@ -237,6 +250,10 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                     sequence=str(db.next_number(conn, "purchase_change",
                                                 "%s/%s" % (partner_id, po_number))))
 
+    if not isinstance(request.get("cancel", False), bool):
+        # "no" is a string, and a string is true.
+        raise Refused(["cancel must be true or false, not %s"
+                       % db.json_kind(request["cancel"])])
     if request.get("cancel"):
         change.purpose = CANCEL_PURPOSES[0]
         conn.execute("UPDATE purchase_order SET status = 'cancelled'"
@@ -251,8 +268,11 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
         lines = []
     wanted = []
     for index, line in enumerate(lines, 1):
-        action = CHANGE_ACTIONS.get(str((line or {}).get("action") or "change")
-                                    if isinstance(line, dict) else "")
+        if not isinstance(line, dict):
+            problems.append("line %d must be an object, not %s"
+                            % (index, db.json_kind(line)))
+            continue
+        action = CHANGE_ACTIONS.get(str(line.get("action") or "change"))
         if action is None:
             problems.append("line %d: action %r is not one of %s"
                             % (index, line.get("action"), ", ".join(CHANGE_ACTIONS)))
@@ -331,7 +351,7 @@ def _placed_line(conn: sqlite3.Connection, index: int,
     """One requested line, filled in from the catalogue, and what is wrong with it."""
     where = "line %d" % index
     if not isinstance(line, dict):
-        return {}, ["%s is not an object" % where]
+        return {}, ["%s must be an object, not %s" % (where, db.json_kind(line))]
     problems = []
     sku, upc = str(line.get("sku") or ""), str(line.get("upc") or "")
     if not (sku or upc):

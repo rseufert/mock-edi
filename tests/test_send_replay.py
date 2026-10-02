@@ -117,6 +117,13 @@ class AReplaySaysWhatTheOriginalSaid(_TwoConsignments):
         self.assertEqual(len(after["shipments"]), 2)
         self.assertEqual(len(after["invoices"]), 2)
 
+    def test_a_shipment_that_is_not_text_is_refused_by_name(self):
+        status, _h, data = self.post("/_mock/send", {
+            "partner": ACME, "kind": "invoice", "order": self.po,
+            "shipment": [self.shipments[0]]})
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["error"], "shipment must be a string, not a list")
+
     def test_a_shipment_that_is_not_the_orders_is_refused(self):
         self.send(x12_order("PO-OTHER"))
         other = self.order("PO-OTHER")["shipments"][0]["shipment_id"]
