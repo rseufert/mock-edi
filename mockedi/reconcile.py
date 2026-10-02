@@ -215,15 +215,19 @@ def answers(dialect: str, kind: str, control: str, reference: str,
                            "status": "", "sets": []}
     if not payload:
         return out
-    if kind == schema.INTERCHANGE_ACKNOWLEDGMENT:
-        verdict = _ta1_verdict(payload)
-        out["verdict"] = verdict
-        out["status"] = X12_VERDICTS.get(verdict, "")
-        return out
     try:
         interchange = (x12.parse(payload) if dialect == "X12"
                        else edifact.parse(payload))
     except EdiSyntaxError:
+        return out
+    if kind == schema.INTERCHANGE_ACKNOWLEDGMENT:
+        # A TA1 sits between ISA and IEA with no group round it, which is
+        # where the parser keeps it.
+        ta1 = next((item for item in interchange.preamble if item.tag == "TA1"),
+                   None)
+        verdict = ta1.get(4) if ta1 is not None else ""
+        out["verdict"] = verdict
+        out["status"] = X12_VERDICTS.get(verdict, "")
         return out
     message = next((item for _group, item in interchange.messages()
                     if item.control == control), None)
@@ -245,23 +249,6 @@ def answers(dialect: str, kind: str, control: str, reference: str,
                     "note": item.note}
                    for item in found if not item.covers]
     return out
-
-
-def _ta1_verdict(payload: str) -> str:
-    """TA104 of the TA1 in an interchange that carries nothing else.
-
-    Read off the text: a TA1 sits between ISA and IEA with no group round
-    it, and the element separator is the character after `ISA`.
-    """
-    text = payload.lstrip()
-    if len(text) < 106 or not text.startswith("ISA"):
-        return ""
-    separator, terminator = text[3], text[105]
-    for segment in text.split(terminator):
-        parts = segment.strip().split(separator)
-        if parts[0] == "TA1" and len(parts) > 4:
-            return parts[4]
-    return ""
 
 
 def _segment_error(code: str) -> str:
