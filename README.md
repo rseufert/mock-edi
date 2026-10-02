@@ -257,7 +257,8 @@ to no set, so it is served once for each dialect: `GET
 each described as any other segment is, in the order they are on the wire,
 with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
 or `advice` for `UNA`). Every set's entry names its envelope's path, so the
-whole of one interchange can be read from two requests.
+whole of one interchange can be read from two requests. A set, version or
+dialect the mock does not have is a 404 saying which.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
 is read against the version its group's `GS08` names — an industry suffix such

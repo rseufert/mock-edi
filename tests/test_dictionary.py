@@ -754,6 +754,34 @@ class TheEndpoint(MockServerCase):
         _s, _h, data = self.get("/_mock/dictionary/X12/999")
         self.assertIn("error", data)
 
+    def test_what_is_not_there_is_a_404(self):
+        # A 200 whose body said "error" was taken for the dictionary by any
+        # client that checked the status and nothing else (#207).
+        for path, fragment in (
+                ("/_mock/dictionary/X12/999", "no transaction set X12/999"),
+                ("/_mock/dictionary/X12/850?version=003050", "version 003050"),
+                ("/_mock/dictionary/X12/envelope?version=003050", "version 003050"),
+                ("/_mock/dictionary/KLINGON", "no dialect KLINGON"),
+                ("/_mock/dictionary/KLINGON/850", "no dialect KLINGON"),
+                ("/_mock/dictionary/KLINGON/envelope", "no dialect KLINGON"),
+                ("/_mock/dictionary/EDIFACT/850", "no transaction set EDIFACT/850")):
+            with self.subTest(path=path):
+                status, _h, data = self.get(path)
+                self.assertEqual(status, 404, data)
+                self.assertEqual(set(data), {"error"})
+                self.assertIn(fragment, data["error"])
+
+    def test_what_is_there_is_still_a_200(self):
+        for path in ("/_mock/dictionary", "/_mock/dictionary/X12",
+                     "/_mock/dictionary/edifact", "/_mock/dictionary/X12/850",
+                     "/_mock/dictionary/x12/850?version=005010",
+                     "/_mock/dictionary/EDIFACT/envelope",
+                     "/_mock/dictionary/X12/850?partner=ACME"):
+            with self.subTest(path=path):
+                status, _h, data = self.get(path)
+                self.assertEqual(status, 200, data)
+                self.assertNotIn("error", data)
+
 
 SEGMENT_KEYS = {"tag", "name", "requirement", "maxUse", "loop", "purpose",
                 "width", "checkedTo", "elements"}
