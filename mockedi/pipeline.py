@@ -410,11 +410,12 @@ class Pipeline:
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
             " partner, code, kind, control, group_control, reference, accepted,"
-            " findings, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+            " findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (interchange_id, "in", dialect, partner["id"], message.code,
              message_report.kind, message.control, message_report.group_control,
              reference, 1 if message_report.accepted else 0,
-             json.dumps(_findings(message_report)), db.now()))
+             json.dumps(_findings(message_report)), db.now(),
+             db.next_seq(self.conn)))
         self.conn.commit()
         return reference
 
@@ -622,9 +623,10 @@ class Pipeline:
                 continue
             due = moment + datetime.timedelta(milliseconds=delay)
             self.conn.execute(
-                "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
-                " VALUES (?,?,?,?,?)",
-                (partner["id"], po_number, kind, db.stamp(due), db.now()))
+                "INSERT INTO scheduled (partner, po_number, kind, due_at, at, seq)"
+                " VALUES (?,?,?,?,?,?)",
+                (partner["id"], po_number, kind, db.stamp(due), db.now(),
+                 db.next_seq(self.conn)))
         self.conn.commit()
 
     # What a misbehaving buyer does when a supplier's document arrives: the
@@ -656,10 +658,10 @@ class Pipeline:
         if promised is not None:
             return
         self.conn.execute(
-            "INSERT INTO scheduled (partner, po_number, kind, due_at, at)"
-            " VALUES (?,?,?,?,?)",
+            "INSERT INTO scheduled (partner, po_number, kind, due_at, at, seq)"
+            " VALUES (?,?,?,?,?,?)",
             (partner["id"], po_number, wanted[1], db.stamp(self.now()),
-             db.now()))
+             db.now(), db.next_seq(self.conn)))
 
     def _send_buyer_change(self, row, moment,
                            receipt: Optional[Receipt] = None) -> None:
@@ -913,10 +915,10 @@ class Pipeline:
         cursor = self.conn.execute(
             "INSERT INTO outbound (partner, dialect, code, kind, reference,"
             " payload, message_id, control, group_control, set_control, status,"
-            " due_at, note, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " due_at, note, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
              interchange_control, group_control, set_control, PENDING,
-             db.stamp(due), note, db.now()))
+             db.stamp(due), note, db.now(), db.next_seq(self.conn)))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
@@ -1083,13 +1085,18 @@ class Pipeline:
             # The transaction set's own control number, not the interchange's:
             # an inbound 997 quotes ST02 in AK202, and matching it against
             # ISA13 - which is what this recorded before - matches nothing.
+            # The sequence is the one taken when the document was queued, not
+            # a fresh one (#195): a release hands over everything that is due
+            # at once, so a number taken here would put the 856 and the 810
+            # after the invoice that was raised between them. When the mock
+            # decided to send it is the order a reader is asking about.
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
-                " accepted, findings, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+                " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", db.now()))
+                 row["reference"], 1, "", db.now(), row["seq"]))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(), row["id"]))

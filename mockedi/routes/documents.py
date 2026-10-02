@@ -24,9 +24,9 @@ def documents(h, rest: List[str]) -> Tuple[int, int]:
                              (row["interchange_id"],))
         row["findings"] = json.loads(row["findings"] or "[]")
         row["payload"] = interchange["payload"] if interchange else ""
-        return h.json(200, row)
+        return h.json(200, db.public(row))
     return h.json(200, [
-        dict(row, findings=json.loads(row["findings"] or "[]"))
+        db.public(dict(row, findings=json.loads(row["findings"] or "[]")))
         for row in db.rows(conn, _document_query(h.query),
                            _document_params(h.query))])
 

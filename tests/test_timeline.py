@@ -22,6 +22,8 @@ sys.path.insert(0, HERE)
 from support import (ACME, EURODIS, INITECH, MockServerCase, acknowledge,
                      edifact_order, x12_order)
 
+NORTHWIND = "NORTHWIND"
+
 EDIFACT = {"Content-Type": "application/edifact"}
 
 
@@ -182,6 +184,112 @@ class TheEdifactSide(MockServerCase):
         self.assertEqual(codes, [("in", "ORDERS"), ("out", "CONTRL"),
                                  ("out", "ORDRSP"), ("out", "DESADV"),
                                  ("out", "INVOIC")])
+
+
+def labels(found):
+    """Each event as one word, with the document or the work it is about.
+
+    A list of these is the whole assertion these tests make: the sequence,
+    and nothing else.
+    """
+    out = []
+    for event in found["events"]:
+        kind = event["event"]
+        if kind in ("received", "sent", "acknowledged"):
+            out.append("%s %s" % (kind, event["code"]))
+        elif kind == "promised":
+            out.append("promised %s" % event["kind"])
+        else:
+            out.append(kind)
+    return out
+
+
+# What a plain order actually does, in the order it does it: the 850 arrives
+# and is recorded, the 997 and the 855 answer it, the work is promised and
+# then done, and each document goes out beside the work that produced it.
+# Before #195 every `sent` landed after the packing and the invoicing,
+# because the rank by kind of event said so.
+PLAIN = ["received 850", "ordered", "sent 997", "sent 855",
+         "promised despatch", "promised invoice",
+         "packed", "sent 856", "invoiced", "sent 810"]
+
+
+class TheOrderInsideOneSecond(MockServerCase):
+    """Timestamps are second-precision, so this is nearly every order (#195)."""
+
+    def timeline(self, po_number):
+        status, _headers, data = self.get("/_mock/orders/%s/timeline" % po_number)
+        self.assertEqual(status, 200, data)
+        return data
+
+    def test_a_plain_order_reads_in_the_order_it_happened(self):
+        self.send(x12_order("TL-SEQ"))
+        found = self.timeline("TL-SEQ")
+        self.assertEqual(labels(found), PLAIN)
+        # The premise: all of it inside one second, so nothing but the
+        # recorded sequence can be putting it in this order.
+        self.assertEqual(len({event["at"] for event in found["events"]}), 1)
+
+    def test_the_sequence_is_the_same_on_a_second_call(self):
+        self.send(x12_order("TL-SEQ-2"))
+        self.assertEqual(labels(self.timeline("TL-SEQ-2")),
+                         labels(self.timeline("TL-SEQ-2")))
+
+    def test_an_edifact_order_reads_the_same_way(self):
+        self.send(edifact_order("TL-SEQ-EDI"), headers=EDIFACT)
+        self.assertEqual(
+            labels(self.timeline("TL-SEQ-EDI")),
+            ["received ORDERS", "ordered", "sent CONTRL", "sent ORDRSP",
+             "promised despatch", "promised invoice",
+             "packed", "sent DESADV", "invoiced", "sent INVOIC"])
+
+
+class TheReleasedSecond(MockServerCase):
+    """Work held back by a delay, and then all let go at once.
+
+    The release writes every document that is due in one go, so a sequence
+    taken there would put the 856 and the 810 after the invoice raised
+    between them. The number is taken when the document is queued instead.
+    """
+    config_kwargs = {"despatch_delay_ms": 3600 * 1000,
+                     "invoice_delay_ms": 3600 * 1000}
+
+    def test_each_document_stays_with_the_work_that_produced_it(self):
+        self.send(x12_order("TL-HELD"))
+        self.post("/_mock/advance?all")
+        status, _headers, found = self.get("/_mock/orders/TL-HELD/timeline")
+        self.assertEqual(status, 200, found)
+        self.assertEqual(labels(found), PLAIN)
+        released = {event["at"] for event in found["events"]
+                    if event["event"] in ("packed", "invoiced")
+                    or event.get("code") in ("856", "810")}
+        self.assertEqual(len(released), 1, "the four should share one second")
+
+
+class TheOrderTheMockPlaced(MockServerCase):
+    """`PLACED_RANK`, pinned the same way.
+
+    This one passes without the change: a placed order's events are almost
+    all documents, and those were already ordered among themselves by the
+    row id they were archived with. It is here so that the direction has a
+    sequence of its own on the record, now that `seq` governs it too.
+    """
+
+    def test_it_reads_in_the_order_it_happened(self):
+        status, _headers, placed = self.post(
+            "/_mock/purchase",
+            {"partner": NORTHWIND,
+             "lines": [{"sku": "WIDGET-001", "quantity": "10", "uom": "EA",
+                        "price": "12.50"}]})
+        self.assertEqual(status, 201, placed)
+        po_number = placed["po_number"]
+        self.send(acknowledge(self.mailbox(NORTHWIND, "order")[0]["payload"]))
+        status, _headers, found = self.get(
+            "/_mock/orders/%s/timeline?partner=%s" % (po_number, NORTHWIND))
+        self.assertEqual(status, 200, found)
+        self.assertEqual(found["direction"], "placed")
+        self.assertEqual(labels(found), ["ordered", "sent 850", "acknowledged 850"])
+
 
 
 if __name__ == "__main__":

@@ -24,6 +24,9 @@ from support import REQUEST_TIMEOUT, FileDatabaseCase, x12_order
 
 OLD_SCHEMA = os.path.join(HERE, "fixtures", "schema-0.1.0.sql")
 
+# What the timeline falls back to when nothing has a sequence.
+from mockedi.timeline import RANK as _RANK
+
 
 class FileDatabase(FileDatabaseCase):
     start_on_setup = False
@@ -71,9 +74,39 @@ class From010(FileDatabase):
         httpd, _base = self.serve()
         with httpd.mock.lock:
             row = httpd.mock.conn.execute(
-                "SELECT reference, ack_status FROM transaction_set"
+                "SELECT reference, ack_status, seq FROM transaction_set"
                 " WHERE reference = 'PO-FROM-010'").fetchone()
-        self.assertEqual(tuple(row), ("PO-FROM-010", ""))
+        self.assertEqual(tuple(row), ("PO-FROM-010", "", 0))
+
+    def test_rows_written_before_the_sequence_still_sort_by_rank(self):
+        """Every row an upgraded file holds has `seq` 0 (#195).
+
+        Which is the state this reproduces: an order is taken over HTTP and
+        then every sequence is cleared, leaving exactly what the upgrade
+        leaves behind. The timeline must fall back to the rank it used
+        before and stay put, rather than sort arbitrarily - the one thing
+        `timeline.py` says it must never do.
+        """
+        httpd, base = self.serve()
+        request = urllib.request.Request(
+            base + "/edi", data=x12_order("PO-NO-SEQ").encode(), method="POST")
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT):
+            pass
+        with httpd.mock.lock:
+            for table in ("transaction_set", "purchase_order", "shipment",
+                          "invoice", "scheduled", "outbound"):
+                httpd.mock.conn.execute("UPDATE %s SET seq = 0" % table)
+            httpd.mock.conn.execute("UPDATE transaction_set SET ack_seq = 0")
+            httpd.mock.conn.commit()
+
+        request = urllib.request.Request(base + "/_mock/orders/PO-NO-SEQ/timeline")
+        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
+            found = json.loads(response.read())
+        kinds = [event["event"] for event in found["events"]]
+        self.assertEqual(kinds, ["received", "ordered", "promised", "promised",
+                                 "packed", "invoiced", "sent", "sent", "sent",
+                                 "sent"])
+        self.assertEqual(kinds, sorted(kinds, key=lambda kind: _RANK[kind]))
 
     def test_it_is_marked_with_the_current_version(self):
         self.serve()
@@ -286,11 +319,11 @@ class FromANewerMock(FileDatabase):
 
 
 class TheVersionMovesWithTheSchema(unittest.TestCase):
-    # The schema as of SCHEMA_VERSION 11. When this fails, the schema has
+    # The schema as of SCHEMA_VERSION 12. When this fails, the schema has
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (11, "ff2c8994ccbe9c25")
+    FINGERPRINT = (12, "127a33b8b6199efe")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())

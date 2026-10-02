@@ -30,12 +30,12 @@ def orders(h, rest: List[str]) -> Tuple[int, int]:
         key = (order["partner"], order["po_number"])
         order["lines"] = documents.order_lines(conn, order["po_number"],
                                                order["partner"])
-        order["shipments"] = db.rows(
+        order["shipments"] = db.public(db.rows(
             conn, "SELECT * FROM shipment WHERE partner = ? AND po_number = ?"
-                  " ORDER BY rowid", key)
-        order["invoices"] = db.rows(
+                  " ORDER BY rowid", key))
+        order["invoices"] = db.public(db.rows(
             conn, "SELECT * FROM invoice WHERE partner = ? AND po_number = ?"
-                  " ORDER BY rowid", key)
+                  " ORDER BY rowid", key))
         if order["direction"] == documents.PLACED:
             # What was asked for beside what the supplier said, line by
             # line, and where the two disagree (#126).
@@ -48,10 +48,10 @@ def orders(h, rest: List[str]) -> Tuple[int, int]:
             order["disagreements"] = [
                 claims.as_json(row) for row in
                 claims.disagreements(conn, *key)]
-        return h.json(200, order)
-    return h.json(200, db.rows(
+        return h.json(200, db.public(order))
+    return h.json(200, db.public(db.rows(
         conn, "SELECT * FROM purchase_order ORDER BY rowid DESC LIMIT ?",
-        (limit(h.query),)))
+        (limit(h.query),))))
 
 
 @route(ANY, "/_mock/purchase", rest=True)
@@ -88,7 +88,7 @@ def purchase(h, rest: List[str]) -> Tuple[int, int]:
                                            order["partner"])
     order["sent"] = {"id": queued.id, "kind": queued.kind,
                      "code": queued.code, "dueAt": queued.due_at}
-    return h.json(status, order)
+    return h.json(status, db.public(order))
 
 
 @route(ANY, "/_mock/disagreements", rest=True)

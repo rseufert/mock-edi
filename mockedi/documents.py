@@ -121,8 +121,8 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
         "INSERT OR REPLACE INTO purchase_order (po_number, partner, seller_order,"
         " ordered_on, requested_on, currency, status, total, ship_to_name,"
         " ship_to_id, ship_to_street, ship_to_city, ship_to_region,"
-        " ship_to_postal, ship_to_country, at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " ship_to_postal, ship_to_country, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (order.po_number, partner["id"], seller_order,
          order.ordered_on.isoformat() if order.ordered_on else "",
          order.requested_on.isoformat() if order.requested_on else "",
@@ -130,7 +130,7 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
          ship_to.name or partner["name"], ship_to.identifier or partner["id"],
          ship_to.street or partner["street"], ship_to.city or partner["city"],
          ship_to.region or partner["region"], ship_to.postal or partner["postal"],
-         ship_to.country or partner["country"], db.now()))
+         ship_to.country or partner["country"], db.now(), db.next_seq(conn)))
     conn.commit()
     return order_row(conn, order.po_number, partner["id"])
 
@@ -198,12 +198,12 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
         "INSERT INTO purchase_order (po_number, partner, ordered_on,"
         " requested_on, currency, status, total, ship_to_name, ship_to_id,"
         " ship_to_street, ship_to_city, ship_to_region, ship_to_postal,"
-        " ship_to_country, direction, at)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " ship_to_country, direction, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (po_number, partner["id"], local(moment).date().isoformat(), requested_on,
          str(request.get("currency") or "USD"), PLACED, db.money(total),
          us.name, us.identifier, us.street, us.city, us.region, us.postal,
-         us.country or "US", PLACED, db.now()))
+         us.country or "US", PLACED, db.now(), db.next_seq(conn)))
     conn.commit()
     return order_row(conn, po_number, partner["id"])
 
@@ -591,12 +591,13 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
 
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
-        " scac, tracking, bol, cartons, weight, at) VALUES (?,?,?,?,?,?,?,?,?,?,?)",
+        " scac, tracking, bol, cartons, weight, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
         (shipment_id, po_number, order["partner"], local(moment).date().isoformat(),
          "United Parcel Service", "UPSN", _tracking(shipment_id),
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
-         quantity_text(units * 2), db.now()))
+         quantity_text(units * 2), db.now(), db.next_seq(conn)))
     conn.execute("UPDATE purchase_order SET status = 'shipped'"
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
@@ -646,10 +647,11 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
     conn.execute(
         "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
         " invoiced_on, currency, subtotal, tax, total, terms_days, discount_pct,"
-        " discount_days, at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " discount_days, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (invoice_number, po_number, order["partner"], shipment_id,
          local(moment).date().isoformat(), order["currency"], db.money(subtotal),
-         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now()))
+         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now(),
+         db.next_seq(conn)))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
         conn, "SELECT total FROM invoice WHERE partner = ? AND po_number = ?",
         (partner_id, po_number))), Decimal("0.00"))
