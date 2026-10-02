@@ -640,6 +640,14 @@ range. `POST /_mock/purchase/<po>/change` sends an **860** or **ORDCHG**:
 `{"lines": [{"line": "1", "quantity": "80"}]}`, with `action` `add` or
 `delete` on a line, or `{"cancel": true}`.
 
+An order or change the document could not carry is refused with a 400 before
+anything is stored or sent: a PO number longer than `BEG03` allows, a currency
+or unit that is not one of the element's codes. The check is the mock's own
+validator run on the document it was about to send, in that supplier's
+dialect, so it says exactly what `/_mock/validate` would have said about the
+bytes afterwards - and each problem names the field of the request it came
+from: `currency 'DOLLARS': CUR02 is 7 characters, the maximum is 3`.
+
 What the supplier sends back - an **855**, **856**, **810** or **865**, or
 their EDIFACT counterparts - is accepted, acknowledged and filed under the
 order it names, and `/_mock/orders/<po>/timeline` shows the whole exchange
