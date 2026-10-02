@@ -59,7 +59,7 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import db
 from .envelope import local
-from .money import cents
+from .money import cents, unit_price
 from .transactions import (ACCEPTED, BACKORDERED, REJECTED, SHORT, Order,
                            number, quantity_text)
 
@@ -110,8 +110,8 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
             (partner["id"], order.po_number, line.number, (item["sku"] if item else line.sku),
              line.upc or (item["upc"] if item else ""),
              line.description or (item["description"] if item else ""),
-             quantity_text(line.quantity), line.uom, db.money(price),
-             db.money(line.price), status, quantity_text(confirmed),
+             quantity_text(line.quantity), line.uom, unit_price(price),
+             unit_price(line.price), status, quantity_text(confirmed),
              "0", "0", reason, scheduled))
 
     # An order where nothing was confirmed is refused outright; it will never
@@ -194,7 +194,7 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
             " VALUES (?,?,?,?,?,?,?,?,?,?)",
             (partner["id"], po_number, row["line"], row["sku"], row["upc"],
              row["description"], quantity_text(row["quantity"]), row["uom"],
-             db.money(row["price"]), db.money(row["price"])))
+             unit_price(row["price"]), unit_price(row["price"])))
     conn.execute(
         "INSERT INTO purchase_order (po_number, partner, ordered_on,"
         " requested_on, currency, status, total, ship_to_name, ship_to_id,"
@@ -303,13 +303,13 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                 " VALUES (?,?,?,?,?,?,?,?,?,?)",
                 (partner_id, po_number, row["line"], row["sku"], row["upc"],
                  row["description"], quantity_text(row["quantity"]), row["uom"],
-                 db.money(row["price"]), db.money(row["price"])))
+                 unit_price(row["price"]), unit_price(row["price"])))
         else:
             conn.execute(
                 "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
                 " ordered_price = ? WHERE partner = ? AND po_number = ? AND line = ?",
-                (quantity_text(row["quantity"]), row["uom"], db.money(row["price"]),
-                 db.money(row["price"]), partner_id, po_number, row["line"]))
+                (quantity_text(row["quantity"]), row["uom"], unit_price(row["price"]),
+                 unit_price(row["price"]), partner_id, po_number, row["line"]))
         change.lines.append(ChangeLine(
             number=row["line"], sku=row["sku"], upc=row["upc"],
             description=row["description"], quantity=row["quantity"],
@@ -437,11 +437,11 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
                 # other one out loud rather than changing the price in
                 # silence - a buyer reconciling the invoice needs to know.
                 reason += "; priced at %s, the order said %s" % (
-                    db.money(price), db.money(line.price))
+                    unit_price(price), unit_price(line.price))
         elif line.price and line.price != price:
             status = PRICE_CHANGED
             reason = "Priced at %s, the order said %s" % (
-                db.money(price), db.money(line.price))
+                unit_price(price), unit_price(line.price))
 
         out.append((status, confirmed, price, reason, scheduled))
     return out
@@ -809,8 +809,8 @@ def _add_line(conn, partner, change, line, moment) -> Dict[str, Any]:
         (partner["id"], change.po_number, line.number, (item["sku"] if item else line.sku),
          line.upc or (item["upc"] if item else ""),
          line.description or (item["description"] if item else ""),
-         quantity_text(line.quantity), line.uom, db.money(price),
-         db.money(line.price), status, quantity_text(confirmed), "0", "0",
+         quantity_text(line.quantity), line.uom, unit_price(price),
+         unit_price(line.price), status, quantity_text(confirmed), "0", "0",
          reason, scheduled))
     return {"line": line.number, "action": "AI", "status": status,
             "reason": reason}
@@ -849,8 +849,8 @@ def _change_line(conn, partner, change, line, row, moment) -> Dict[str, Any]:
         "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
         " ordered_price = ?, status = ?, confirmed = ?, reason = ?,"
         " scheduled_on = ? WHERE partner = ? AND po_number = ? AND line = ?",
-        (quantity_text(wanted), line.uom or row["uom"], db.money(price),
-         db.money(line.price or number(row["ordered_price"], "0.00")), status,
+        (quantity_text(wanted), line.uom or row["uom"], unit_price(price),
+         unit_price(line.price or number(row["ordered_price"], "0.00")), status,
          quantity_text(confirmed), reason, scheduled or row["scheduled_on"],
          partner["id"], change.po_number, line.number))
     return {"line": line.number, "action": action, "status": status,

@@ -620,7 +620,7 @@ class Pipeline:
                  "description": line.description,
                  "quantity": transactions.quantity_text(line.quantity),
                  "uom": line.uom,
-                 "price": transactions.price_text(line.price),
+                 "price": transactions.unit_price(line.price),
                  "confirmed": "0", "status": transactions.REJECTED,
                  "reason": reason, "scheduled_on": ""}
                 for line in order.lines]
