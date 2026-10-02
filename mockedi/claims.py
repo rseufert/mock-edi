@@ -205,6 +205,19 @@ def claims_for(conn, partner_id: str, po_number: str) -> List[Dict[str, Any]]:
                          " AND po_number = ? ORDER BY id", (partner_id, po_number))
 
 
+def sellers_order(conn, partner_id: str, po_number: str) -> str:
+    """The number the supplier filed a placed order under, once it has said.
+
+    From its latest 855 or 865: `BAK08`, `BCA09` or `REF*VN`. Empty until one
+    arrives that gives it.
+    """
+    row = db.one(conn, "SELECT document FROM supplier_claim WHERE partner = ?"
+                       " AND po_number = ? AND kind IN (?, ?) AND document != ''"
+                       " ORDER BY id DESC LIMIT 1",
+                 (partner_id, po_number, schema.RESPONSE, schema.CHANGE_RESPONSE))
+    return row["document"] if row else ""
+
+
 def disagreements(conn, partner_id: str = "", po_number: str = "",
                   limit: int = 0) -> List[Dict[str, Any]]:
     """Stored disagreements, oldest first, for whichever partner and order."""

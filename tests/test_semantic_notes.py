@@ -19,9 +19,10 @@ publishers or more for each, listed position by position in the table on
 Every date below is different, so a value in the wrong position is the wrong
 value and not a coincidence.
 
-One position still disagrees and is marked as an expected failure naming the
-issue that fixes it: #232. (#230, the 856 reader taking BSN03 as the ship
-date, and #231, AK404 repeating an invalid character, are fixed.)
+Three positions disagreed when this was written, and each test for one was
+an expected failure until its issue was fixed: #230 (the 856 reader taking
+BSN03 as the ship date), #231 (AK404 repeating an invalid character) and
+#232 (the seller's order number in BCA09 and BCH09). None is left.
 """
 import datetime
 import os
@@ -150,9 +151,8 @@ class BCH(Written):
         self.assertEqual(change.ordered_on, day(ORDERED))
         self.assertEqual(change.changed_on, day(CHANGED))
 
-    @unittest.expectedFailure       # #232: BCH09 is not read
     def test_the_sellers_order_number_is_read_from_bch09(self):
-        self.assertEqual(getattr(self.read(), "seller_order", None), "SO-9")
+        self.assertEqual(self.read().seller_order, "SO-9")
 
 
 class BAK(Written):
@@ -187,7 +187,6 @@ class BCA(Written):
         self.assertEqual(bca.get(10), WRITTEN)
         self.assertEqual(bca.get(11), CHANGED)
 
-    @unittest.expectedFailure       # #232: written only in REF*VN
     def test_the_sellers_order_number_is_written_in_bca09(self):
         self.assertEqual(one(self.change_response, "BCA").get(9), "SO-5100189")
 
@@ -204,7 +203,6 @@ class BCA(Written):
         self.assertEqual(response.ordered_on, day(ORDERED))
         self.assertEqual(response.responded_on, day(WRITTEN))
 
-    @unittest.expectedFailure       # #232: BCA09 is not read
     def test_the_sellers_order_number_is_read_from_bca09(self):
         self.assertEqual(self.read().seller_order, "SO-9")
 
