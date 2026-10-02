@@ -62,7 +62,12 @@ def functional_acknowledgment(functional_id: str, group_control: str,
 
     `group_errors` are the group's own faults - a missing GE, a count or
     control number that does not match - and go in AK905 onward. Any of them
-    rejects the whole group, however clean the sets inside it were.
+    rejects the whole group, however clean the sets inside it were, and then
+    every AK5 says R too: a reader that takes its verdict from AK5 would
+    otherwise see `AK5*A` for an order that was dropped (#205). The loops
+    could be left out instead - the guides allow it - but a reader that
+    applies AK9 to the group only when there is no AK2 loop at all would then
+    learn nothing about a clean set sharing a group with a flawed one.
     """
     # AK103 exists from 005010 on: a 997 at 004010 names the group and its
     # control number, and nothing more.
@@ -81,8 +86,8 @@ def functional_acknowledgment(functional_id: str, group_control: str,
                                _position(element),
                                element.ref, element.code,
                                _clip(element.value)))
-        out.append(_ak5(item))
-        if item.accepted:
+        out.append(_ak5(item, group_rejected=bool(group_errors)))
+        if item.accepted and not group_errors:
             accepted += 1
 
     verdict = "R" if group_errors else _group_code(messages)
@@ -91,14 +96,20 @@ def functional_acknowledgment(functional_id: str, group_control: str,
     return out
 
 
-def _ak5(item: MessageReport) -> Seg:
+def _ak5(item: MessageReport, group_rejected: bool = False) -> Seg:
     if item.refused:
         # A translator that rejects what it should not gives no reason.
         return seg("AK5", "R")
     if item.clean:
-        return seg("AK5", "A")
+        # In a rejected group there is nothing of the set's own to name in
+        # AK502: the reason is the group's, and it is in AK905.
+        return seg("AK5", "R" if group_rejected else "A")
     code = "A" if item.accepted and not item.set_errors else (
         "E" if item.accepted else "R")
+    if group_rejected:
+        # Neither "accepted" nor "accepted with errors" can be said of a set
+        # inside a group that was rejected. What was wrong with it stays.
+        code = "R"
     elements: List[str] = [code]
     for error, _note in item.set_errors[:5]:
         elements.append(error)
