@@ -336,7 +336,11 @@ CI.
 The dates **on the wire** are the opposite case and stay as they are. ISA09/10,
 GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
-them.
+them. So is every date and time inside a document - `BAK09`, `BSN03/04`,
+`BIG01`, an ORDRSP's `DTM+137` - which is the mock's clock read in the host's
+zone, so a document and its envelope always name the same day. A date a
+partner sends without a zone is read the same way: `BPR16` is compared with
+the day the mock would write today.
 
 ## One order, one conversation
 
