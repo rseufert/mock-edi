@@ -500,6 +500,9 @@ dates, due times, timestamps, MDN dates - is dated by the moved clock, and
 `/_mock/unacknowledged?older-than=` and `--retention-days` count from it. The response says
 where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
+On a `--db` file the advance is kept with the data, so a mock that is
+restarted comes back as far ahead as it was stopped, and nothing it stamps
+afterwards is earlier than what the file already holds.
 It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
 that would take it further is a 400 that says how much room is left, and
 leaves the clock where it was. A parameter the endpoint does not take is a
@@ -1047,7 +1050,7 @@ everything in memory.
 | --- | --- |
 | `--host ADDRESS` | The bind address (default `127.0.0.1`). `0.0.0.0` to reach it from another machine or a container. |
 | `--port N` | The port (default `8080`). |
-| `--db PATH` | A SQLite file instead of `:memory:`. Partners, orders, the archive and the control-number ranges then survive a restart, and documents left undelivered are picked up again; an older file is upgraded in place when it is opened. |
+| `--db PATH` | A SQLite file instead of `:memory:`. Partners, orders, the archive, the control-number ranges and how far the clock was advanced then survive a restart, and documents left undelivered are picked up again; an older file is upgraded in place when it is opened. |
 | `-q`, `--quiet` | No access log. |
 | `--version` | Print the version and exit. |
 

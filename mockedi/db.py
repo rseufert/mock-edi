@@ -635,6 +635,29 @@ def next_number(conn: sqlite3.Connection, scope: str, partner: str = "*") -> int
     return value
 
 
+def clock_offset(conn: sqlite3.Connection) -> datetime.timedelta:
+    """How far ahead the mock's clock was left, as the file remembers it.
+
+    The advance used to live only in the running process, so a mock on a
+    file database that was advanced and restarted came back at real time,
+    behind the stamps and due times already in its file (#228). It is kept
+    beside the control numbers, in microseconds: `/_mock/reset` clears that
+    table, which puts the clock back with everything else.
+    """
+    row = conn.execute(
+        "SELECT value FROM control_number WHERE partner = '*' AND scope = 'clock'"
+    ).fetchone()
+    return datetime.timedelta(microseconds=int(row["value"]) if row else 0)
+
+
+def keep_clock_offset(conn: sqlite3.Connection,
+                      offset: datetime.timedelta) -> None:
+    conn.execute(
+        "INSERT OR REPLACE INTO control_number (partner, scope, value)"
+        " VALUES ('*', 'clock', ?)", (offset // datetime.timedelta(microseconds=1),))
+    conn.commit()
+
+
 def next_seq(conn: sqlite3.Connection) -> int:
     """The next step in the one sequence the timeline is ordered by (#195).
 
