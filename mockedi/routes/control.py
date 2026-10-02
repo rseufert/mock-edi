@@ -1,11 +1,11 @@
 """The control plane's own endpoints: health, state, behaviours, requests, reset.
 
 Each is registered for `ANY` method with the `rest` of the path ignored,
-because `_control` answered them that way (#182); #188 decides whether they
+because the control plane's old `if` chain answered them that way (#182); #188 decides whether they
 should be stricter. `reset` alone refuses a method, and says so as it did.
 
-The rest of `/_mock` is still answered by `Handler._control`, through the
-catch-all at the foot of this module, until #182's last step removes it.
+A `/_mock` path that no module has taken is answered by the catch-all at the
+foot of this module, with the 404 the control plane has always given.
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ import sqlite3
 from typing import List, Tuple
 
 from .. import db, partners
-from . import ANY, CONTROL, limit, route, split
+from . import ANY, CONTROL, limit, route
 
 
 @route(ANY, "/_mock/health", rest=True)
@@ -82,6 +82,17 @@ def _count(conn: sqlite3.Connection, table: str, where: str = "") -> int:
 
 
 @route(ANY, CONTROL, rest=True)
-def control(h, rest: List[str]) -> Tuple[int, int]:
-    """Every `/_mock` path no module above has taken, as `_control` answers it."""
-    return h._control(h.method, split(h.path)[0], h.query, h.body)
+def unknown(h, rest: List[str]) -> Tuple[int, int]:
+    """Every `/_mock` path no other route has taken: a 404 that lists them.
+
+    The list is the one the control plane has always answered with, as
+    written. Deriving it from the table would add the endpoints it leaves
+    out, which is a change for #188 to make.
+    """
+    return h.json(404, {
+        "error": "no control endpoint %r" % (rest[0] if rest else ""),
+        "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
+                      "catalog", "orders", "documents", "interchanges",
+                      "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
+                      "unacknowledged", "remittances", "requests", "validate",
+                      "reset"]})
