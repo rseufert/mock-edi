@@ -153,11 +153,51 @@ class TheControlPlaneMatchesAsLooselyAsItAlwaysHas(MockServerCase):
                 self.assertEqual(status, 200, data)
                 self.assertIsInstance(data, list)
 
+    def test_the_queue_and_the_clock_refuse_a_method_in_their_own_words(self):
+        for path, line in (
+                ("/_mock/advance", b"POST to advance the queue\n"),
+                ("/_mock/send", b"POST to send a document\n"),
+                ("/_mock/outbox/1/retry", b"POST to retry a delivery\n"),
+                ("/_mock/drop/scan", b"POST to scan the drop directory\n")):
+            with self.subTest(path=path):
+                status, _headers, data = self.get(path, raw=True)
+                self.assertEqual((status, data), (405, line))
+
+    def test_the_mailbox_and_its_neighbours_answer_any_method(self):
+        for path in ("/_mock/mailbox", "/_mock/outbox", "/_mock/scheduled",
+                     "/_mock/unacknowledged", "/_mock/outbox/1",
+                     "/_mock/scheduled/x"):
+            with self.subTest(path=path):
+                status, _headers, data = self.request("PUT", path)
+                self.assertEqual(status, 200, data)
+                self.assertIsInstance(data, list)
+        status, _headers, data = self.request("DELETE", "/_mock/drop/other")
+        self.assertEqual(status, 200, data)
+        self.assertIsInstance(data, dict)
+
+    def test_a_retry_of_a_delivery_that_is_not_a_number_is_a_404(self):
+        status, _headers, data = self.post("/_mock/outbox/x/retry")
+        self.assertEqual(status, 404)
+        self.assertEqual(data, {"error": "no outbound document 'x'"})
+
     def test_an_unknown_endpoint_lists_the_known_ones(self):
         status, _headers, data = self.get("/_mock/nothing-here")
         self.assertEqual(status, 404)
         self.assertEqual(data["error"], "no control endpoint 'nothing-here'")
-        self.assertIn("health", data["endpoints"])
+        # As written, in this order: the list is by hand, and leaves out
+        # `purchase` and `disagreements`. #188 decides whether it should.
+        self.assertEqual(data["endpoints"], [
+            "health", "state", "behaviours", "dictionary", "partners",
+            "catalog", "orders", "documents", "interchanges", "mailbox",
+            "outbox", "scheduled", "drop", "advance", "send", "mdns",
+            "unacknowledged", "remittances", "requests", "validate", "reset"])
+
+    def test_the_bare_prefix_is_an_endpoint_with_no_name(self):
+        for path in ("/_mock", "/_mock/", "/_mockery"):
+            with self.subTest(path=path):
+                status, _headers, data = self.request("POST", path)
+                self.assertEqual(status, 404)
+                self.assertEqual(data["error"], "no control endpoint ''")
 
 
 class ANonsensePathIsAnswered404(MockServerCase):

@@ -1,7 +1,7 @@
 """What has crossed the wire: transaction sets, whole interchanges, and receipts.
 
 Each is registered for `ANY` method with the `rest` of the path read as
-`_control` read it (#182).
+the control plane's old `if` chain read it (#182).
 """
 from __future__ import annotations
 
