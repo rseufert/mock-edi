@@ -440,9 +440,11 @@ class Pipeline:
     def _apply_change(self, partner, change, receipt: Receipt) -> None:
         """Hand a change to the seller, and remember what it decided.
 
-        A refusal still produces an answer - that is the whole point of a
-        change acknowledgment - so a refused change is recorded and reported
-        rather than quietly dropped.
+        A change to an order the partner does not hold, or one already
+        invoiced, is refused beside the acknowledgment: it is reported in the
+        receipt's `refusals`, and no 865 or ORDRSP is sent for it. A change
+        the seller takes is answered line by line, including the lines it
+        turns down.
         """
         outcome = documents.apply_change(self.conn, partner, change, self.now())
         if outcome.refused:
@@ -464,11 +466,15 @@ class Pipeline:
 
         The rows stay, marked done with the note, so `/_mock/scheduled?all`
         shows a promise that was withdrawn rather than one that never was.
+        Only the packing and the billing: anything else promised against the
+        order's number is not this order's fulfilment.
         """
         self.conn.execute(
             "UPDATE scheduled SET done_at = ?, note = ?"
-            " WHERE partner = ? AND po_number = ? AND done_at = ''",
-            (db.now(), note, partner["id"], po_number))
+            " WHERE partner = ? AND po_number = ? AND done_at = ''"
+            " AND kind IN (?, ?)",
+            (db.now(), note, partner["id"], po_number,
+             schema.DESPATCH, schema.INVOICE))
         self.conn.commit()
 
     def _schedule_the_difference(self, partner, po_number, moment) -> None:
@@ -480,17 +486,31 @@ class Pipeline:
         invoice are scheduled for the difference - a second consignment, with
         an 856 and an 810 of its own. Work already scheduled is not doubled:
         a despatch still to come packs whatever is confirmed by then.
+
+        An invoice still to come bills it too - unless it comes due before
+        the new despatch does. That is the first consignment's invoice, and
+        left to bill the second it would bill goods nobody has advised
+        (#222). The second consignment is promised an invoice of its own
+        then, and `_fulfil` leaves the packing to the despatch.
         """
         lines = documents.order_lines(self.conn, po_number, partner["id"])
         if not any(transactions.number(row["confirmed"])
                    > transactions.number(row["shipped"]) for row in lines):
             return
-        waiting = {row["kind"] for row in db.rows(
-            self.conn, "SELECT kind FROM scheduled WHERE partner = ?"
-                       " AND po_number = ? AND done_at = ''",
+        # The latest each kind is due: the last invoice waiting is the one
+        # that would bill whatever is packed by then.
+        waiting = {row["kind"]: row["due_at"] for row in db.rows(
+            self.conn, "SELECT kind, due_at FROM scheduled WHERE partner = ?"
+                       " AND po_number = ? AND done_at = '' ORDER BY due_at, id",
             (partner["id"], po_number))}
-        self._schedule_fulfilment(partner, po_number, moment,
-                                  skip=waiting)
+        skip = set(waiting)
+        if (schema.INVOICE in waiting and schema.DESPATCH not in waiting
+                and partner["behaviour"] != "out-of-order"):
+            despatch_due = db.stamp(moment + datetime.timedelta(
+                milliseconds=self.config.despatch_delay_ms))
+            if waiting[schema.INVOICE] <= despatch_due:
+                skip.discard(schema.INVOICE)
+        self._schedule_fulfilment(partner, po_number, moment, skip=skip)
 
     # -- planning the answers
 
@@ -762,7 +782,13 @@ class Pipeline:
         # before the despatch, or before the second consignment of a quantity
         # raised after the first. The despatch, when it comes, advises that
         # consignment rather than packing another.
-        documents.create_shipment(self.conn, po_number, partner["id"], moment)
+        #
+        # Unless a despatch and a later invoice are both still promised: then
+        # what is unpacked is a second consignment with its own 856 and 810
+        # to come, and this invoice bills what has shipped and no more (#222).
+        if not self._packing_is_promised(partner, po_number):
+            documents.create_shipment(self.conn, po_number, partner["id"],
+                                      moment)
         for shipment in documents.uninvoiced_shipments(self.conn, po_number,
                                                        partner["id"]):
             invoice = documents.create_invoice(
@@ -782,6 +808,19 @@ class Pipeline:
                 # incidents come from.
                 self._send(partner, schema.INVOICE, body, po_number, receipt,
                            moment, 1000, note="duplicate of the invoice above")
+
+    def _packing_is_promised(self, partner, po_number) -> bool:
+        """Whether a despatch and an invoice after it still wait for the order.
+
+        `out-of-order` is the invoice going first, so it never waits.
+        """
+        if partner["behaviour"] == "out-of-order":
+            return False
+        waiting = {row["kind"] for row in db.rows(
+            self.conn, "SELECT kind FROM scheduled WHERE partner = ?"
+                       " AND po_number = ? AND done_at = ''",
+            (partner["id"], po_number))}
+        return schema.DESPATCH in waiting and schema.INVOICE in waiting
 
     def _queue_change_response(self, partner, order, po_number, receipt,
                                moment) -> None:
