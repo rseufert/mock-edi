@@ -285,6 +285,31 @@ class TheClientKeepsItsConnection(unittest.TestCase):
             # Sent once and acted on once, not once per attempt.
             self.assertEqual(len(mock.get("/_mock/orders").body), 3)
 
+    def test_a_connection_that_breaks_while_an_answer_is_read_is_not_sent_again(self):
+        # From Eddie's review of this change. Once a status line has arrived
+        # the mock has acted on the request; sending it again advanced the
+        # clock by 120 seconds for one call that asked for 60.
+        import http.client
+        real = http.client.HTTPResponse.read
+        broken = []
+
+        def read(response, *args):
+            if not broken:
+                broken.append(True)
+                raise ConnectionResetError("reset while reading the answer")
+            return real(response, *args)
+
+        with Mock.start() as mock:
+            mock.get("/_mock/health")           # so the connection is a reused one
+            http.client.HTTPResponse.read = read
+            try:
+                with self.assertRaises(ConnectionResetError):
+                    mock.post("/_mock/advance?seconds=60")
+            finally:
+                http.client.HTTPResponse.read = real
+            moved = mock.post("/_mock/advance?seconds=0").body["advancedSeconds"]
+            self.assertAlmostEqual(moved, 60, delta=1)
+
     def test_a_refusal_that_closes_the_connection_is_followed_by_an_answer(self):
         # A body over --max-body is refused with `Connection: close`.
         with Mock.start(max_body_bytes=64) as mock:
@@ -356,6 +381,10 @@ class AStoppedMockAnswersNobody(unittest.TestCase):
         mock.get("/_mock/health")
         self.assertEqual(len(server._open), 2)
         mock.close()
+        if sys.platform == "win32":
+            # A thread already waiting in `recv` is not woken by the server's
+            # side closing there; it goes when its client does.
+            other.disconnect()
         import time
         deadline = time.time() + 2.0
         while server._open and time.time() < deadline:

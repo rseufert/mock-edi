@@ -615,6 +615,7 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
         # Before the bind, which can fail and call `server_close`.
         self._open: set = set()
         self._open_guard = threading.Lock()
+        self._stopping = False
         super().__init__(*args, **kwargs)
 
     def server_bind(self):
@@ -645,9 +646,18 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
         client does, each on a thread of its own. Stopping the listener does
         not stop those threads: a client holding a connection went on being
         answered by a mock that had closed its database (#220). One waiting
-        for a request is closed now; one in the middle of answering finishes
-        that answer and then closes.
+        for a request is closed now. One in the middle of answering is left
+        to finish and told to close afterwards - nearly always: `answering`
+        is read without a lock, so a request that arrives in the instant
+        between the look and the close is cut off. The mock is stopping, and
+        a lock on every request would be a high price for that instant.
+
+        On Windows a thread already waiting in `recv` is not woken by this;
+        its client is refused all the same when it next speaks, and the
+        thread goes then, or when the client closes or the request timeout
+        runs out.
         """
+        self._stopping = True
         with self._open_guard:
             handlers = list(self._open)
         for handler in handlers:
@@ -657,6 +667,14 @@ class _Server(socketserver.ThreadingMixIn, HTTPServer):
                     handler.connection.shutdown(socket.SHUT_RDWR)
                 except OSError:
                     pass            # already gone
+
+    def handle_error(self, request, client_address):
+        # A connection this server closed on its way down breaks under the
+        # handler that was waiting on it. That is the hang-up working, not a
+        # fault to print a traceback for.
+        if self._stopping and isinstance(sys.exc_info()[1], OSError):
+            return
+        super().handle_error(request, client_address)
 
     def server_close(self):
         # `socketserver` calls this from its own constructor when binding

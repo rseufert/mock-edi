@@ -239,8 +239,10 @@ class Mock:
 
         A connection the server has closed since it was last used - it drops
         an idle one after `--request-timeout`, and closes after some refusals
-        - is reopened and the request sent again, once. Only then: a failure
-        on a connection just opened is the mock being down, and is raised.
+        - is reopened and the request sent again, once. Only then, and only
+        when no answer had begun to arrive: a failure on a connection just
+        opened is the mock being down, and one while an answer is being read
+        comes after the mock acted on the request. Both are raised.
         """
         data = body
         if isinstance(data, (dict, list)):
@@ -258,7 +260,6 @@ class Mock:
             try:
                 connection.request(method, target, body=data, headers=sent)
                 reply = connection.getresponse()
-                payload = reply.read()
             except _HUNG_UP:
                 connection.close()
                 if reused:
@@ -267,6 +268,15 @@ class Mock:
             except BaseException:
                 # A timeout, or anything else: the connection is in no state
                 # to carry another request.
+                connection.close()
+                raise
+            # Outside what is sent again. Once a status line has arrived the
+            # server has acted on the request, and a connection that breaks
+            # while its answer is being read must be raised, not retried: a
+            # POST sent twice advanced the clock twice for one call.
+            try:
+                payload = reply.read()
+            except BaseException:
                 connection.close()
                 raise
             return Response(reply.status, dict(reply.getheaders()),
