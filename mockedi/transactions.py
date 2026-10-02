@@ -113,10 +113,27 @@ SHORT = "IQ"
 BACKORDERED = "IB"
 RESCHEDULED = "DR"
 
-# BEG01 / BGM 1225 values that mean "cancel the whole thing".
+# BEG01 / BCH01 values that mean "cancel the whole thing". A `Change` carries
+# its purpose in these, X12's, whichever dialect it arrived in.
 CANCEL_PURPOSES = ("01", "03")
 # BEG01 values that mean an 850 is restating an order rather than placing one.
 CHANGE_PURPOSES = ("01", "03", "04", "05")
+# The same four as an ORDERS says them, in BGM 1225, and the purpose each one
+# gives the change. 1225 has no leading zero: `1` is a cancellation, and
+# comparing it with `01` read every ORDERS as an original (#198).
+EDIFACT_CHANGE_PURPOSES = {"1": "01", "3": "03", "4": "04", "5": "05"}
+
+
+def restated_purpose(order: "Order", dialect: str) -> str:
+    """The purpose of the change an order is, or `""` for an order placed.
+
+    A buyer may restate an order rather than send an 860 or an ORDCHG, and
+    says so where the order says why it was sent: BEG01, or BGM 1225. Each is
+    read in its own dialect's codes.
+    """
+    if dialect == "X12":
+        return order.purpose if order.purpose in CHANGE_PURPOSES else ""
+    return EDIFACT_CHANGE_PURPOSES.get(order.purpose, "")
 
 
 @dataclass
@@ -954,7 +971,8 @@ def _read_change_edifact(message: Message) -> Change:
     return change
 
 
-def change_from_order(order: Order, held: Sequence[str] = ()) -> Change:
+def change_from_order(order: Order, held: Sequence[str] = (),
+                      purpose: str = "") -> Change:
     """An 850 sent with a change purpose, read as the change it is.
 
     A buyer may restate a whole order rather than send an 860, and `BEG01`
@@ -968,8 +986,11 @@ def change_from_order(order: Order, held: Sequence[str] = ()) -> Change:
     restated order can say "drop this line" only by leaving it out. A
     partner that sends `04` with just the lines it is changing needs an 860
     instead.
+
+    `purpose` is the change's, from `restated_purpose`: an ORDERS says it in
+    1225's codes, and a `Change` carries X12's.
     """
-    change = Change(po_number=order.po_number, purpose=order.purpose,
+    change = Change(po_number=order.po_number, purpose=purpose or order.purpose,
                     changed_on=order.ordered_on, ordered_on=order.ordered_on,
                     currency=order.currency)
     for line in order.lines:

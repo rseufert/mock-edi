@@ -36,6 +36,13 @@ from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport
 PENDING = "pending"
 # How much later the `late` partner answers than it otherwise would: an hour.
 LATE_MS = 60 * 60 * 1000
+# The furthest `advance` will move the clock past the real one, in total.
+# Fixed rather than "whatever datetime can still hold": everything written
+# after an advance adds to the clock again - a delay, `late`'s hour - and
+# converts it to local time, so a clock just short of year 9999 fails anyway,
+# only later and somewhere less obvious. A century is past anything a
+# scenario needs and keeps every date a four-digit year.
+MAX_ADVANCE = datetime.timedelta(days=100 * 365)
 READY = "ready"
 DELIVERED = "delivered"
 COLLECTED = "collected"
@@ -256,18 +263,22 @@ class Pipeline:
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
                     # A buyer may restate a whole order rather than send an
-                    # 860, and BEG01 says so. Against an order the mock already
-                    # holds that is a change, not a replacement.
+                    # 860, and BEG01 or BGM 1225 says so. That is a change to
+                    # an order the mock holds, not a replacement - and when
+                    # the mock holds none it is refused as a change to an
+                    # unknown order is, not taken as a new one: fulfilling a
+                    # cancellation ships what the buyer withdrew (#198).
                     # This partner's own order with the number: another
                     # partner's order with it is a different order (#132).
                     known = documents.order_row(self.conn, order.po_number,
                                                 partner["id"])
-                    if order.purpose in transactions.CHANGE_PURPOSES and known:
+                    restated = transactions.restated_purpose(order, dialect)
+                    if restated:
                         held = [row["line"] for row in documents.order_lines(
                             self.conn, order.po_number, partner["id"])]
                         self._apply_change(
-                            partner, transactions.change_from_order(order, held),
-                            receipt)
+                            partner, transactions.change_from_order(
+                                order, held, restated), receipt)
                     elif known is not None and (
                             known["direction"] == documents.PLACED
                             or (known["status"] != documents.RECEIVED
@@ -1168,9 +1179,23 @@ class Pipeline:
             # converted to UTC without overflowing.
             return self.release(
                 datetime.datetime.max.replace(tzinfo=datetime.timezone.utc))
+        if seconds != seconds or seconds in (float("inf"), float("-inf")):
+            raise ValueError("seconds must be a finite number, got %s" % seconds)
         if seconds < 0:
             raise ValueError("the clock only moves forward; seconds must not "
                              "be negative, got %s" % seconds)
+        # Checked before the offset moves, and as plain numbers: 1e300 cannot
+        # even be made into a timedelta. An offset `now()` cannot be computed
+        # from fails every request after it, until a reset (#203).
+        limit = MAX_ADVANCE.total_seconds()
+        ahead = self.offset.total_seconds()
+        if seconds > limit - ahead:
+            raise ValueError(
+                "the clock can be at most %d seconds (%d days) ahead in total; "
+                "it is %s ahead already, which leaves %s, and seconds was %s. "
+                "POST /_mock/reset puts the clock back"
+                % (limit, MAX_ADVANCE.days, _seconds(ahead),
+                   _seconds(limit - ahead), _seconds(seconds)))
         self.offset += datetime.timedelta(seconds=seconds)
         return self.release(self.now())
 
@@ -1287,3 +1312,10 @@ def _findings(message_report) -> List[str]:
             out.append("%s@%d: %s" % (finding.tag, finding.position, finding.note))
     out.extend(note for _code, note in message_report.set_errors)
     return out
+
+
+def _seconds(value: float) -> str:
+    """A number of seconds for an error message, in full where it can be."""
+    if abs(value) < 1e15:
+        return ("%.3f" % value).rstrip("0").rstrip(".")
+    return "%g" % value

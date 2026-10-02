@@ -366,6 +366,10 @@ curl -X PATCH -H 'Content-Type: application/json' \
      http://127.0.0.1:8080/_mock/partners/ACME
 ```
 
+`POST /_mock/partners` adds a partner and only ever adds one: for an id that
+is already there it answers 409 and changes nothing. `PATCH` is how an
+existing partner is changed, and it changes only the fields it is given.
+
 A partner is refused anything the mock could not then act on: an unknown
 field is named rather than dropped, a `version` has to match the dialect
 (`004010` or `D:96A:UN`), `test` is a flag, `as2_url` needs a scheme the
@@ -450,6 +454,9 @@ and releases whatever that makes due. The clock stays moved: two advances of
 dates, due times, MDN dates - is dated by the moved clock. The response says
 where the clock is (`clock`) and how far it has been moved in all
 (`advancedSeconds`). It only goes forward, and `/_mock/reset` puts it back.
+It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
+that would take it further is a 400 that says how much room is left, and
+leaves the clock where it was.
 
 ## AS2
 
@@ -537,8 +544,8 @@ reason `/_mock/advance` exists.
 ## Changing an order
 
 A buyer changes an order it has already placed with an **860** (or an
-**ORDCHG**, or an 850 restated with `BEG01 = 04`), and the seller answers with
-an **865**. EDIFACT has no separate change acknowledgment message, so an
+**ORDCHG**, or an 850 or ORDERS restated as a change), and the seller answers
+with an **865**. EDIFACT has no separate change acknowledgment message, so an
 ORDCHG is answered by an **ORDRSP** — the difference most likely to catch out
 someone porting a mapping from X12.
 
@@ -546,7 +553,18 @@ A restated 850 (`BEG01 = 04` or `05`) is read as the whole order: a line it
 leaves out is deleted, and the 865 says so with `DI` — or refuses, if that
 line has already shipped. For `05` (Replace) that is the only reading; for
 `04` it is the mock's choice, because an 850 has no other way to drop a line.
-To change some lines and leave the rest alone, send an 860.
+To change some lines and leave the rest alone, send an 860. `BEG01 = 01`
+cancels the order, as an 860 with `BCH01 = 01` does.
+
+An ORDERS says the same in BGM's message function code, 1225, in EDIFACT's own
+values: `1` cancels, `4` changes and `5` replaces.
+
+A restated order is never a new one. One that cancels, changes or replaces an
+order the mock does not hold is refused beside the acknowledgment, as an 860
+for an unknown order is: the 997 or CONTRL accepts it, `refusals` says *no such
+purchase order*, and nothing is recorded, answered, shipped or billed. A
+cancellation that arrives before its order, or instead of it, would otherwise
+be fulfilled as the order it withdraws.
 
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
@@ -889,7 +907,9 @@ segment the set does not define. A partner set to `strict` rejects on either.
 The envelope is checked too, and a fault there outranks anything inside it.
 A `GE` whose count or control number disagrees with what arrived, or a group
 with no `GE` at all, rejects the group: `AK9*R` with the standard's reason in
-`AK905`. An `IEA` that disagrees with the `ISA`, or a file that stops before
+`AK905`. Every set inside it is then `AK5*R` as well, however clean it was -
+no set in a rejected group is acted on, so none is acknowledged as accepted -
+and a set with a fault of its own keeps its `AK3`/`AK4`. An `IEA` that disagrees with the `ISA`, or a file that stops before
 its `IEA`, rejects the whole interchange, and the answer is a `TA1` with
 `TA104 = R` and no 997, because no group inside it was read. A `TA1` also comes
 back whenever `ISA14 = 1` asks for one - `kind=interchange-acknowledgment` in
@@ -1022,15 +1042,17 @@ mockedi/delivery.py      posting to a partner that has somewhere to receive
 mockedi/as2.py           AS2 headers, the MIC, and the MDN
 mockedi/drop.py          trading over a directory rather than over HTTP
 mockedi/db.py            SQLite: schema, number ranges, demo data
-mockedi/server.py        HTTP: the handler, the mock's state, and the control plane
+mockedi/server.py        HTTP: the handler and the mock's state
 mockedi/routes/__init__.py  the route table every endpoint registers with
 mockedi/routes/transport.py the doors: /as2, /as2/mdn and /edi
 mockedi/routes/index.py     the index page
-mockedi/routes/control.py   health, state, reset; the rest of /_mock until #182 moves it
+mockedi/routes/control.py   health, state, reset, and the 404 for an unknown /_mock path
 mockedi/routes/validate.py  /_mock/validate and the dictionary served as data
 mockedi/routes/orders.py    orders, their timelines, purchasing, disagreements
 mockedi/routes/documents.py documents, interchanges and MDNs as they crossed the wire
 mockedi/routes/partners.py  partners, their guides, and the catalog
+mockedi/routes/mailbox.py   the mailbox, the outbox and the drop directory
+mockedi/routes/clock.py     scheduled work, advance, send, and what is unacknowledged
 ```
 
 [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) explains how they fit together;

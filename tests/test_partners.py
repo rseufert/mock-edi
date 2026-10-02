@@ -570,3 +570,59 @@ class ChangingARoleWhileOrdersAreLive(PartnerCase):
         status, _h, data = self.patch_partner(NORTHWIND, {"name": "Northwind Ltd"})
         self.assertEqual(status, 200, data)
         self.assertEqual(data["name"], "Northwind Ltd")
+
+
+class PostingOverAnExistingPartner(PartnerCase):
+    """`POST /_mock/partners` creates; it does not replace (#204).
+
+    It used to be `INSERT OR REPLACE`, so a POST naming an existing id went
+    round every refusal `PATCH` makes - the role changed under a live order -
+    and put back to its default every field the body did not mention.
+    """
+
+    def partner(self, identifier):
+        _s, _h, row = self.get("/_mock/partners/" + identifier)
+        return row
+
+    purchase = ChangingARoleWhileOrdersAreLive.purchase
+    LINES = ChangingARoleWhileOrdersAreLive.LINES
+
+    def test_it_is_refused_and_pointed_at_patch(self):
+        status, _h, data = self.create_partner({"id": ACME, "name": "Somebody"})
+        self.assertEqual(status, 409, data)
+        self.assertIn(ACME, data["error"])
+        self.assertIn("PATCH /_mock/partners/" + ACME, data["error"])
+
+    def test_the_refused_post_changed_nothing(self):
+        before = self.partner(NORTHWIND)
+        self.create_partner({"id": NORTHWIND, "dialect": "EDIFACT",
+                             "behaviour": "late"})
+        self.assertEqual(self.partner(NORTHWIND), before)
+        # Not replaced by a row of defaults either: the name was its own.
+        self.assertNotEqual(before["name"], NORTHWIND)
+
+    def test_it_cannot_change_a_role_under_a_live_order(self):
+        self.purchase("PO-LIVE-POST")
+        status, _h, data = self.patch_partner(NORTHWIND, {"role": "customer"})
+        self.assertEqual(status, 400, data)
+        status, _h, data = self.create_partner({"id": NORTHWIND,
+                                                "role": "customer"})
+        self.assertEqual(status, 409, data)
+        self.assertEqual(self.partner(NORTHWIND)["role"], "supplier")
+
+    def test_it_is_refused_before_the_body_is_judged(self):
+        # Otherwise a caller fixes the field, posts again, and only then
+        # learns that the partner was there all along.
+        status, _h, data = self.create_partner({"id": ACME, "behavior": "late"})
+        self.assertEqual(status, 409, data)
+
+    def test_a_deleted_partner_can_be_created_again(self):
+        self.create_partner({"id": "NEWCO"})
+        self.request("DELETE", "/_mock/partners/NEWCO")
+        status, _h, data = self.create_partner({"id": "NEWCO", "name": "New Co"})
+        self.assertEqual(status, 201, data)
+        self.assertEqual(data["name"], "New Co")
+
+    def test_a_new_partner_is_still_created(self):
+        status, _h, data = self.create_partner({"id": "FRESH"})
+        self.assertEqual(status, 201, data)

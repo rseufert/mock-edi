@@ -34,12 +34,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from typing import Any, Dict, List, Optional, Tuple
 
-from . import (db, delivery, drop, partners, pipeline, reconcile, routes,
-               transactions)
+from . import db, delivery, drop, pipeline, routes
 from .routes import BadQuery
-from .routes import first as _first, flag as _flag, json_body as _json_body
-from .routes import limit as _limit, number as _number, split as _split
-from .routes import segments as _segments
+from .routes import split as _split
 
 JSON = "application/json; charset=utf-8"
 TEXT = "text/plain; charset=utf-8"
@@ -337,7 +334,7 @@ class Handler(BaseHTTPRequestHandler):
             self.body = self._read_body()
         except BodyError as error:
             self.close_connection = True
-            status, written = self._text(error.status, str(error))
+            status, written = self.text(error.status, str(error))
             return
         self._bytes_in = len(self.body)
         try:
@@ -348,7 +345,7 @@ class Handler(BaseHTTPRequestHandler):
             elif (self.config.error_rate
                   and not path.startswith("/_mock")
                   and self.mock.random.random() < self.config.error_rate):
-                status, written = self._text(
+                status, written = self.text(
                     500, "injected failure (--error-rate %s)" % self.config.error_rate)
             else:
                 with self.mock.lock:
@@ -356,7 +353,7 @@ class Handler(BaseHTTPRequestHandler):
         except BrokenPipeError:          # pragma: no cover - client hung up
             return
         except BadQuery as error:
-            status, written = self._json(400, {"error": str(error),
+            status, written = self.json(400, {"error": str(error),
                                                "parameter": error.parameter})
         except Exception as error:       # pragma: no cover - last resort
             # A bug, then, and the one place it can be seen: the access log
@@ -369,7 +366,7 @@ class Handler(BaseHTTPRequestHandler):
                     self.mock.conn.rollback()
             except sqlite3.Error:        # the database is already closed
                 pass
-            status, written = self._json(500, {"error": str(error),
+            status, written = self.json(500, {"error": str(error),
                                                "type": type(error).__name__})
         finally:
             # Only a request that was never answered - the client hung up
@@ -380,132 +377,13 @@ class Handler(BaseHTTPRequestHandler):
     def _route(self, method: str, path: str) -> Tuple[int, int]:
         found, arguments = routes.find(method, path)
         if found is None:
-            return self._json(404, {"error": "no route for %s %s" % (method, path),
+            return self.json(404, {"error": "no route for %s %s" % (method, path),
                                     "try": ["/as2", "/edi", "/_mock/health", "/"]})
         if found.method not in (routes.ANY, method):
-            return self._text(405, found.refuse)
+            return self.text(405, found.refuse)
         return found.function(self, *arguments)
 
     # -- the control plane
-
-    def _control(self, method: str, path: str, query: Dict[str, List[str]],
-                 body: bytes) -> Tuple[int, int]:
-        parts = _segments(path)[1:]                     # drop "_mock"
-        head = parts[0] if parts else ""
-        rest = parts[1:]
-        conn = self.mock.conn
-
-        if head == "mailbox":
-            rows = self.mock.pipeline.collect(
-                partner_id=_first(query, "partner"), kind=_first(query, "kind"),
-                leave=_flag(query, "leave"))
-            if _flag(query, "raw"):
-                joined = b"\n".join(self.mock.pipeline.wire(row)[0] for row in rows)
-                return self._raw(200, joined, {"Content-Type": TEXT})
-            return self._json(200, rows)
-
-        if head == "outbox":
-            if len(rest) == 2 and rest[1] == "retry":
-                if method != "POST":
-                    return self._text(405, "POST to retry a delivery")
-                try:
-                    outbound_id = int(rest[0])
-                except ValueError:
-                    return self._json(404, {"error": "no outbound document %r"
-                                                     % rest[0]})
-                row = db.one(conn, "SELECT status FROM outbound WHERE id = ?",
-                             (outbound_id,))
-                if row is None:
-                    return self._json(404, {"error": "no outbound document %d"
-                                                     % outbound_id})
-                if row["status"] != "failed":
-                    return self._json(409, {
-                        "error": "outbound document %d is %s, not failed; only a "
-                                 "failed delivery can be retried"
-                                 % (outbound_id, row["status"])})
-                retried = self.mock.pipeline.redeliver(outbound_id)
-                return self._json(200, {"retried": retried, "count": len(retried)})
-            return self._json(200, db.rows(
-                conn, "SELECT id, partner, dialect, code, kind, reference, status,"
-                      " message_id, control, due_at, released_at, delivered_at,"
-                      " delivery, note, attempts, last_error, last_attempt_at,"
-                      " at FROM outbound ORDER BY id DESC LIMIT ?",
-                (_limit(query),)))
-
-        if head == "drop":
-            if rest and rest[0] == "scan":
-                if method != "POST":
-                    return self._text(405, "POST to scan the drop directory")
-                if not self.mock.dropbox.drop_dir:
-                    return self._json(409, {
-                        "error": "no drop directory is configured; start the "
-                                 "mock with --drop-dir"})
-                found = self.mock.dropbox.scan()
-                return self._json(200, {"scanned": len(found),
-                                        "files": [vars(item) for item in found]})
-            return self._json(200, self.mock.dropbox.state())
-
-        if head == "scheduled":
-            # Work the seller has promised but not done: the despatch that is
-            # not packed yet, the invoice that is not written yet. Distinct
-            # from the outbox, which holds documents that already exist.
-            clause = "" if _flag(query, "all") else " WHERE done_at = ''"
-            return self._json(200, db.rows(
-                conn, "SELECT id, partner, po_number, kind, due_at, done_at,"
-                      " note, at FROM scheduled%s ORDER BY due_at, id LIMIT ?"
-                      % clause, (_limit(query),)))
-
-        if head == "advance":
-            if method != "POST":
-                return self._text(405, "POST to advance the queue")
-            if _flag(query, "failed"):
-                # Everything a partner's listener missed while it was down,
-                # in queue order, unchanged.
-                retried = self.mock.pipeline.redeliver(
-                    partner_id=_first(query, "partner") or "")
-                return self._json(200, {"retried": retried,
-                                        "count": len(retried)})
-            everything = _flag(query, "all")
-            seconds = _number(query, "seconds")
-            try:
-                released = self.mock.pipeline.advance(seconds, everything)
-            except ValueError as error:
-                return self._json(400, {"error": str(error), "parameter": "seconds"})
-            self.mock.prune()
-            clock = self.mock.pipeline
-            return self._json(200, {
-                "released": released, "count": len(released),
-                "clock": clock.now().isoformat(timespec="seconds"),
-                "advancedSeconds": clock.offset.total_seconds()})
-
-        if head == "send":
-            if method != "POST":
-                return self._text(405, "POST to send a document")
-            payload = _json_body(body)
-            try:
-                queued = self.mock.pipeline.send_document(
-                    payload.get("partner", ""), payload.get("kind", ""),
-                    payload.get("order", "") or payload.get("po", ""),
-                    int(payload.get("delayMs", 0)))
-            except partners.UnknownPartner as error:
-                return self._json(404, {"error": "no partner %s" % error})
-            except ValueError as error:
-                return self._json(400, {"error": str(error)})
-            return self._json(201, {"id": queued.id, "kind": queued.kind,
-                                    "code": queued.code, "dueAt": queued.due_at})
-
-        if head == "unacknowledged":
-            return self._json(200, reconcile.unacknowledged(
-                conn, _number(query, "older-than"),
-                _first(query, "partner"), _limit(query)))
-
-        return self._json(404, {
-            "error": "no control endpoint %r" % head,
-            "endpoints": ["health", "state", "behaviours", "dictionary", "partners",
-                          "catalog", "orders", "documents", "interchanges",
-                          "mailbox", "outbox", "scheduled", "drop", "advance", "send", "mdns",
-                          "unacknowledged", "remittances", "requests", "validate",
-                          "reset"]})
 
     # -- responses
 
@@ -607,9 +485,6 @@ class Handler(BaseHTTPRequestHandler):
     def html(self, status: int, markup: str) -> Tuple[int, int]:
         return self.raw(status, markup.encode("utf-8"), {"Content-Type": HTML})
 
-    # The names the control plane calls them by, until #182 moves it out.
-    _raw, _json, _text, _html = raw, json, text, html
-
     # -- authentication
 
     def _authorised(self) -> bool:
@@ -658,7 +533,7 @@ class Handler(BaseHTTPRequestHandler):
         Written after the response, the row was not there yet for a client
         that asked `/_mock/requests` the moment its answer arrived - which is
         exactly what a test does, and on a slow runner it lost. Every answer
-        goes out through `_raw`, `_challenge` or the OPTIONS handler, and
+        goes out through `raw`, `_challenge` or the OPTIONS handler, and
         each calls this before `send_response`; the socket writer is not
         buffered, so the header block is what a client first sees. Once per
         request.

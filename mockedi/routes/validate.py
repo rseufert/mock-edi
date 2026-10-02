@@ -1,7 +1,7 @@
 """Checking a document without trading on it, and the dictionary it is checked against.
 
 Both are registered for `ANY` method with the `rest` of the path read as
-`_control` read it (#182); `validate` refuses anything but a POST, and says so
+the control plane's old `if` chain read it (#182); `validate` refuses anything but a POST, and says so
 as it did.
 """
 from __future__ import annotations
