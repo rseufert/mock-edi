@@ -1,7 +1,7 @@
 """Who the mock trades with, each one's implementation guide, and what it sells.
 
-Registered for `ANY` method with the `rest` of the path read as `_control`
-read it (#182). A partner and its profile check the method themselves, and
+Registered for `ANY` method with the `rest` of the path read as the control
+plane's old `if` chain read it (#182). A partner and its profile check the method themselves, and
 refuse the others in the words they always used.
 """
 from __future__ import annotations

@@ -1,7 +1,7 @@
 """Purchase orders: those received and those placed, what became of them, and the mock as buyer.
 
 Each is registered for `ANY` method with the `rest` of the path read as
-`_control` read it (#182); `purchase` refuses anything but a POST, and says so
+the control plane's old `if` chain read it (#182); `purchase` refuses anything but a POST, and says so
 as it did.
 """
 from __future__ import annotations
