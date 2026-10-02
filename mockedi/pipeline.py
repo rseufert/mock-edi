@@ -1192,18 +1192,31 @@ class Pipeline:
             # The transaction set's own control number, not the interchange's:
             # an inbound 997 quotes ST02 in AK202, and matching it against
             # ISA13 - which is what this recorded before - matches nothing.
-            # The sequence is the one taken when the document was queued, not
-            # a fresh one (#195): a release hands over everything that is due
-            # at once, so a number taken here would put the 856 and the 810
-            # after the invoice that was raised between them. When the mock
-            # decided to send it is the order a reader is asking about.
+            # Both the moment and the sequence are the ones taken when the
+            # document was queued, not fresh ones (#195, #238).
+            #
+            # The sequence, because a release hands over everything that is
+            # due at once: a number taken here would put the 856 and the 810
+            # after the invoice raised between them.
+            #
+            # The moment, because it has to be the *same* instant as the
+            # sequence. Taken here it was a few milliseconds later, and when
+            # those milliseconds crossed a second the timeline sorted the
+            # document after work sequenced before it - "packed and invoiced
+            # before the 997 was sent", which is what #195 was filed to
+            # remove. Every other event takes its `at` and its `seq` in one
+            # statement; this row was the exception.
+            #
+            # What goes is the moment the release loop reached the row, which
+            # nothing asked for: `released_at` below still records it, and the
+            # timeline's `delivery` carries its own.
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
                 " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", db.now(self.conn), row["seq"]))
+                 row["reference"], 1, "", row["at"], row["seq"]))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(self.conn), row["id"]))

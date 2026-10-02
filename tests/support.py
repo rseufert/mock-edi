@@ -10,6 +10,8 @@ construction in the way.
 """
 from __future__ import annotations
 
+import contextlib
+import datetime
 import faulthandler
 import os
 import sys
@@ -20,7 +22,7 @@ import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from mockedi import edifact, x12                      # noqa: E402
+from mockedi import db, edifact, x12                  # noqa: E402
 from mockedi.envelope import seg                      # noqa: E402
 from mockedi.testing import Mock, MockError           # noqa: E402
 
@@ -125,6 +127,38 @@ class MockServerCase(unittest.TestCase):
         status, _headers, data = self.get("/_mock/orders/" + po_number)
         self.assertEqual(status, 200, data)
         return data
+
+
+# A clock that moves a fixed amount every time it is read (#238).
+#
+# On a real host the second changes partway through handling an order whenever
+# a request happens to straddle one, which is why the timeline's order came
+# back wrong on CI's slower runners and almost never on a laptop. Stepping the
+# clock makes it happen on demand, so a test about it needs no luck.
+STEPS = (31, 43, 55, 67, 79, 91, 103, 115, 127, 139, 151, 163)
+
+
+@contextlib.contextmanager
+def stepping(step_ms):
+    """`db.utcnow` advancing `step_ms` on every read, for the block."""
+    real = db.utcnow
+    base = real().replace(microsecond=0)
+    reads = itertools.count()
+    db.utcnow = lambda: base + datetime.timedelta(
+        milliseconds=step_ms * next(reads))
+    try:
+        yield
+    finally:
+        db.utcnow = real
+
+
+def spans_more_than_a_second(timeline) -> bool:
+    """Whether a timeline's events do not all share one second.
+
+    The premise a stepped-clock test asserts about itself: without it the
+    test could pass by never reproducing what it is about.
+    """
+    return len({event["at"] for event in timeline["events"]}) > 1
 
 
 def _mailbox_path(partner="", kind="", leave=True):
