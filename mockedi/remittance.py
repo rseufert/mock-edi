@@ -35,6 +35,20 @@ from .envelope import Message, parse_date
 from .validate import BusinessFinding
 
 TOTAL_NOT_PARTS = "remittance-total-not-parts"
+# An advice whose currency is not the currency of an invoice it pays. The
+# amounts can agree to the penny and still be two different sums of money,
+# which is the join that cannot be made from an amount alone (#281).
+CURRENCY_NOT_THE_INVOICE = "remittance-currency-not-the-invoice"
+# A REMADV whose header CUX and whose summary MOA name different currencies.
+# D.96A permits both to state one and gives no rule for which wins - CUX
+# recurs in SG3, SG5 and SG9, and C516 carries 6345 itself - so the mock
+# reports the disagreement rather than picking a side silently (#281).
+CURRENCY_DISAGREES = "remittance-currency-disagrees"
+# 6347's code for the currency an advice's amounts are in: "Reference
+# currency - the currency applicable to amounts stated. It may have to be
+# converted." Which is what a total is in, where the other codes are about
+# conversion, accounts and information.
+REFERENCE_CURRENCY = "2"
 BEFORE_SETTLEMENT = "remitted-before-settlement"
 REVERSES_NOTHING = "reversal-of-nothing"
 
@@ -49,6 +63,20 @@ class Advice:
     credit_debit: str = CREDIT
     settles: Optional[datetime.date] = None
     invoices: List[Tuple[str, Optional[Decimal]]] = field(default_factory=list)
+    # The currency the total is in: CUR02 for an 820, the summary MOA's 6345
+    # for a REMADV, falling back to the header CUX. None when the advice
+    # states none, which is not the same as "USD" and is not guessed: the
+    # orders and invoices this mock writes state theirs, and a default here
+    # would put a guess beside facts (#281).
+    currency: Optional[str] = None
+    # What the header CUX said, kept apart so that a REMADV naming two can be
+    # reported. Always None for X12, which has one CUR at heading level and
+    # none inside the loop that holds the invoices.
+    header_currency: Optional[str] = None
+    # Every currency the header CUX segments name, in document order. The
+    # group repeats up to nine times, so a REMADV can name several and the
+    # mock reports that rather than keeping one quietly.
+    header_currencies: List[str] = field(default_factory=list)
 
 
 def read(message: Message, dialect: str) -> Advice:
@@ -61,23 +89,49 @@ def read(message: Message, dialect: str) -> Advice:
             advice.credit_debit = bpr.get(3) or CREDIT
             advice.settles = parse_date(bpr.get(16))
         advice.trace = trn.get(2) if trn is not None else ""
+        cur = message.find("CUR")
+        advice.currency = (cur.get(2) or None) if cur is not None else None
         advice.invoices = [(item.get(2), _amount(item.get(4)))
                            for item in message.segments if item.tag == "RMR"]
         return advice
     bgm = message.find("BGM")
     advice.trace = bgm.comp(2, 1) if bgm is not None else ""
     within = ""
+    header: List[Tuple[str, Optional[str]]] = []
     for item in message.segments:
         if item.tag in ("DOC", "AJT", "UNS"):
             within = item.tag
             if item.tag == "DOC":
                 advice.invoices.append((item.comp(2, 1), None))
+        elif item.tag == "CUX" and within not in ("DOC", "AJT"):
+            # C504's qualifier and its currency. The header CUX group repeats
+            # up to nine times, so there may be several, each qualified: the
+            # advice's amounts are in the *reference* currency, 6347 code 2,
+            # whose own definition is "the currency applicable to amounts
+            # stated". Collected rather than overwritten, because keeping the
+            # last one silently is the same silence this change removes a
+            # level up (#281).
+            #
+            # A CUX inside a DOC or an AJT group is not read: D.96A has one in
+            # SG5 and SG9, and this dictionary declares CUX at header level
+            # only, so the validator calls it an unexpected segment. Reading
+            # it here would be answering a document the mock refuses (#298).
+            header.append((item.comp(1, 1), item.comp(1, 2) or None))
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
                 advice.invoices[-1] = (advice.invoices[-1][0],
                                        _amount(item.comp(1, 2)))
             elif within == "UNS":
                 advice.total = _amount(item.comp(1, 2))
+                # C516's third component, which the summary MOA may state
+                # even where the header CUX does not.
+                advice.currency = item.comp(1, 3) or None
+    stated = [currency for _qualifier, currency in header if currency]
+    reference = [currency for qualifier, currency in header
+                 if currency and qualifier == REFERENCE_CURRENCY]
+    advice.header_currency = (reference or stated or [None])[0]
+    advice.header_currencies = stated
+    advice.currency = advice.currency or advice.header_currency
     return advice
 
 
@@ -150,6 +204,9 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
                             if not credits else
                             "every advice for that trace was already reversed"),
                     interchange=interchange))
+    advice = read(message, dialect)
+    found.extend(_currency_findings(conn, partner, advice, message, kind,
+                                    interchange))
     moment = db.now(conn)
     for finding in found:
         conn.execute(
@@ -196,6 +253,70 @@ def _archived(conn, partner_id: str = "", trace: str = "") -> List[Dict[str, Any
                    % " AND ".join(clauses), params)
 
 
+def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
+                       message: Message, kind: str,
+                       interchange: str) -> List[BusinessFinding]:
+    """What the advice says about currency that does not hold up.
+
+    Two separate things, and they are separate on purpose. One is the advice
+    disagreeing with the invoices it pays, which both dialects can do. The
+    other is a REMADV disagreeing with *itself* - a header CUX and a summary
+    MOA naming different currencies - which D.96A permits and gives no rule
+    for, so the mock reports it rather than choosing a side.
+
+    An advice that states no currency is not a finding. It is a thing a real
+    advice does, the listing says so with a null, and inventing one to
+    compare against would be the guess #281 asks us not to make.
+    """
+    out: List[BusinessFinding] = []
+    others = [currency for currency in advice.header_currencies
+              if currency != advice.header_currency]
+    if others:
+        # Several header CUX segments naming different currencies. The
+        # reference one (6347 code 2) is taken as the advice's, and the rest
+        # are said out loud rather than dropped: D.96A permits up to nine and
+        # does not say they must agree.
+        out.append(BusinessFinding(
+            rule=CURRENCY_DISAGREES, kind=kind, code=message.code,
+            control=message.control, po_number="",
+            expected=advice.header_currency or "",
+            found=", ".join(sorted(set(others))),
+            note="the header names %s; %s taken as the advice's, being the "
+                 "reference currency, and D.96A does not say they must agree"
+                 % (", ".join(sorted(set(advice.header_currencies))),
+                    advice.header_currency),
+            interchange=interchange))
+    if (advice.header_currency and advice.currency
+            and advice.header_currency != advice.currency):
+        out.append(BusinessFinding(
+            rule=CURRENCY_DISAGREES, kind=kind, code=message.code,
+            control=message.control, po_number="",
+            expected=advice.header_currency, found=advice.currency,
+            note="the header CUX says %s and the summary MOA says %s; D.96A "
+                 "lets both state one and does not say which wins"
+                 % (advice.header_currency, advice.currency),
+            interchange=interchange))
+    if not advice.currency:
+        return out
+    for number, _paid in advice.invoices:
+        if not number:
+            continue
+        row = db.one(conn, "SELECT currency FROM invoice WHERE invoice_number = ?"
+                           " AND partner = ?", (number, partner["id"]))
+        if row is None or not row["currency"]:
+            continue
+        if row["currency"] != advice.currency:
+            out.append(BusinessFinding(
+                rule=CURRENCY_NOT_THE_INVOICE, kind=kind, code=message.code,
+                control=message.control, po_number="",
+                expected=row["currency"], found=advice.currency,
+                note="the advice is in %s and invoice %s is in %s, so the "
+                     "amounts are not comparable"
+                     % (advice.currency, number, row["currency"]),
+                interchange=interchange))
+    return out
+
+
 def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
     """Every accepted remittance advice, oldest first, with what became of it.
 
@@ -218,6 +339,7 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
             "code": row["code"], "control": row["control"], "id": row["id"],
             "trace": advice.trace,
             "total": None if advice.total is None else str(advice.total),
+            "currency": advice.currency,
             "creditDebit": advice.credit_debit,
             "settles": advice.settles.isoformat() if advice.settles else "",
             "settledOnArrival": (None if advice.settles is None
