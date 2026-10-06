@@ -51,6 +51,12 @@ class Courier:
         self.held = held
         self._held: "collections.deque[tuple]" = collections.deque()
         self._held_guard = threading.Lock()
+        # One step at a time. Two requests to step are concurrent - each has
+        # let go of the mock's lock to wait - and without this their items
+        # could reach the worker together, so that one step returned only
+        # after two documents had gone. Taken first and by nothing else, so
+        # it orders against no other lock.
+        self._stepping = threading.Lock()
         self.config = pipeline.config
         self.timeout = timeout
         # Injected in tests so that delivery can be exercised without a
@@ -141,23 +147,24 @@ class Courier:
         document for a partner that collects from the mailbox, and one that
         is no longer waiting because it was collected or cancelled meanwhile.
         """
-        while True:
-            with self._held_guard:
-                if not self._held:
-                    return None
-                kind, identifier = self._held.popleft()
-            with self.lock:
-                if not self._would_send(kind, identifier):
-                    continue
-            done = threading.Event()
-            self._queue.put((kind, identifier))
-            self._queue.put(("flush", done))
-            self.start()
-            # The send is bounded by the courier's own timeout; the margin is
-            # for the thread to come round to it.
-            done.wait(self.timeout + 5.0)
-            with self.lock:
-                return self._moved(kind, identifier)
+        with self._stepping:
+            while True:
+                with self._held_guard:
+                    if not self._held:
+                        return None
+                    kind, identifier = self._held.popleft()
+                with self.lock:
+                    if not self._would_send(kind, identifier):
+                        continue
+                done = threading.Event()
+                self._queue.put((kind, identifier))
+                self._queue.put(("flush", done))
+                self.start()
+                # The send is bounded by the courier's own timeout; the
+                # margin is for the thread to come round to it.
+                done.wait(self.timeout + 5.0)
+                with self.lock:
+                    return self._moved(kind, identifier)
 
     def waiting(self) -> int:
         """How many held things a step would still send."""
@@ -180,15 +187,24 @@ class Courier:
         return bool(row and row["status"] == "ready" and row["as2_url"])
 
     def _moved(self, kind: str, identifier: int) -> Dict[str, Any]:
-        """What a step sent and how it ended, as the outbox or `/_mock/mdns` has it."""
+        """What a step sent and how it ended, as the outbox or `/_mock/mdns` has it.
+
+        The mock's lock is not held while the send is waited for, so a
+        `/_mock/reset` can land in between and take the row with it. The
+        document went all the same, and the answer says so: `gone`.
+        """
         conn = self.pipeline.conn
+        table = "mdn" if kind == "mdn" else "outbound"
+        row = db.one(conn, "SELECT * FROM %s WHERE id = ?" % table, (identifier,))
+        if row is None:
+            return {"type": kind, "id": identifier, "status": "gone",
+                    "note": "sent, and the mock was reset before it could "
+                            "say how it ended"}
         if kind == "mdn":
-            row = db.one(conn, "SELECT * FROM mdn WHERE id = ?", (identifier,))
             return {"type": "mdn", "id": identifier, "partner": row["partner"],
                     "originalId": row["original_id"],
                     "messageId": row["message_id"], "to": row["url"],
                     "status": row["status"]}
-        row = db.one(conn, "SELECT * FROM outbound WHERE id = ?", (identifier,))
         return {"type": "document", "id": identifier, "partner": row["partner"],
                 "code": row["code"], "kind": row["kind"],
                 "reference": row["reference"], "control": row["control"],

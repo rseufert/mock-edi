@@ -30,11 +30,14 @@ class Listener(BaseHTTPRequestHandler):
     """A partner's AS2 listener, which keeps what it is sent."""
     received = []
     refuse_first = 0
+    delay = 0.0
 
     def do_POST(self):
         length = int(self.headers.get("Content-Length") or 0)
         body = self.rfile.read(length).decode("utf-8", "replace")
         Listener.received.append({"path": self.path, "body": body})
+        if Listener.delay:
+            time.sleep(Listener.delay)
         status = 200
         if Listener.refuse_first > 0:
             Listener.refuse_first -= 1
@@ -75,6 +78,7 @@ class ListenerCase(unittest.TestCase):
     def setUp(self):
         Listener.received = []
         Listener.refuse_first = 0
+        Listener.delay = 0.0
         self.mock = Mock.start(hold_delivery=self.hold, deliver_timeout=3.0)
         self.addCleanup(self.mock.close)
         self.mock.partner(ACME, as2_url=self.url + "/as2")
@@ -285,6 +289,83 @@ class AnAsynchronousReceiptIsItsOwnStep(ListenerCase):
                    if row["direction"] == "out"][0]
         self.assertEqual(receipt["status"], "pending")
         self.assertEqual(self.mock.step()["type"], "mdn")
+
+
+class WhileAStepIsWaiting(ListenerCase):
+    """The mock's lock is let go for the wait, so other requests get in."""
+
+    def in_the_background(self, work):
+        outcome = {}
+
+        def run():
+            try:
+                outcome["answer"] = work()
+            except Exception as error:      # reported by the test, not lost
+                outcome["error"] = error
+        thread = threading.Thread(target=run, daemon=True)
+        thread.start()
+        return thread, outcome
+
+    def test_a_reset_in_the_middle_is_answered_and_says_the_row_is_gone(self):
+        self.mock.send(x12_order("HOLD-RESET"))
+        Listener.delay = 1.0
+        stepper = Mock(self.mock.base)
+        self.addCleanup(stepper.disconnect)
+        thread, outcome = self.in_the_background(
+            lambda: stepper.post("/_mock/deliver"))
+        while not Listener.received:
+            time.sleep(0.02)
+        self.mock.reset()
+        thread.join(10)
+        self.assertNotIn("error", outcome)
+        self.assertEqual(outcome["answer"].status, 200, outcome["answer"].body)
+        sent = outcome["answer"].body["sent"]
+        self.assertEqual((sent["type"], sent["status"]), ("document", "gone"))
+        self.assertEqual(outcome["answer"].body["waiting"], 0)
+
+    def test_what_moved_is_gone_for_a_row_that_no_longer_exists(self):
+        courier = self.mock.server.mock.courier
+        with self.mock.server.mock.lock:
+            self.assertEqual(courier._moved("document", 999999)["status"], "gone")
+            self.assertEqual(courier._moved("mdn", 999999)["status"], "gone")
+
+    def test_two_steps_at_once_are_one_document_each(self):
+        self.mock.send(x12_order("HOLD-TWICE"))
+        waiting = sorted(row["id"] for row in self.ready())
+        Listener.delay = 0.4
+        seen = []
+
+        def step():
+            client = Mock(self.mock.base)
+            try:
+                sent = client.step()
+                seen.append((sent["id"], len(Listener.received)))
+            finally:
+                client.disconnect()
+        threads = [threading.Thread(target=step, daemon=True) for _ in range(2)]
+        for thread in threads:
+            thread.start()
+        for thread in threads:
+            thread.join(10)
+        self.assertEqual(sorted(sent for sent, _posts in seen), waiting[:2])
+        # Whichever step finished first finished before the other's document
+        # had been posted: one step, one document on the wire.
+        self.assertEqual(sorted(posts for _sent, posts in seen), [1, 2])
+
+
+class AMockSomebodyElseStarted(ListenerCase):
+
+    def test_it_is_asked_once_whether_it_is_held(self):
+        client = Mock(self.mock.base)
+        self.addCleanup(client.disconnect)
+        self.assertTrue(client.held)
+        before = len(self.mock.expect("GET", "/_mock/requests?limit=200"))
+        self.assertTrue(client.held)
+        with self.assertRaises(MockError):
+            client.settle()
+        after = self.mock.expect("GET", "/_mock/requests?limit=200")
+        self.assertEqual([row["path"] for row in after[:len(after) - before]
+                          if "health" in row["path"]], [])
 
 
 class AMockThatIsNotHeld(ListenerCase):

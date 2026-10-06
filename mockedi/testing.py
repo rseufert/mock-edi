@@ -180,6 +180,7 @@ class Mock:
         self.base = base.rstrip("/")
         self.timeout = timeout
         self._httpd = None
+        self._is_held: Optional[bool] = None
         self._url = urllib.parse.urlsplit(self.base)
         self._local = threading.local()
         self._kept: List[http.client.HTTPConnection] = []
@@ -443,7 +444,12 @@ class Mock:
         """Whether this mock posts nothing until `step` asks (`--hold-delivery`)."""
         if self._httpd is not None:
             return bool(self._httpd.mock.config.hold_delivery)
-        return bool(self.expect("GET", "/_mock/health").get("deliveryHeld"))
+        # A mock is held from its start or not at all, so one look is enough:
+        # `settle` asks every time it is called.
+        if self._is_held is None:
+            self._is_held = bool(
+                self.expect("GET", "/_mock/health").get("deliveryHeld"))
+        return self._is_held
 
     def step(self, everything: bool = False) -> Any:
         """Send the next thing a held mock is holding, and say what it was.
