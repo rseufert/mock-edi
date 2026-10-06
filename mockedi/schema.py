@@ -258,12 +258,19 @@ UOM_CODES = {              # 355
     "PC": "Piece", "DZ": "Dozen", "LB": "Pound", "KG": "Kilogram",
     "GA": "Gallon", "FT": "Foot", "M": "Metre", "PL": "Pallet",
 }
+# The names are the standard's, from four published copies of element 374
+# that agree (#229). Two things here were once wrong and are worth knowing
+# about: 068 carried 067's name, and 137 carried the meaning it has in
+# EDIFACT's 2005 - in X12 it is a supplier rating, not a date of issue, and
+# it is listed only so that a partner's document carrying it is named for
+# what it says. The mock writes neither 068 nor 137.
 DATE_QUALIFIER_CODES = {   # 374
-    "002": "Delivery Requested", "010": "Requested Ship", "011": "Shipped",
-    "017": "Estimated Delivery", "035": "Delivered", "037": "Ship Not Before",
-    "038": "Ship No Later Than", "068": "Current Schedule Delivery",
-    "118": "Requested Pick Up", "137": "Document/Message Date",
-    "003": "Invoice",
+    "002": "Delivery Requested", "003": "Invoice", "010": "Requested Ship",
+    "011": "Shipped", "017": "Estimated Delivery", "035": "Delivered",
+    "037": "Ship Not Before", "038": "Ship No Later",
+    "067": "Current Schedule Delivery", "068": "Current Schedule Ship",
+    "097": "Transaction Creation", "118": "Requested Pick-up",
+    "137": "Delivery Rating",
 }
 ENTITY_CODES = {           # 98
     "BY": "Buying Party", "SE": "Selling Party", "ST": "Ship To",
