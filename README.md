@@ -92,7 +92,7 @@ ST*855*0002~
 BAK*00*AD*4500000042*20260924****5100002*20260924~
 ...
 PO1*1*100*EA*12.50**VP*WIDGET-001*UP*076123400003~
-ACK*IA*100*EA*068*20260926~
+ACK*IA*100*EA*067*20260926~
 ```
 
 Run it from a checkout with no install at all, or in a container:
@@ -870,7 +870,7 @@ be fulfilled as the order it withdraws.
 
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
-ACK*IA*60*EA*068*20260926~                 the seller agrees
+ACK*IA*60*EA*067*20260926~                 the seller agrees
 POC*2*DI*40**EA*4.15**VP*BRKT-050~         the buyer drops line 2
 ACK*IR*0*EA~
 REF*ZZ**Line deleted at the buyer's request~
