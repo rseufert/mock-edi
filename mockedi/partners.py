@@ -80,20 +80,29 @@ DIALECTS = ("X12", "EDIFACT")
 MDN_MODES = ("sync", "async")
 
 # The syntax identifiers a partner may be set to: the ones the mock can write
-# faithfully, which is every one `charsets` has a codec for.
+# something usable in.
 #
-# UNOA is not among them, and that is the one thing here worth reading twice.
-# Level A is "the basic code table of ISO 646 with the exceptions of lower
-# case letters" - a *repertoire*, not an encoding - and `charsets` has it
-# mapped to `ascii`, which admits lower case. Offering it would put
-# `UNB+UNOA:3` on the wire above a description level A cannot carry, which is
-# the kind of lie this mock exists not to tell. It is refused until the
-# repertoire is there to enforce (#295), and the refusal says so.
+# UNOA is still not among them, and the reason has changed. It used to be that
+# the mock could not hold a document to level A at all; `charsets.outside`
+# does that now (#295). What stands in the way is what level A then produces:
+# every lower-case letter is substituted, so `Widget Co` goes out as
+# `W?????????? C??` and a partner id of `acme-dc` as `????????-????`, which is
+# not a partner anything can route to. Nearly all the text this mock writes is
+# mixed case.
+#
+# A real level A sender *folds case* - `WIDGET CO` - which changes data rather
+# than encoding and is the question still open on #263. Switching UNOA on now
+# would mean anyone who built against the substitution is surprised a second
+# time when folding lands, so the refusal stays and says what it would do
+# instead of claiming it cannot.
 SYNTAXES = tuple(sorted(set(charsets.EDIFACT_SYNTAX) - {"UNOA"}))
 UNFAITHFUL = {
-    "UNOA": "level A has no lower case, and the mock cannot yet hold a "
-            "document to that - see #295. UNOB is the same repertoire with "
-            "lower case, and is written the same way on the wire.",
+    "UNOA": "level A is held to its repertoire since #295, so the mock could "
+            "write it - but with no case folding it would substitute every "
+            "lower-case letter, sending `Widget Co` as `W?????????? C??` and "
+            "a partner id of `acme-dc` as `????????-????`. Whether a level A "
+            "answer folds case instead is #263. UNOB is the same repertoire "
+            "with lower case, and is written the same way on the wire.",
 }
 
 # What the wire can carry, per dialect.

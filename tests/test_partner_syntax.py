@@ -19,11 +19,12 @@ last inbound interchange:** a partner the mock has only ever sent to has
 nothing to mirror, and an answer that depends on which document arrived first
 is the opposite of what #280 bought.
 
-`UNOA` is refused, with a refusal that says why. Level A is "the basic code
-table of ISO 646 with the exceptions of lower case letters" - a repertoire,
-not an encoding - and `charsets` maps it to `ascii`, which admits lower case.
-Offering it would put `UNB+UNOA:3` above a description level A cannot carry.
-That is #295.
+`UNOA` is refused, and the reason moved with #295. It used to be that the
+mock could not hold a document to level A at all; it can now. What stands in
+the way is what level A then produces - every lower-case letter substituted -
+until #263 decides whether a level A answer folds case instead. The refusal
+says that rather than claiming an inability. What level A does to lower case
+is in `tests/test_unoa_repertoire.py`.
 
 Sources for the identifiers: GEFEG's JWG1 service code lists and
 edifactory.de's data element 0001, which agree word for word.
@@ -161,12 +162,16 @@ class WhatAPartnerMayBeSetTo(MockServerCase):
         self.assertEqual(set(partners.SYNTAXES),
                          set(charsets.EDIFACT_SYNTAX) - {"UNOA"})
 
-    def test_unoa_is_refused_and_the_refusal_says_why(self):
+    def test_unoa_is_refused_and_the_refusal_says_what_it_would_do(self):
+        # The reason moved with #295. The mock *can* write level A now; what
+        # it would write is every lower-case letter substituted, which is
+        # why the refusal stands until #263 decides on folding.
         status, _headers, body = self.patch(
             "/_mock/partners/" + EURODIS, {"syntax": "UNOA"})
         self.assertEqual(status, 400, body)
-        self.assertIn("will not answer in UNOA", body["error"])
-        self.assertIn("no lower case", body["error"])
+        self.assertIn("held to its repertoire since #295", body["error"])
+        self.assertIn("substitute every lower-case letter", body["error"])
+        self.assertIn("#263", body["error"])
         self.assertIn("UNOB", body["error"])
 
     def test_an_unknown_identifier_is_refused_with_the_list(self):

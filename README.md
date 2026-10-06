@@ -499,21 +499,40 @@ to has nothing to mirror, and an answer that depended on which document
 arrived first would undo what `--start-at` is for. X12 declares no character
 set at all, so the field is ignored for an X12 partner.
 
-`UNOA` is refused, and the refusal says why:
+`UNOA` is level A: ISO 646 *without lower case*. That is a **repertoire**
+rather than an encoding — a set of permitted characters, not a way of turning
+them into bytes — so the mock holds a document to it rather than relying on a
+codec, which would admit lower case. What level A then writes is this:
 
 ```
-the mock will not answer in UNOA: level A has no lower case, and the mock
-cannot yet hold a document to that - see #295. UNOB is the same repertoire
-with lower case, and is written the same way on the wire.
+level B   NAD+BY+ACME::91++Widget Co++Lodz
+level A   NAD+BY+ACME::91++W?????????? C??++L??????
 ```
 
-Level A is ISO 646 *without lower case*, which is a repertoire rather than an
-encoding — a set of permitted characters, not a way of turning them into
-bytes — and the mock has nothing to check a document against one with yet.
-Declaring `UNB+UNOA:3` above a description level A cannot carry is the kind of
-thing a partner discovers in production, so the mock declines instead. An
-unknown identifier is refused too, and the refusal lists the ones it answers
-in.
+**Legal, and not usable.** A real level A sender *folds case* and would send
+`WIDGET CO`; folding changes data rather than encoding, so it is a decision
+and it is still open. **Until it is made, `UNOA` is refused on a partner**,
+and the refusal says what it would write rather than claiming the mock
+cannot:
+
+```
+level A is held to its repertoire since #295, so the mock could write it -
+but with no case folding it would substitute every lower-case letter,
+sending `Widget Co` as `W?????????? C??` and a partner id of `acme-dc` as
+`????????-????`.
+```
+
+That last part is the sharpest reason: a substituted partner id is not a
+partner anything can route to. Each `?` appears doubled on the wire because
+the release character is escaped after the substitution, which is what stops
+a substituted character from swallowing the separator after it.
+
+The twelve ISO 646 positions open to national substitution — `#`, `$`, `@`,
+`[`, `\`, `]`, `^`, `` ` ``, `{`, `|`, `}`, `~` — are excluded by level A's
+definition too, and the mock does **not** enforce them: only one published
+source for which twelve they are could be found, and refusing a character
+level A permits is the worse mistake to make. An unknown identifier is
+refused, and the refusal lists the ones the mock answers in.
 
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
