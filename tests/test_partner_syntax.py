@@ -122,7 +122,7 @@ class WhatEachSyntaxCanCarry(unittest.TestCase):
 
 
 class AFileFromBeforeTheColumn(unittest.TestCase):
-    """Schema 13 adds `partner.syntax`; an older file gains it on upgrade.
+    """Schema 14 adds `partner.syntax`; an older file gains it on upgrade.
 
     The column has a default, so `db.upgrade`'s derived step covers it - but a
     partner that existed before the column has to end up `UNOC` rather than
@@ -142,7 +142,7 @@ class AFileFromBeforeTheColumn(unittest.TestCase):
                 conn.execute(
                     "INSERT INTO partner (id, name, dialect, version)"
                     " VALUES ('OLDIS', 'Oldis', 'EDIFACT', 'D:96A:UN')")
-                conn.execute("PRAGMA user_version = 12")
+                conn.execute("PRAGMA user_version = 13")
                 conn.commit()
                 self.assertNotIn("syntax", {row[1] for row in conn.execute(
                     "PRAGMA table_info(partner)")})

@@ -325,11 +325,11 @@ class FromANewerMock(FileDatabase):
 
 
 class TheVersionMovesWithTheSchema(unittest.TestCase):
-    # The schema as of SCHEMA_VERSION 13. When this fails, the schema has
+    # The schema as of SCHEMA_VERSION 14. When this fails, the schema has
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (13, "3eea10f7c0e4fa4c")
+    FINGERPRINT = (14, "87c1d5ed8359ccba")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())

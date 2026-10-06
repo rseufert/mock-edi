@@ -47,6 +47,13 @@ CI_WORKFLOW = "ci.yml"
 
 # How long each wait may take, in seconds, and how often it looks.
 CHECKS_LIMIT = 45 * 60
+# Every bucket `gh pr checks` sorts a check into. A line of its answer that
+# does not begin with one of these is not a check.
+CHECK_BUCKETS = ("pass", "fail", "pending", "skipping", "cancel")
+# The one check `main` requires: the name of the last job in ci.yml, which
+# needs every other job. It is written in three places that must agree -
+# there, here, and the ruleset in the repository's settings.
+REQUIRED_CHECK = "all checks passed"
 PUBLISH_LIMIT = 30 * 60
 PYPI_LIMIT = 20 * 60
 POLL = 30
@@ -280,17 +287,57 @@ class Release:
         return number
 
     def wait_for_checks(self, number: int) -> None:
+        """Wait until the check `main` requires has passed on the pull request.
+
+        Two moments in a pull request's life look like "nothing is wrong"
+        and are not "everything passed" (#270):
+
+        - For its first seconds it has no checks at all, and `gh pr checks`
+          answers with a sentence - "no checks reported on the
+          'release/0.7.0' branch" - and exit code 1. That is not a failed
+          check, and it is not a list of them: only a line that begins with
+          a bucket is a check.
+        - The required check is a job that needs every other job, so it does
+          not exist until they have finished. Between the last of them
+          passing and that job being queued, nothing is pending and nothing
+          has failed, and a merge then is refused by the ruleset.
+
+        So this waits for the one named check to pass, and for nothing else
+        to be pending. A check that fails stops it at once.
+        """
+        last = {"answer": "", "pending": False, "failed": False}
+
         def looked() -> Optional[bool]:
-            buckets = self.gh("pr", "checks", str(number), "--json", "bucket",
-                              "-q", ".[].bucket", check=False).out.split()
-            if not buckets or "pending" in buckets:
-                return None
-            bad = [b for b in buckets if b not in ("pass", "skipping")]
+            answer = self.gh("pr", "checks", str(number), "--json",
+                             "bucket,name", "-q", '.[]|.bucket+"\t"+.name',
+                             check=False).out
+            last["answer"] = answer.strip()
+            checks = [line.split("\t", 1) for line in answer.split("\n")
+                      if "\t" in line
+                      and line.split("\t", 1)[0] in CHECK_BUCKETS]
+            bad = [name for bucket, name in checks
+                   if bucket not in ("pass", "skipping", "pending")]
+            last["failed"] = bool(bad)
             if bad:
                 raise Stop("#%d's checks did not pass (%s); fix them, then run "
                            "this again with --resume." % (number, ", ".join(bad)))
-            return True
-        self.wait("#%d's checks to pass" % number, CHECKS_LIMIT, looked)
+            last["pending"] = any(bucket == "pending" for bucket, _ in checks)
+            if last["pending"]:
+                return None
+            return ["pass", REQUIRED_CHECK] in checks or None
+        try:
+            self.wait("#%d's checks to pass" % number, CHECKS_LIMIT, looked)
+        except Stop:
+            # A failed check has said so, and still running is the ordinary
+            # give-up, which `wait` has worded.
+            if last["failed"] or last["pending"]:
+                raise
+            raise Stop("gave up waiting for #%d's checks after %d minutes: the "
+                       "check %r was never reported. The last answer from "
+                       "`gh pr checks` was %r. Run this again with --resume "
+                       "once it has run."
+                       % (number, CHECKS_LIMIT // 60, REQUIRED_CHECK,
+                          last["answer"]))
 
     def merge(self, number: int) -> None:
         self.gh("pr", "merge", str(number), "--merge", "--delete-branch")
