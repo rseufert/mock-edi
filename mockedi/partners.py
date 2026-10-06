@@ -29,7 +29,8 @@ BEHAVIOURS = db.BEHAVIOURS
 
 # Behaviours that change what the *documents* say, as opposed to whether they
 # are sent at all.
-DOCUMENT_BEHAVIOURS = ("accept", "short-ship", "reject-line", "reject-all")
+DOCUMENT_BEHAVIOURS = ("accept", "short-ship", "over-ship", "reject-line",
+                       "reject-all")
 
 
 class UnknownPartner(KeyError):

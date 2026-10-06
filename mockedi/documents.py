@@ -51,6 +51,7 @@ which records what the mock asked for and nothing else.
 from __future__ import annotations
 
 import datetime
+import decimal
 import math
 import sqlite3
 from dataclasses import dataclass, field
@@ -75,6 +76,8 @@ FINISHED = ("invoiced", "cancelled", "rejected")
 PRICE_CHANGED = "IP"
 UNITS_PER_CARTON = 24
 SHORT_SHIP_FRACTION = Decimal("0.8")
+# What an over-shipping seller packs for each unit it confirmed (#212).
+OVER_SHIP_FRACTION = Decimal("1.3")
 
 
 def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
@@ -600,6 +603,9 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
         # consignment to name, not another one.
         return latest_shipment(conn, po_number, partner_id) or None
 
+    if _behaviour(conn, partner_id) == "over-ship":
+        shipping = [(row, over_shipped(delta)) for row, delta in shipping]
+
     units = sum(delta for _row, delta in shipping)
     shipment_id = "SHP%d" % db.next_number(conn, "shipment")
     for row, delta in shipping:
@@ -624,6 +630,30 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
     return shipment_row(conn, shipment_id)
+
+
+def over_shipped(quantity: Decimal) -> Decimal:
+    """What an over-shipping seller packs where it should have packed `quantity`.
+
+    Three in ten more, rounded up to a whole unit, and never less than one
+    whole unit extra: 100 is 130, 10 is 13, and 1 is 2. A quantity that is
+    not whole stays not whole when the one extra unit is what applies - half
+    a kilogram is a kilogram and a half - since a weight ships in fractions
+    and rounding it would bill for goods that were never packed. The
+    acknowledgment said the
+    ordered quantity, which is how a real over-shipment goes - the warehouse
+    packed a full carton, and the buyer finds out from the ship notice and
+    at the dock, not from a promise (#212).
+    """
+    more = (quantity * OVER_SHIP_FRACTION).to_integral_value(
+        rounding=decimal.ROUND_CEILING)
+    return max(more, quantity + 1)
+
+
+def _behaviour(conn: sqlite3.Connection, partner_id: str) -> str:
+    row = conn.execute("SELECT behaviour FROM partner WHERE id = ?",
+                       (partner_id,)).fetchone()
+    return row["behaviour"] if row else ""
 
 
 def _tracking(shipment_id: str) -> str:

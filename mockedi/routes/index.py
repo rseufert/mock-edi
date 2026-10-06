@@ -79,6 +79,7 @@ def page(mock, base: str) -> str:
                                    "<code>?failed</code> to redeliver what failed."),
         ("POST", "/_mock/outbox/{id}/retry", "Deliver a failed document again, unchanged."),
         ("POST", "/_mock/outbox/{id}/resend", "Send a document again, unchanged, whatever became of it."),
+        ("POST", "/_mock/deliver", "With --hold-delivery: send the next held document, or ?all of them."),
         ("POST", "/_mock/send", "Send a document out of band."),
         ("GET", "/_mock/mdns", "Receipts, sent and received."),
         ("GET", "/_mock/unacknowledged", "What we sent that nobody has acknowledged."),
