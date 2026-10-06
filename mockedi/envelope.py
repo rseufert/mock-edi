@@ -11,8 +11,11 @@ a purchase order is.
 from __future__ import annotations
 
 import datetime
+import functools
+import unicodedata
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import (Callable, Dict, Iterator, List, Optional, Sequence, Tuple,
+                    Union)
 
 Value = Union[str, List[str]]
 
@@ -395,8 +398,103 @@ _FOLD = str.maketrans("abcdefghijklmnopqrstuvwxyz",
                       "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
 
 
-def fit(value: str, charset: str, outside: str = "", fold: bool = False) -> str:
-    """`value` with every character the set cannot carry replaced by `?`.
+# What a letter becomes when the declared set cannot carry it (#264).
+#
+# There is no EDIFACT rule for this. The standard's only answer to a
+# character outside the declared set is an error (0085 code 21), and what a
+# sender does to avoid one is convention. This is the Unicode Consortium's:
+# CLDR's `Latin-ASCII` transform, `common/transforms/Latin-ASCII.xml` at
+# commit f68302c0ae, which is language-neutral. It removes the marks from
+# Latin letters (so `ü` is `u`, never `ue`) and gives the letters that have
+# no decomposition an explicit rule each. Those rules are copied here for
+# the letters of Latin-1 Supplement and Latin Extended-A, which is where
+# European names live, and for the capital sharp s.
+#
+# A German counterparty would write `Mueller` and a Danish one `Oere`. The
+# mock writes `Muller` and `Ore`, on purpose: an envelope does not say what
+# language a name is in, and `ue` is wrong for a Finnish or a Turkish `ü`.
+# Zack's choice on #264, where the sources are.
+_LETTERS = {
+    "\u00c6": "AE", "\u00d0": "D", "\u00d8": "O", "\u00de": "TH",
+    "\u00df": "ss", "\u00e6": "ae", "\u00f0": "d", "\u00f8": "o",
+    "\u00fe": "th", "\u0110": "D", "\u0111": "d", "\u0126": "H",
+    "\u0127": "h", "\u0131": "i", "\u0132": "IJ", "\u0133": "ij",
+    "\u0138": "q", "\u013f": "L", "\u0140": "l", "\u0141": "L",
+    "\u0142": "l", "\u0149": "'n", "\u014a": "N", "\u014b": "n",
+    "\u0152": "OE", "\u0153": "oe", "\u0166": "T", "\u0167": "t",
+    "\u017f": "s", "\u1e9e": "SS",
+}
+
+
+@functools.lru_cache(maxsize=4096)
+def _carried(char: str, charset: str) -> bool:
+    try:
+        char.encode(charset)
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+@functools.lru_cache(maxsize=4096)
+def _plain(char: str) -> str:
+    """One character said in unaccented Latin letters, or itself if it has
+    no such form: `\u0141` is `L`, `\u017a` is `z`, `\u00df` is `ss`."""
+    if char in _LETTERS:
+        return _LETTERS[char]
+    base, marks = unicodedata.normalize("NFD", char)[:1], \
+        unicodedata.normalize("NFD", char)[1:]
+    # Marks come off Latin letters and digits only, as in CLDR: a Greek
+    # letter without its accent is still a letter the set cannot carry.
+    latin = base in _LETTERS or (base.isalnum() and (
+        base.isascii() or unicodedata.name(base, "").startswith("LATIN")))
+    if marks and latin and all(unicodedata.category(mark) == "Mn"
+                               for mark in marks):
+        return _LETTERS.get(base, base)
+    return char
+
+
+def transliterate(text: str, charset: str, grow: bool = True) -> str:
+    """`text` with each character `charset` cannot carry said in plain letters.
+
+    A character the set does carry is left exactly as it is: `\u00fc` stays
+    `\u00fc` under ISO 8859-1 and becomes `u` only under ISO 646. One with no
+    plain form is left for `fit` to substitute, as before.
+
+    With `grow` off, a letter whose plain form is two characters is left
+    alone too, for the caller that has no room for the second.
+    """
+    if text.isascii():
+        return text
+    # A letter and a mark sent as two characters are one letter.
+    text = unicodedata.normalize("NFC", text)
+    out: List[str] = []
+    for char in text:
+        if _carried(char, charset):
+            out.append(char)
+            continue
+        if (unicodedata.category(char) == "Mn" and out
+                and out[-1][-1:].isascii() and out[-1][-1:].isalnum()):
+            continue            # a mark with no composed form: it comes off
+        plain = _plain(char)
+        out.append(plain if grow or len(plain) == 1 else char)
+    return "".join(out)
+
+
+def fit(value: str, charset: str, outside: str = "", fold: bool = False,
+        limit: int = 0) -> str:
+    """`value` with every character the set cannot carry said another way.
+
+    A letter is transliterated - `\u0141\u00f3d\u017a` is `Lodz`, not `?\u00f3d?` -
+    and whatever has no plain form is replaced by `?` (#264).
+
+    `limit` is the element's maximum length, when the caller knows it. A
+    few letters have a plain form of two characters (`\u00df` is `ss`), so a
+    value that filled its element would outgrow it and the mock would write
+    a document its own dictionary reports. So a value grows only into room
+    it is known to have: with no `limit`, or with one the longer form would
+    pass, those letters keep the `?` they had, which is one character. A
+    full element loses a letter's legibility rather than its validity, and
+    `fit` on its own never makes a value longer.
 
     `outside` is the repertoire's own exclusion, for a syntax whose codec
     admits more than the syntax does: `UNOA`'s codec is `ascii` and level A
@@ -417,9 +515,15 @@ def fit(value: str, charset: str, outside: str = "", fold: bool = False) -> str:
     An empty `charset` fits nothing, for the callers that do not know one.
     """
     text = "" if value is None else str(value)
+    if charset and not text.isascii():
+        # Before folding, so that `\u0142` is `l` and then `L` under level A.
+        plain = transliterate(text, charset)
+        if len(plain) > len(text) and not (limit and len(plain) <= limit):
+            plain = transliterate(text, charset, grow=False)
+        text = plain
     if fold:
-        # Before everything else: a folded character is then inside the
-        # repertoire and the codec both, which is the point of folding.
+        # Before the substitutions below: a folded character is then inside
+        # the repertoire and the codec both, which is the point of folding.
         text = text.translate(_FOLD)
     if outside:
         text = "".join("?" if char in outside else char for char in text)
@@ -429,19 +533,30 @@ def fit(value: str, charset: str, outside: str = "", fold: bool = False) -> str:
 
 
 def render_segment(seg: Seg, delims: Delimiters, charset: str = "",
-                   outside: str = "", fold: bool = False) -> str:
-    """One segment, trailing empty elements trimmed as every real sender does."""
+                   outside: str = "", fold: bool = False,
+                   limit: Optional[Callable[[int, int], int]] = None) -> str:
+    """One segment, trailing empty elements trimmed as every real sender does.
+
+    `limit(element, component)` is the most characters that position holds,
+    both counted from 1 and `component` 0 for an element that has none; 0
+    where it is not known. See `fit` for what it is for.
+    """
+    def room(element: int, component: int = 0) -> int:
+        return limit(element, component) if limit is not None else 0
+
     parts: List[str] = []
-    for value in seg.elements:
+    for position, value in enumerate(seg.elements, start=1):
         if isinstance(value, list):
-            components = [escape(fit(v, charset, outside, fold), delims)
-                          for v in value]
+            components = [
+                escape(fit(v, charset, outside, fold, room(position, index)),
+                       delims)
+                for index, v in enumerate(value, start=1)]
             while components and components[-1] == "":
                 components.pop()
             parts.append(delims.component.join(components))
         else:
-            parts.append(escape(fit(value, charset, outside, fold),
-                            delims))
+            parts.append(escape(fit(value, charset, outside, fold,
+                                    room(position)), delims))
     while parts and parts[-1] == "":
         parts.pop()
     return delims.element.join([seg.tag] + parts)

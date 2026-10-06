@@ -276,6 +276,22 @@ So to see the EDIFACT flow, send as `EURODIS` - step 9 of
 `PATCH /_mock/partners/ACME` with `{"dialect": "EDIFACT", "version":
 "D:96A:UN"}`.
 
+**A letter the character set cannot carry is said in plain letters.** An
+EDIFACT interchange declares its character set in `UNB`, and a partner's
+`syntax` says which the mock writes. A buyer in `Łódź` is written `Lódz` in
+`UNOC` (ISO 8859-1 has the `ó` and not the other two), `Lodz` in `UNOB` and
+`LODZ` in `UNOA`; in `UNOD` or `UNOY` it is `Łódź`, untouched, because those
+carry it. A character the declared set does carry is never changed. There is
+no EDIFACT rule for which letters, so the mock follows a published one,
+Unicode CLDR's `Latin-ASCII`: marks come off (`ü` is `u`) and the letters
+with no mark to remove have a rule each (`Ł` is `L`, `ß` is `ss`, `Æ` is
+`AE`, `Ø` is `O`, `Þ` is `TH`). That table is language-neutral, and it is a
+choice of legibility over locale: a German counterparty would send `Mueller`
+where the mock sends `Muller`, and a Danish one `Oere` for `Ore`. A value
+never outgrows its element for it - where `ss` would not fit, the `ß` is a
+`?` - and anything with no plain form at all, a `€` or a Greek word, is
+still a `?`. X12 declares no character set and is not touched.
+
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
 what you assert about an X12 flow holds for the EDIFACT one. `GET
