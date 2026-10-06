@@ -636,7 +636,11 @@ def over_shipped(quantity: Decimal) -> Decimal:
     """What an over-shipping seller packs where it should have packed `quantity`.
 
     Three in ten more, rounded up to a whole unit, and never less than one
-    extra: 100 is 130, 10 is 13, and 1 is 2. The acknowledgment said the
+    whole unit extra: 100 is 130, 10 is 13, and 1 is 2. A quantity that is
+    not whole stays not whole when the one extra unit is what applies - half
+    a kilogram is a kilogram and a half - since a weight ships in fractions
+    and rounding it would bill for goods that were never packed. The
+    acknowledgment said the
     ordered quantity, which is how a real over-shipment goes - the warehouse
     packed a full carton, and the buyer finds out from the ship notice and
     at the dock, not from a promise (#212).

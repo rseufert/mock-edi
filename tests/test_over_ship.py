@@ -36,6 +36,12 @@ class HowMuchMore(unittest.TestCase):
                 self.assertEqual(documents.over_shipped(Decimal(confirmed)),
                                  Decimal(packed))
 
+    def test_a_fraction_of_a_unit_gets_one_whole_unit_more_and_stays_a_fraction(self):
+        # Half a kilogram ordered is a kilogram and a half shipped: the one
+        # extra unit applies, and nothing is rounded that was not asked to be.
+        self.assertEqual(documents.over_shipped(Decimal("0.5")), Decimal("1.5"))
+        self.assertEqual(documents.over_shipped(Decimal("2.5")), Decimal("4"))
+
 
 class InX12(MockServerCase):
 
