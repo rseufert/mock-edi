@@ -10,10 +10,9 @@ a purchase order is.
 """
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
-
-from .db import DocumentZone
 
 Value = Union[str, List[str]]
 
@@ -433,6 +432,37 @@ def seg(tag: str, *elements: Value) -> Seg:
 
 
 # -- date and time, in the shapes both dialects use
+
+class DocumentZone(datetime.tzinfo):
+    """The zone a pinned mock dates its documents in: a fixed offset from UTC.
+
+    A mock started at a chosen time (`--start-at`) has to write the same
+    dates on any machine, so it cannot read them off the host's zone. It
+    reads them in the zone its start time was written in instead, and its
+    clock hands out moments carrying this, which `local` leaves as they are
+    (#280). No daylight saving: an offset is an offset.
+    """
+
+    def __init__(self, offset: datetime.timedelta):
+        self.offset = offset
+
+    def utcoffset(self, moment):
+        return self.offset
+
+    def dst(self, moment):
+        return datetime.timedelta(0)
+
+    def tzname(self, moment):
+        return datetime.timezone(self.offset).tzname(None)
+
+    def __reduce__(self):
+        # tzinfo's own would call __init__ with no offset, so a moment from a
+        # pinned clock could not be copied or pickled.
+        return (DocumentZone, (self.offset,))
+
+    def __repr__(self) -> str:
+        return "DocumentZone(%s)" % self.tzname(None)
+
 
 def local(moment):
     """The same moment as the host's wall clock reads it.

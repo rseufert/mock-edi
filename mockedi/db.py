@@ -27,6 +27,7 @@ import sqlite3
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .envelope import DocumentZone
 from .money import cents
 
 SCHEMA = """
@@ -722,32 +723,6 @@ def next_seq(conn: sqlite3.Connection) -> int:
 #
 # The dates on the wire - ISA09/10, GS04/05, UNB S004 - are a different
 # matter and stay local, as the standards' long convention has them.
-
-class DocumentZone(datetime.tzinfo):
-    """The zone a pinned mock dates its documents in: a fixed offset from UTC.
-
-    A mock started at a chosen time (`--start-at`) has to write the same
-    dates on any machine, so it cannot read them off the host's zone. It
-    reads them in the zone its start time was written in instead, and its
-    clock hands out moments carrying this, which `local` leaves as they are
-    (#280). No daylight saving: an offset is an offset.
-    """
-
-    def __init__(self, offset: datetime.timedelta):
-        self.offset = offset
-
-    def utcoffset(self, moment):
-        return self.offset
-
-    def dst(self, moment):
-        return datetime.timedelta(0)
-
-    def tzname(self, moment):
-        return datetime.timezone(self.offset).tzname(None)
-
-    def __repr__(self) -> str:
-        return "DocumentZone(%s)" % self.tzname(None)
-
 
 def today(conn: sqlite3.Connection) -> datetime.date:
     """The date the mock would write on a document now.

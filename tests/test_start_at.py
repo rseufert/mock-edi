@@ -212,6 +212,19 @@ class TheZoneTheStartTimeIsWrittenIn(unittest.TestCase):
         self.assertEqual(clock["now"], "2026-11-03T00:30:00+01:00")
 
 
+class AMomentFromAPinnedClock(unittest.TestCase):
+
+    def test_it_can_be_copied_and_pickled_with_its_zone(self):
+        import copy
+        import pickle
+        from mockedi.pipeline import parse_start
+        moment = parse_start("2026-11-03T00:30:00+01:00")
+        for twin in (copy.deepcopy(moment), pickle.loads(pickle.dumps(moment))):
+            self.assertEqual(twin, moment)
+            self.assertEqual(twin.utcoffset(), moment.utcoffset())
+            self.assertIs(type(twin.tzinfo), type(moment.tzinfo))
+
+
 class AStartTimeThatIsRefused(unittest.TestCase):
 
     def test_one_with_no_zone_is_not_guessed_at(self):

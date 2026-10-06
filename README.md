@@ -558,7 +558,10 @@ and on any machine.
   `...T09:00:00Z` dates them in UTC; `...T09:00:00+01:00` in +01:00, with no
   daylight saving. The host's zone has no say, which is what makes a capture
   the same on a laptop and in CI. (Without `--start-at`, document dates are
-  in the host's zone, as [Timestamps](#timestamps) says.)
+  in the host's zone, as [Timestamps](#timestamps) says.) So the same
+  instant written two ways can date documents a day apart:
+  `2026-11-02T00:30:00+01:00` dates them 2 November and
+  `2026-11-01T23:30:00Z` dates them 1 November.
 - **Many events share one time.** Everything between two advances carries the
   same `at`. The timeline's order is still the order things happened in: it
   is decided by a sequence the mock keeps, not by the time.
