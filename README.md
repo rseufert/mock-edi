@@ -286,7 +286,9 @@ free-form `PID`s, or several `IMD`s, that a partner sends for one line. A
 description that fits is written exactly as before. One that *arrives* in a
 single element over length is still reported as over length; the mock then
 answers it in pieces that fit. A single word longer than the element has
-nowhere to be cut, and reads back with a space where the cut fell.
+nowhere to be cut, and reads back with a space where the cut fell. And the
+pieces have an end: a line takes 200 `PID` segments or 99 `IMD`s, so a
+description past 16,000 characters in X12 or 6,930 in EDIFACT is cut there.
 
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so

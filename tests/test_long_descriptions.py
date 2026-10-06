@@ -23,7 +23,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from mockedi import edifact, transactions, x12
+from mockedi import edifact, schema, transactions, x12
 from mockedi.envelope import seg
 
 from support import (ACME, EURODIS, MockServerCase, edifact_order, x12_order)
@@ -100,6 +100,23 @@ class WhatIsWritten(unittest.TestCase):
         self.assertEqual(
             [item.elements for item in transactions.description_edifact(SHORT)],
             [seg("IMD", "F", "", ["", "", "", SHORT]).elements])
+
+    def test_there_are_never_more_segments_than_a_line_may_hold(self):
+        # Found by Rusty: 100 free-form PIDs on one line are one description
+        # of 8,099 characters, which is 116 IMDs, and a LIN group takes 99.
+        endless = " ".join(["x" * 80] * 300)
+        self.assertEqual(len(transactions.description_x12(endless)),
+                         transactions.PID_MOST)
+        self.assertEqual(len(transactions.description_edifact(endless)),
+                         transactions.IMD_MOST)
+        for width, most, declared in (
+                (transactions.PID_MOST, "PID", schema.X12_855),
+                (transactions.IMD_MOST, "IMD", schema.EDIFACT_ORDRSP),
+                (transactions.IMD_MOST, "IMD", schema.EDIFACT_INVOIC),
+                (transactions.IMD_MOST, "IMD", schema.EDIFACT_ORDERS)):
+            allowed = [use.max_use for use, _loop in declared.uses()
+                       if use.tag == most]
+            self.assertEqual(min(allowed), width, declared.code)
 
     def test_no_description_is_no_segment(self):
         self.assertEqual(transactions.description_x12(""), [])
@@ -203,6 +220,19 @@ class RoundTrips(MockServerCase):
             with self.subTest(kind=kind):
                 payload = self.mailbox(EURODIS, kind)[0]["payload"]
                 self.assertIn("UNB+", payload)
+                said = self.mock.findings(payload)
+                self.assertEqual(len(said), 1, said)
+                self.assertTrue(said[0].endswith(": accepted"), said)
+
+    def test_a_hundred_pids_from_an_edifact_partner_are_answered_legally(self):
+        summary = self.send(x12_order(
+            "LONG-MOST", sender=EURODIS, lines=[("WIDGET-001", 10, "12.50")],
+            extra=[seg("PID", "F", "", "", "", "y" * 80) for _ in range(100)]))
+        self.assertTrue(summary["accepted"])
+        for kind in ("response", "invoice"):
+            with self.subTest(kind=kind):
+                payload = self.mailbox(EURODIS, kind)[0]["payload"]
+                self.assertEqual(payload.count("IMD+F+"), 99)
                 said = self.mock.findings(payload)
                 self.assertEqual(len(said), 1, said)
                 self.assertTrue(said[0].endswith(": accepted"), said)

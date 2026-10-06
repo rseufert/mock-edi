@@ -590,6 +590,14 @@ def _line_edifact(block: Sequence[Seg], fallback: int) -> Line:
 
 PID_WIDTH = 80          # PID05, element 352
 IMD_WIDTH = 35          # C273's 7008, twice in one IMD
+# How many of each a line may carry, in every set the mock writes a
+# description into. Pieces have an end too: a description past 200 PIDs
+# (16,000 characters) or 99 IMDs (6,930) is cut there, because the segment
+# after that is one the dictionary reports. Nothing real is that long; it
+# was reached by reading every free-form PID of a line as one text and
+# answering in the other dialect (#291).
+PID_MOST = 200
+IMD_MOST = 99
 
 
 def pieces(text: str, width: int) -> List[str]:
@@ -626,13 +634,20 @@ def joined(parts: Sequence[str]) -> str:
 
 
 def description_x12(text: str) -> List[Seg]:
-    """A description as free-form `PID` segments, as many as it takes."""
-    return [seg("PID", "F", "", "", "", part) for part in pieces(text, PID_WIDTH)]
+    """A description as free-form `PID` segments, as many as it takes.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    return [seg("PID", "F", "", "", "", part)
+            for part in pieces(text, PID_WIDTH)[:PID_MOST]]
 
 
 def description_edifact(text: str) -> List[Seg]:
-    """A description as free-form `IMD` segments, two `7008`s to each."""
-    parts = pieces(text, IMD_WIDTH)
+    """A description as free-form `IMD` segments, two `7008`s to each.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    parts = pieces(text, IMD_WIDTH)[:2 * IMD_MOST]
     return [seg("IMD", "F", "", ["", "", ""] + parts[index:index + 2])
             for index in range(0, len(parts), 2)]
 
