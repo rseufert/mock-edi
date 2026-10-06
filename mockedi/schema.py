@@ -1246,6 +1246,18 @@ UOM_TO_EDIFACT = {
 UOM_FROM_EDIFACT = {"PCE": "EA", "CT": "CA", "BX": "BX", "DZN": "DZ",
                     "LBR": "LB", "KGM": "KG", "GLL": "GA", "FOT": "FT",
                     "MTR": "M", "PF": "PL"}
+# The 6411 codes the mock knows, which are the ones it can translate: a
+# document carrying a unit from the other side of UOM_FROM_EDIFACT and no
+# further. X12's element 355 is declared with its own subset in all eight
+# places it appears; 6411 had none in any of the three, which is the
+# asymmetry #239 names. Recommendation 20 has hundreds more, so this refuses
+# units D.96A admits - exactly as the X12 side already refuses `LT` - and the
+# finding names what is accepted.
+EDIFACT_UOM_CODES = {     # 6411
+    "PCE": "Piece", "CT": "Carton", "BX": "Box", "DZN": "Dozen",
+    "LBR": "Pound", "KGM": "Kilogram", "GLL": "Gallon", "FOT": "Foot",
+    "MTR": "Metre", "PF": "Pallet",
+}
 
 
 def _c(ref, name, components, req=OPTIONAL):
@@ -1506,8 +1518,8 @@ IMD = Segment("IMD", "Item Description", (
         _e("7009", "Item description identification", "AN", 1, 17),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
-        _e("7008", "Item description", "AN", 1, 256),
-        _e("7008", "Item description", "AN", 1, 256),
+        _e("7008", "Item description", "AN", 1, 35),
+        _e("7008", "Item description", "AN", 1, 35),
         _e("3453", "Language, coded", "ID", 1, 3),
     )),
 ), "A description of the item in words.")
@@ -1516,8 +1528,9 @@ QTY = Segment("QTY", "Quantity", (
     _c("C186", "Quantity Details", (
         _e("6063", "Quantity qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_QUANTITY_QUALIFIERS),
-        _e("6060", "Quantity", "R", 1, 35, MANDATORY),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6060", "Quantity", "R", 1, 15, MANDATORY),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     ), MANDATORY),
 ), "A quantity, named by what kind it is - ordered, confirmed, despatched, invoiced.")
 
@@ -1528,7 +1541,8 @@ PRI = Segment("PRI", "Price Details", (
         _e("5375", "Price type, coded", "ID", 1, 3),
         _e("5387", "Price type qualifier", "ID", 1, 3),
         _e("5284", "Unit price basis", "R", 1, 9),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     )),
 ), "The unit price of the line.")
 
@@ -1536,7 +1550,7 @@ MOA = Segment("MOA", "Monetary Amount", (
     _c("C516", "Monetary Amount", (
         _e("5025", "Monetary amount type qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_AMOUNT_QUALIFIERS),
-        _e("5004", "Monetary amount", "R", 1, 35),
+        _e("5004", "Monetary amount", "R", 1, 18),
         _e("6345", "Currency, coded", "ID", 3, 3),
         _e("6343", "Currency qualifier", "ID", 1, 3),
         _e("4405", "Status, coded", "ID", 1, 3),
@@ -1550,8 +1564,8 @@ FTX = Segment("FTX", "Free Text", (
         _e("4441", "Free text, coded", "AN", 1, 17, MANDATORY),
     )),
     _c("C108", "Text Literal", (
-        _e("4440", "Free text", "AN", 1, 512, MANDATORY),
-        _e("4440", "Free text", "AN", 1, 512),
+        _e("4440", "Free text", "AN", 1, 70, MANDATORY),
+        _e("4440", "Free text", "AN", 1, 70),
     )),
 ), "Prose. In a response it carries the reason a line was changed or refused.")
 
@@ -1600,7 +1614,8 @@ CNT = Segment("CNT", "Control Total", (
            {"1": "Algebraic total of quantity values", "2": "Number of line items in message",
             "4": "Number of lines in message", "11": "Total quantity"}),
         _e("6066", "Control value", "R", 1, 18, MANDATORY),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     ), MANDATORY),
 ), "A control total: what is counted, and the count.")
 
