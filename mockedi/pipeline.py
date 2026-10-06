@@ -932,6 +932,11 @@ class Pipeline:
                 [message], self.config.as2_id, partner_id, interchange_control,
                 sender_qualifier=self.config.qualifier,
                 receiver_qualifier=partner["qualifier"], moment=moment,
+                # The syntax the partner is set to, not the one the mock
+                # happens to default to. `render` fits every value to the
+                # character set this declares (#199), so a UNOY partner keeps
+                # the characters a UNOC answer used to substitute away (#263).
+                syntax=partner["syntax"] or "UNOC",
                 test=bool(partner["test"]))
             payload = edifact.render(interchange, newline=self.config.pretty)
 
