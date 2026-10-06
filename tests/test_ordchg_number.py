@@ -222,6 +222,69 @@ class AnOrderNumberTooLongToChange(MockServerCase):
         self.assertEqual(status, 200, body)
 
 
+class TogetherWith288(unittest.TestCase):
+    """What #288's finding and this change do when both are in.
+
+    #288 reports a simple element that arrives with components. This change
+    makes `BGM` position 2 simple. So the two meet, and the order they landed
+    in does not matter - but the combination produces something neither does
+    alone, and it is worth a test rather than an argument.
+
+    The mock's own ORDCHG is **clean**, which is the whole reason this change
+    had to come before #288 could be turned on. And a buyer still sending the
+    composite form is now **told** - and still **understood**, because the
+    finding is an error rather than a fatal one, so the change is read and
+    applied. Reported but not refused is the outcome Zack's decision on #186
+    asked for, arrived at from both ends.
+    """
+
+    def report(self, bgm):
+        from mockedi import validate
+        from test_order_writers import wrap
+        body = [bgm, seg("DTM", ["137", "20261005", "102"]),
+                seg("RFF", ["ON", "4500001001"]),
+                seg("LIN", "1", "3", ["WIDGET-001", "VP"]),
+                seg("QTY", ["21", "60"])]
+        interchange = wrap("EDIFACT", "ORDCHG", body, "9")
+        found = validate.validate(interchange)
+        notes = [element.note for message in found.messages
+                 for finding in message.segments
+                 for element in finding.elements]
+        _group, message = list(interchange.messages())[0]
+        # The BGM02 finding only, not the whole verdict: a hand-built body is
+        # not a complete ORDCHG and draws structural findings of its own,
+        # which are not what these tests are about.
+        about_bgm = [note for note in notes if "BGM02" in note]
+        return about_bgm, transactions.read_change(message, "EDIFACT")
+
+    def test_the_mocks_own_ordchg_draws_nothing_at_all(self):
+        # This one *is* a complete document, so the whole verdict is fair.
+        from mockedi import validate
+        from test_order_writers import wrap
+        message = change_message("EDIFACT", a_change())
+        found = validate.validate(wrap("EDIFACT", "ORDCHG", message.body, "9"))
+        self.assertTrue(found.clean)
+
+    def test_d96as_form_draws_nothing_about_bgm02(self):
+        about_bgm, _change = self.report(
+            seg("BGM", ["230"], "4500001001-2", "4"))
+        self.assertEqual(about_bgm, [])
+
+    def test_the_old_composite_form_is_now_reported(self):
+        about_bgm, _change = self.report(
+            seg("BGM", ["230"], ["4500001001", "", "2"], "4"))
+        self.assertTrue(any("is a simple element" in note
+                            for note in about_bgm), about_bgm)
+
+    def test_and_is_still_read_and_applied(self):
+        # The finding is an error, not a fatal one, so the change is read.
+        # "The reader accepts both forms" stays true with #288 in.
+        _about_bgm, change = self.report(
+            seg("BGM", ["230"], ["4500001001", "", "2"], "4"))
+        self.assertEqual((change.po_number, change.sequence),
+                         ("4500001001", "2"))
+
+
 class TheNumberSurvivesARoundTrip(unittest.TestCase):
     """Written, read and written again has to give the same bytes.
 
