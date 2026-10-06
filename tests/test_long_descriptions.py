@@ -104,6 +104,8 @@ class WhatIsWritten(unittest.TestCase):
     def test_there_are_never_more_segments_than_a_line_may_hold(self):
         # Found by Rusty: 100 free-form PIDs on one line are one description
         # of 8,099 characters, which is 116 IMDs, and a LIN group takes 99.
+        # A DESADV line takes only 25, and is left out on purpose: nothing
+        # writes an IMD into a DESADV (Eddie checked, on #311).
         endless = " ".join(["x" * 80] * 300)
         self.assertEqual(len(transactions.description_x12(endless)),
                          transactions.PID_MOST)
