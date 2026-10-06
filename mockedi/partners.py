@@ -18,7 +18,7 @@ import sqlite3
 import urllib.parse
 from typing import Any, Dict, List, Optional
 
-from . import db, schema
+from . import charsets, db, schema
 from .transactions import Party
 
 # An outbound document that will never be sent, because the partner it was
@@ -47,7 +47,7 @@ class UnknownPartner(KeyError):
 # field sends whoever wrote it looking for the bug somewhere else entirely.
 FIELDS = {
     "name": "", "qualifier": "ZZ", "dialect": "X12", "version": "004010",
-    "behaviour": "accept", "as2_url": "", "mdn_mode": "sync",
+    "syntax": "UNOC", "behaviour": "accept", "as2_url": "", "mdn_mode": "sync",
     "street": "", "city": "", "region": "", "postal": "", "country": "US",
     "duns": "", "test": 1, "role": "customer",
 }
@@ -78,6 +78,23 @@ def behaviours_for(role: str) -> List[str]:
 
 DIALECTS = ("X12", "EDIFACT")
 MDN_MODES = ("sync", "async")
+
+# The syntax identifiers a partner may be set to: the ones the mock can write
+# faithfully, which is every one `charsets` has a codec for.
+#
+# UNOA is not among them, and that is the one thing here worth reading twice.
+# Level A is "the basic code table of ISO 646 with the exceptions of lower
+# case letters" - a *repertoire*, not an encoding - and `charsets` has it
+# mapped to `ascii`, which admits lower case. Offering it would put
+# `UNB+UNOA:3` on the wire above a description level A cannot carry, which is
+# the kind of lie this mock exists not to tell. It is refused until the
+# repertoire is there to enforce (#295), and the refusal says so.
+SYNTAXES = tuple(sorted(set(charsets.EDIFACT_SYNTAX) - {"UNOA"}))
+UNFAITHFUL = {
+    "UNOA": "level A has no lower case, and the mock cannot yet hold a "
+            "document to that - see #295. UNOB is the same repertoire with "
+            "lower case, and is written the same way on the wire.",
+}
 
 # What the wire can carry, per dialect.
 #
@@ -175,6 +192,13 @@ def check(fields: Dict[str, Any], dialect: str,
                       "dictionary for it: it speaks %s"
                       % (dialect, out["version"],
                          " and ".join(schema.VERSIONS[dialect])))
+
+    if "syntax" in out and out["syntax"] in UNFAITHFUL:
+        raise Invalid("the mock will not answer in %s: %s"
+                      % (out["syntax"], UNFAITHFUL[out["syntax"]]))
+    if "syntax" in out and out["syntax"] not in SYNTAXES:
+        raise Invalid("unknown syntax identifier %r; the mock can answer in: %s"
+                      % (out["syntax"], ", ".join(SYNTAXES)))
 
     if "mdn_mode" in out and out["mdn_mode"] not in MDN_MODES:
         raise Invalid("mdn_mode must be one of %s, not %r"

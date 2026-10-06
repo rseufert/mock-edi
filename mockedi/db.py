@@ -37,6 +37,14 @@ CREATE TABLE IF NOT EXISTS partner (
     qualifier    TEXT NOT NULL DEFAULT 'ZZ',
     dialect      TEXT NOT NULL DEFAULT 'X12',
     version      TEXT NOT NULL DEFAULT '004010',
+    -- The syntax identifier an EDIFACT answer declares in UNB S001, and so
+    -- the character set it is written in. Set per partner rather than read
+    -- back off the mock's own UNB, which answered UNOC whatever the partner
+    -- had declared; and configured rather than mirrored from the last
+    -- inbound interchange, so that what a partner receives does not depend
+    -- on which document arrived first (#263). Ignored for X12, which
+    -- declares no character set at all.
+    syntax       TEXT NOT NULL DEFAULT 'UNOC',
     behaviour    TEXT NOT NULL DEFAULT 'accept',
     as2_url      TEXT NOT NULL DEFAULT '',
     mdn_mode     TEXT NOT NULL DEFAULT 'sync',
@@ -431,7 +439,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class DatabaseError(Exception):
