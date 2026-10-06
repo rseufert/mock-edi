@@ -79,6 +79,14 @@ SCHEDULED_X12 = "067"
 # still says.
 ISSUED_X12 = ("097", "137")
 REQUESTED_EDIFACT = ("2", "17", "10")
+# The date a seller's response puts on a confirmed line: 67, the delivery
+# date its current schedule gives. It was written 2, which says the buyer
+# requested it (#305). Read back from 67 first, then from 2 and 17, which is
+# what this mock wrote before 0.8.0 and what other senders use. The price of
+# still reading those: a partner whose response dates a line only with 2,
+# meaning to echo what the buyer asked for, is read as having scheduled it.
+SCHEDULED_EDIFACT = "67"
+SCHEDULED_READ_EDIFACT = ("67", "2", "17")
 
 
 @dataclass
@@ -918,7 +926,8 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if confirmed < ordered:
             out.append(seg("QTY", ["83", quantity_text(ordered - confirmed), unit]))
         if row.get("scheduled_on") and confirmed > 0:
-            out.append(seg("DTM", ["2", _iso(row["scheduled_on"]), "102"]))
+            out.append(seg("DTM", [SCHEDULED_EDIFACT, _iso(row["scheduled_on"]),
+                                   "102"]))
         out.append(seg("PRI", ["AAA", unit_price(number(row["price"], "0.00"))]))
         if row.get("reason"):
             out.append(seg("FTX", "AAO", "", "", [row["reason"]]))
@@ -2012,7 +2021,7 @@ def _read_response_edifact(message: Message) -> Response:
             # No element carries the verdict: an ORDRSP says it by how much it
             # confirms, so this is `acknowledgment_type` run backwards.
             status=_verdict(ordered, confirmed),
-            scheduled_on=_edifact_dtm(block[1:], ("2", "67")),
+            scheduled_on=_edifact_dtm(block[1:], SCHEDULED_READ_EDIFACT),
             reason=reason,
             action=EDIFACT_ACTION_TO_CHANGE.get(head.get(2), "")
                    if head.get(2) else "",
