@@ -166,6 +166,20 @@ until a whole pass changes nothing, and raises with what each side still holds
 rather than hanging. Pass `advance=False` for a test about *when* something
 arrives rather than about what.
 
+When the test is about the state *between* two hops of that conversation,
+start the mocks held and send one document at a time:
+
+```python
+seller = Mock.start(as2_id="SELLCO", hold_delivery=True)
+buyer = Mock.start(as2_id="BUYCO", hold_delivery=True)
+...
+buyer.step()                    # the 850 goes; {"code": "850", "status": "delivered", ...}
+seller.timeline("4500000042")   # the seller has promised, and nobody has answered it
+seller.step()                   # its 997
+```
+
+See [One document at a time](#one-document-at-a-time).
+
 `Mock("http://host:9000")` talks to one that is already running, wherever it
 is. `Mock.start(**config)` starts one on a port the OS picks and stops it
 again, and takes the same keywords as the command line.
@@ -202,6 +216,7 @@ Both are walked through, test by test, in
 | Validate only | `POST /_mock/validate` — findings, and nothing changed |
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet; `POST /_mock/outbox/<id>/retry` for a failed delivery, `POST /_mock/outbox/<id>/resend` to send one again unchanged |
+| Deliver one | `POST /_mock/deliver` — with `--hold-delivery`, send the next held document or asynchronous MDN and say what it was; `?all` sends everything held |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
@@ -646,6 +661,59 @@ curl -X PATCH -H 'Content-Type: application/json' \
 Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
+
+## One document at a time
+
+The courier posts each document as soon as it is released. Wire two mocks to
+each other and one `settle()` runs the whole rally: the seller makes its
+promises on receipt of the 850, the buyer answers the 855 with a 997, and
+both have happened before anything outside can look. The two events sit in
+different mocks with the same time on them, so nothing orders them afterwards.
+
+Start a mock with `--hold-delivery` (`Mock.start(hold_delivery=True)`) and it
+posts nothing until it is asked. What it releases stays `ready`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/deliver          # the next one
+curl -X POST "http://127.0.0.1:8080/_mock/deliver?all"    # everything held, in order
+```
+
+```json
+{"sent": {"type": "document", "id": 2, "partner": "ACME", "code": "855",
+          "kind": "response", "reference": "4500000042", "control": "2",
+          "messageId": "<...>", "to": "http://localhost:9000/as2",
+          "status": "delivered", "note": "MDN: ...; processed"},
+ "waiting": 2}
+```
+
+One step is one POST of the mock's own, and the answer comes once that one
+has finished, `delivered` or `failed`. With nothing to send the answer is
+`{"sent": null, "waiting": 0}`, at once, so a loop over it ends:
+`while mock.step(): ...`.
+
+- **"Next" is what an unheld mock would have posted next.** The courier has
+  one queue, first in, first out, and a held one keeps the same queue: the
+  order of release, which for documents released together is their order in
+  the outbox. After a restart on a `--db` file it is documents by id, then
+  asynchronous MDNs by id.
+- **An asynchronous MDN is its own step.** It is its own POST, queued behind
+  what was already waiting, and its `sent` has `"type": "mdn"`. A read
+  between the two steps shows the document delivered and the receipt still
+  `pending`. A synchronous MDN is the HTTP response to the document it
+  answers and travels with it.
+- **A retry is held too, and so is a resend.** `/_mock/outbox/<id>/retry`,
+  `/_mock/outbox/<id>/resend` and `/_mock/advance?failed` put the document
+  back on the end of the queue and answer as they always did; it goes when
+  it is stepped. So does anything `/_mock/advance` releases.
+- **`settle()` and `exchange()` raise on a held mock**, at once, naming the
+  hold. They wait for deliveries, and a held mock makes none on its own.
+- **What is not held:** receiving (the mock answers what it is sent, MDN
+  included), the mailbox (a partner with no `as2_url` collects as before, and
+  a step passes its documents over), and `--pickup-dir`, where a released
+  document is written at once.
+- **Only at start.** A running mock cannot be switched between held and not;
+  `?all` lets the rest go. `POST /_mock/deliver` on a mock that is not held is
+  a `409`, and `/_mock/health` says `"deliveryHeld"`.
 
 ## A delivery that failed can be tried again
 
@@ -1179,6 +1247,7 @@ everything in memory.
 | --- | --- |
 | `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. The password may hold any characters; a client may send it as UTF-8 or as Latin-1. |
 | `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed: a partner `as2_url` outside the list is refused by the control plane with a `400`, a document already bound for one fails without being posted, and a `Receipt-Delivery-Option` outside it is refused with a failure MDN. |
+| `--hold-delivery` | Post nothing until asked. Released documents and asynchronous MDNs wait, in order, and `POST /_mock/deliver` sends the next one and says what it was. For reading the state between two hops of a conversation between two mocks. See [One document at a time](#one-document-at-a-time). |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
 | `--start-at TIME` | Start the mock's clock at this time and hold it there until it is advanced: `2026-11-02T09:00:00Z`, or with an offset. Two runs of one script then write the same documents and the same timeline. Documents are dated in the zone written here, not the host's. See [Starting the clock at a chosen time](#starting-the-clock-at-a-chosen-time). |

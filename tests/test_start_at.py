@@ -172,6 +172,20 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
         self.assertEqual(dates, ["2026-10-19", "2026-10-24"])
 
 
+class WithDeliveryHeld(unittest.TestCase):
+    """The two flags together (#271): a held step happens on the pinned clock."""
+
+    def test_a_stepped_delivery_is_stamped_by_the_pinned_clock(self):
+        with Mock.start(start_at=START, hold_delivery=True) as mock:
+            mock.partner(ACME, as2_url=mock.base + "/edi")
+            mock.send(x12_order("PIN-HELD"))
+            mock.advance(seconds=600)
+            sent = mock.step()
+            row = [row for row in mock.outbox() if row["id"] == sent["id"]][0]
+            self.assertEqual(row["last_attempt_at"], "2026-11-02T09:10:00Z")
+            self.assertEqual(row["released_at"], "2026-11-02T09:00:00Z")
+
+
 class OrderWhenEveryTimeTies(unittest.TestCase):
     """A standing clock must not blur what happened first."""
 

@@ -1,7 +1,7 @@
 """What the mock has to say: the mailbox a partner collects from, the outbox, and the drop directory.
 
 A retry and a scan are POSTs, and refuse another method in the words they
-always used.
+always used. So is a step of a held mock's deliveries.
 """
 from __future__ import annotations
 
@@ -37,6 +37,37 @@ def outbox(h) -> Tuple[int, int]:
                      " delivery, note, attempts, last_error, last_attempt_at,"
                      " at FROM outbound ORDER BY id DESC LIMIT ?",
         (limit(h.query),)))
+
+
+@route("POST", "/_mock/deliver", refuse="POST to deliver what is held")
+def deliver(h) -> Tuple[int, int]:
+    """Send the next thing a held mock is holding, or all of it with `?all`.
+
+    The answer says what moved and how it ended; `sent` is null when there
+    was nothing to send, so a loop over this ends. One step is one POST of
+    the mock's own: a document, or an asynchronous MDN, which is its own
+    send and is stepped on its own.
+    """
+    if not h.config.hold_delivery:
+        return h.json(409, {
+            "error": "delivery is not held: this mock posts each document as "
+                     "soon as it is released. Start it with --hold-delivery "
+                     "to send one at a time"})
+    everything = flag(h.query, "all")
+    sent = []
+    # The courier records each delivery under the lock this request holds.
+    with h.mock.unlocked():
+        while True:
+            moved = h.mock.courier.step()
+            if moved is None:
+                break
+            sent.append(moved)
+            if not everything:
+                break
+    waiting = h.mock.courier.waiting()
+    if everything:
+        return h.json(200, {"sent": sent, "count": len(sent), "waiting": waiting})
+    return h.json(200, {"sent": sent[0] if sent else None, "waiting": waiting})
 
 
 @route("POST", "/_mock/outbox/<id>/retry", refuse="POST to retry a delivery")
