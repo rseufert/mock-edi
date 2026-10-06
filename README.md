@@ -482,6 +482,39 @@ digits, and `.`, `-` or `_` between them: narrower than the standards allow,
 because an id also becomes a pickup filename and part of a URL, and one with a
 `/` in it once wrote documents outside `--pickup-dir`.
 
+A partner's `syntax` is the identifier an EDIFACT answer declares in `UNB`
+S001, and so the character set the mock writes it in. It defaults to `UNOC` -
+ISO 8859-1 - which is what the mock always sent, so nothing changes until it
+is set. Set it to what the partner's own translator reads:
+
+```bash
+curl -sX PATCH localhost:8080/_mock/partners/EURODIS \
+     -d '{"syntax": "UNOY"}'
+```
+
+`UNOY` is UTF-8, so a partner set to it is sent `Łódź` whole where a `UNOC`
+answer substituted `?ód?`. It is **configured, not mirrored** from whatever
+the last inbound interchange declared: a partner the mock has only ever sent
+to has nothing to mirror, and an answer that depended on which document
+arrived first would undo what `--start-at` is for. X12 declares no character
+set at all, so the field is ignored for an X12 partner.
+
+`UNOA` is refused, and the refusal says why:
+
+```
+the mock will not answer in UNOA: level A has no lower case, and the mock
+cannot yet hold a document to that - see #295. UNOB is the same repertoire
+with lower case, and is written the same way on the wire.
+```
+
+Level A is ISO 646 *without lower case*, which is a repertoire rather than an
+encoding — a set of permitted characters, not a way of turning them into
+bytes — and the mock has nothing to check a document against one with yet.
+Declaring `UNB+UNOA:3` above a description level A cannot carry is the kind of
+thing a partner discovers in production, so the mock declines instead. An
+unknown identifier is refused too, and the refusal lists the ones it answers
+in.
+
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
 A behaviour that only a seller can have - one that changes what the mock does
