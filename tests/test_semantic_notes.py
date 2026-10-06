@@ -408,8 +408,14 @@ class TheRemittanceAdvice(unittest.TestCase):
         self.assertEqual(advice.settles, day(SETTLES))
         self.assertEqual(advice.trace, "TRACE-42")
         # The amount paid, RMR04 - not the invoice's own amount in RMR05.
-        self.assertEqual(advice.invoices, [("INV-1", Decimal("600.00")),
-                                           ("INV-2", Decimal("350.00"))])
+        # Entries became records rather than two-tuples in #298, when a
+        # currency joined them; X12 has no per-invoice currency to read,
+        # since CUR is one per message and outside the loop that holds them.
+        self.assertEqual([(item.invoice, item.paid) for item in advice.invoices],
+                         [("INV-1", Decimal("600.00")),
+                          ("INV-2", Decimal("350.00"))])
+        self.assertEqual([item.currency for item in advice.invoices],
+                         [None, None])
 
     def test_a_negative_adjustment_reduces_the_payment(self):
         # 600 + 350 - 50 is the 900 that BPR02 says: nothing to report.
