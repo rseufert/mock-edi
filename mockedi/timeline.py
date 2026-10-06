@@ -126,6 +126,8 @@ def _documents(conn, po_number: str, partner_id: str,
         }
         event.update(_carries(row))
         if row["direction"] == "out":
+            if row["kind"] not in reconcile.ACKNOWLEDGMENT_KINDS:
+                event["promise"] = _promise(row)
             event["delivery"] = _delivery(conn, row)
         if raw:
             event["payload"] = row["payload"] or ""
@@ -197,6 +199,21 @@ def _carries(row) -> Dict[str, str]:
     return carries
 
 
+def _promise(row) -> Optional[int]:
+    """The promise something was done in keeping: a `promised` event's own
+    `promise`, which is also its id on `/_mock/scheduled` (#211).
+
+    An order can hold two promises of one kind - a second consignment after
+    a change - and without this a reader could pair a `packed` with its
+    promise only by kind and by counting. None when no promise was being
+    kept: a document sent on demand, or a row from before this was kept.
+    Each event names the promise in whose keeping it happened, which is not
+    always one of its own kind: a seller that bills before it despatches
+    packs in keeping the invoice's.
+    """
+    return int(row["promise_id"]) or None
+
+
 def _delivery(conn, row) -> Dict[str, Any]:
     """How the document actually got there, when the partner has a URL.
 
@@ -254,6 +271,7 @@ def _promised(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "at": row["at"],
             "event": "promised",
             "direction": "",
+            "promise": int(row["id"]),
             "kind": row["kind"],
             "dueAt": row["due_at"],
             "doneAt": row["done_at"],
@@ -279,6 +297,7 @@ def _packed(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "event": "packed",
             "direction": "",
             "shipment": row["shipment_id"],
+            "promise": _promise(row),
             "lines": len(lines),
             "cartons": row["cartons"],
             "weight": row["weight"],
@@ -304,6 +323,7 @@ def _invoiced(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "direction": "",
             "invoice": row["invoice_number"],
             "shipment": row["shipment_id"],
+            "promise": _promise(row),
             "total": row["total"],
             "currency": row["currency"],
             "summary": "invoiced %s for %s: %s %s"
