@@ -276,6 +276,20 @@ So to see the EDIFACT flow, send as `EURODIS` - step 9 of
 `PATCH /_mock/partners/ACME` with `{"dialect": "EDIFACT", "version":
 "D:96A:UN"}`.
 
+**A long description is said in pieces.** A line's description is whatever
+the buyer sent, and it goes back in every document that answers the order, in
+the partner's dialect. `PID05` holds 80 characters and D.96A's `7008` holds
+35, so the mock writes a longer one the way each standard does: as several
+free-form `PID` segments, or in both `7008`s of an `IMD` and then a further
+`IMD`. It is cut at spaces and reads back as the one text it was; so do two
+free-form `PID`s, or several `IMD`s, that a partner sends for one line. A
+description that fits is written exactly as before. One that *arrives* in a
+single element over length is still reported as over length; the mock then
+answers it in pieces that fit. A single word longer than the element has
+nowhere to be cut, and reads back with a space where the cut fell. And the
+pieces have an end: a line takes 200 `PID` segments or 99 `IMD`s, so a
+description past 16,000 characters in X12 or 6,930 in EDIFACT is cut there.
+
 **A letter the character set cannot carry is said in plain letters.** An
 EDIFACT interchange declares its character set in `UNB`, and a partner's
 `syntax` says which the mock writes. A buyer in `Łódź` is written `Lódz` in
@@ -290,7 +304,12 @@ choice of legibility over locale: a German counterparty would send `Mueller`
 where the mock sends `Muller`, and a Danish one `Oere` for `Ore`. A value
 never outgrows its element for it - where `ss` would not fit, the `ß` is a
 `?` - and anything with no plain form at all, a `€` or a Greek word, is
-still a `?`. X12 declares no character set and is not touched.
+still a `?`. X12 declares no character set and is not touched. One place the
+two rules above meet: a long description is cut into pieces before any of
+this, and a piece that was cut to fill its 35 characters has no room left.
+So a `ß` in a full piece is a `?` while the same word in a shorter piece of
+the same description is spelled `ss`. Both are valid; it is legibility that
+depends on where the cut fell.
 
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
@@ -381,8 +400,17 @@ segments naming different ones — the group repeats up to nine times. D.96A
 permits all of it and gives no rule for which wins, so the mock takes the
 **reference** currency (`6347` code 2, "the currency applicable to amounts
 stated") and reports the rest rather than keeping one quietly. An advice naming
-an invoice the mock never issued draws neither finding: it can only say two
-currencies differ about an invoice it wrote.
+an invoice the mock never issued to that partner draws neither finding: it
+can only say two currencies differ about an invoice it wrote.
+
+A REMADV may state a currency **per document**, in a `CUX` inside the `DOC`
+group, which is how one advice pays invoices in two currencies. Each entry of
+`invoices` answers its own `currency`, falling back to the advice's where the
+document states none, and the comparison is made per document — so an advice
+can be right about one invoice and wrong about another, and where the header
+and a document disagree the document is what that entry is judged on. D.96A
+has a third `CUX`, inside the line group; this message declares no line group,
+so a `CUX` inside a line is still an unexpected segment.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

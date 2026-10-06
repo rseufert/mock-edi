@@ -1204,7 +1204,12 @@ EDIFACT_DATE_QUALIFIERS = {  # 2005
     "137": "Document/message date/time", "2": "Delivery date/time, requested",
     "4": "Order date/time",
     "11": "Despatch date and/or time", "17": "Delivery date/time, estimated",
-    "35": "Delivery date/time, actual", "132": "Arrival date/time, estimated",
+    "35": "Delivery date/time, actual",
+    # What a seller's response dates a confirmed line with: the delivery
+    # date its own schedule gives, not the one the buyer asked for, which is
+    # 2 (#305). X12's counterpart is 374's 067.
+    "67": "Delivery date/time, current schedule",
+    "132": "Arrival date/time, estimated",
     "200": "Pick-up/collection date/time of cargo",
 }
 EDIFACT_DATE_FORMATS = {   # 2379
@@ -1906,12 +1911,23 @@ EDIFACT_REMADV = TransactionSet("REMADV", "Remittance Advice Message", "EDIFACT"
     Use(E_DTM, max_use=5),
     Loop("RFF", (Use(RFF, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 5),
     _edifact_party_group(),
-    Loop("CUX", (Use(CUX, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 9),
+    # D.96A's SG3: five, not the nine declared here until #298. The number
+    # was this file's own and I had repeated it as the standard's.
+    Loop("CUX", (Use(CUX, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 5),
     Loop("DOC", (
         Use(DOC, MANDATORY),
         Use(MOA, MANDATORY, max_use=5),
         Use(E_DTM, max_use=5),
         Use(RFF, max_use=5),
+        # SG5: a currency for this document, where the header's is for the
+        # advice. An advice paying invoices in more than one currency says so
+        # here, and before #298 the segment was reported as unexpected.
+        #
+        # D.96A has a third, SG9, inside the line group SG8. This message
+        # declares no line group, so that one has nowhere to go and is not
+        # declared: a CUX inside a line is still an unexpected segment here,
+        # which is honest while LIN is absent.
+        Loop("CUX5", (Use(CUX, MANDATORY), Use(E_DTM, max_use=5)), OPTIONAL, 5),
         Loop("AJT", (Use(AJT, MANDATORY), Use(MOA, max_use=5),
                      Use(FTX, max_use=5)), OPTIONAL, 100),
     ), MANDATORY, 9999),

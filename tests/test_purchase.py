@@ -604,7 +604,12 @@ class ABehaviourOnASupplier(BuyingCase):
 
     def test_strict_rejects_what_accept_lets_through(self):
         # PID05 is 80 characters at most: a finding, but not a fatal one.
-        sloppy = lambda: supplier_sends(schema.RESPONSE, "PO-BHV", description="W" * 90)
+        # The mock's own writer no longer produces one - it says a long
+        # description in pieces (#291) - so the fault is put into what it
+        # wrote, the way a supplier's translator would have sent it.
+        sloppy = lambda: supplier_sends(
+            schema.RESPONSE, "PO-BHV", description="W" * 10).replace(
+                "W" * 10, "W" * 90)
         summary = self.send(sloppy())
         self.assertTrue(summary["transactionSets"][0]["findings"])
         self.assertEqual([f["order"] for f in summary["filed"]], ["PO-BHV"])
