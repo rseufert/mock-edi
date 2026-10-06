@@ -270,14 +270,17 @@ class Pipeline:
         for (_group, message), message_report in zip(interchange.messages(),
                                                      report.messages):
             reference = None
+            # The shipment or invoice a filed document is, as it was read.
+            numbers: Dict[str, str] = {}
             if (message_report.kind in SUPPLIER_DOCUMENTS
                     and message_report.accepted):
                 # Only a supplier's can get here: the role table refused the
                 # same documents from a customer.
                 reference = self._file(partner, message, message_report,
-                                       dialect, receipt, interchange.control)
+                                       dialect, receipt, interchange.control,
+                                       numbers)
             self._record(interchange_id, partner, message, message_report,
-                         dialect, reference)
+                         dialect, reference, numbers)
             if (message_report.kind == schema.ORDER and message_report.accepted):
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
@@ -403,7 +406,8 @@ class Pipeline:
                  "%s at %s" % (interchange.control, partner_id, seen["at"]))]
 
     def _file(self, partner: Dict[str, Any], message, message_report,
-              dialect: str, receipt: Receipt, interchange_control: str) -> str:
+              dialect: str, receipt: Receipt, interchange_control: str,
+              numbers: Dict[str, str]) -> str:
         """Match a supplier's document to the order the mock placed with it.
 
         One that names an order the mock never placed with this supplier is
@@ -415,6 +419,9 @@ class Pipeline:
         A document that is filed is also reconciled against the order (#126):
         where it disagrees goes on `message_report.disagreements`, which
         nothing that decides the 997 reads.
+
+        `numbers` is filled with the supplier's shipment or invoice number
+        when the document is filed, for the transaction set to record (#273).
         """
         kind = message_report.kind
         document = SUPPLIER_DOCUMENTS[kind](message, dialect)
@@ -428,6 +435,11 @@ class Pipeline:
                 self.conn, partner, kind, message.code, message.control,
                 interchange_control, document))
             self._promise_buyer_change(partner, kind, po_number)
+            if kind == schema.DESPATCH:
+                numbers["shipment"] = document.shipment_id
+            elif kind == schema.INVOICE:
+                numbers["invoice"] = document.invoice_number
+                numbers["shipment"] = document.shipment_id
             return po_number
         message_report.segments.append(
             _unknown_order(message, dialect, po_number, partner["id"]))
@@ -437,8 +449,10 @@ class Pipeline:
         return ""
 
     def _record(self, interchange_id: int, partner: Dict[str, Any], message,
-                message_report, dialect: str, reference: Optional[str] = None) -> str:
+                message_report, dialect: str, reference: Optional[str] = None,
+                numbers: Optional[Dict[str, str]] = None) -> str:
         """Log one inbound transaction set and what validation made of it."""
+        numbers = numbers or {}
         # A set from the wrong direction is archived, as everything received
         # is, but not under the PO number it names: it is not part of that
         # order's story, and ?reference= would otherwise show a stranger's
@@ -448,11 +462,13 @@ class Pipeline:
                          else _reference_of(message, dialect, message_report.kind))
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
-            " partner, code, kind, control, group_control, reference, accepted,"
-            " findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " partner, code, kind, control, group_control, reference,"
+            " shipment_id, invoice_number, accepted, findings, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (interchange_id, "in", dialect, partner["id"], message.code,
              message_report.kind, message.control, message_report.group_control,
-             reference, 1 if message_report.accepted else 0,
+             reference, numbers.get("shipment", ""), numbers.get("invoice", ""),
+             1 if message_report.accepted else 0,
              json.dumps(_findings(message_report)), db.now(self.conn),
              db.next_seq(self.conn)))
         self.conn.commit()
@@ -795,7 +811,8 @@ class Pipeline:
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order, lines, shipment,
                 moment)
-            self._send(partner, schema.DESPATCH, body, po_number, receipt, moment)
+            self._send(partner, schema.DESPATCH, body, po_number, receipt, moment,
+                       shipment=shipment["shipment_id"])
             if partner["behaviour"] == "out-of-order" and not self._sent(
                     partner["id"], schema.RESPONSE, po_number):
                 self._queue_response(partner, order, receipt, moment)
@@ -825,13 +842,17 @@ class Pipeline:
             body = transactions.write_invoice(
                 partner["dialect"], self.us, partner, order, lines, invoice,
                 shipment, moment)
-            self._send(partner, schema.INVOICE, body, po_number, receipt, moment)
+            numbers = {"invoice": invoice["invoice_number"],
+                       "shipment": invoice["shipment_id"]}
+            self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
+                       **numbers)
             if partner["behaviour"] == "duplicate-invoice":
                 # The same invoice number, sent twice, a few moments apart: a
                 # partner with a retry bug, which is where duplicate-payment
                 # incidents come from.
                 self._send(partner, schema.INVOICE, body, po_number, receipt,
-                           moment, 1000, note="duplicate of the invoice above")
+                           moment, 1000, note="duplicate of the invoice above",
+                           **numbers)
 
     def _packing_is_promised(self, partner, po_number) -> bool:
         """Whether a despatch and an invoice after it still wait for the order.
@@ -889,8 +910,13 @@ class Pipeline:
     def _send(self, partner: Dict[str, Any], kind: str, body: Sequence[Seg],
               reference: str, receipt: Optional[Receipt],
               moment: datetime.datetime, delay_ms: int = 0,
-              dialect: str = "", note: str = "") -> Queued:
-        """Envelope a document, number it, and put it in the queue."""
+              dialect: str = "", note: str = "", shipment: str = "",
+              invoice: str = "") -> Queued:
+        """Envelope a document, number it, and put it in the queue.
+
+        `shipment` and `invoice` are the consignment and the invoice the
+        document was written from, for the timeline to name (#273).
+        """
         delay_ms += self._lateness(partner)
         dialect = dialect or partner["dialect"]
         code = schema.set_code(dialect, kind)
@@ -937,7 +963,7 @@ class Pipeline:
 
         return self._enqueue(partner_id, dialect, code, kind, reference, payload,
                              interchange_control, group_control, set_control,
-                             receipt, moment, delay_ms, note)
+                             receipt, moment, delay_ms, note, shipment, invoice)
 
     @staticmethod
     def _lateness(partner) -> int:
@@ -1002,17 +1028,20 @@ class Pipeline:
                  reference: str, payload: str, interchange_control: str,
                  group_control: str, set_control: str,
                  receipt: Optional[Receipt], moment: datetime.datetime,
-                 delay_ms: int = 0, note: str = "") -> Queued:
+                 delay_ms: int = 0, note: str = "", shipment: str = "",
+                 invoice: str = "") -> Queued:
         message_id = "<%s.%s@%s>" % (
             db.next_number(self.conn, "message"), code, self.config.as2_id)
         due = moment + datetime.timedelta(milliseconds=delay_ms)
         cursor = self.conn.execute(
             "INSERT INTO outbound (partner, dialect, code, kind, reference,"
-            " payload, message_id, control, group_control, set_control, status,"
-            " due_at, note, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " payload, message_id, control, group_control, set_control,"
+            " shipment_id, invoice_number, status, due_at, note, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
-             interchange_control, group_control, set_control, PENDING,
-             db.stamp(due), note, db.now(self.conn), db.next_seq(self.conn)))
+             interchange_control, group_control, set_control, shipment, invoice,
+             PENDING, db.stamp(due), note, db.now(self.conn),
+             db.next_seq(self.conn)))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
@@ -1063,6 +1092,7 @@ class Pipeline:
             raise ValueError("purchase order %s is one the mock placed; the "
                              "supplier answers it, not the mock" % po_number)
         lines = documents.order_lines(self.conn, po_number, partner_id)
+        numbers: Dict[str, str] = {}
 
         if kind == schema.RESPONSE:
             body = transactions.write_response(
@@ -1075,6 +1105,7 @@ class Pipeline:
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order,
                 self._lines_of(shipment, po_number, partner_id), shipment, moment)
+            numbers = {"shipment": shipment.get("shipment_id", "")}
         elif kind == schema.INVOICE:
             shipment = self._consignment(partner_id, po_number, shipment_id)
             # The invoice asked for: the named consignment's, or the latest.
@@ -1099,11 +1130,14 @@ class Pipeline:
                 partner["dialect"], self.us, partner, order,
                 self._lines_of(shipment, po_number, partner_id), invoice,
                 shipment, moment)
+            numbers = {"invoice": invoice["invoice_number"],
+                       "shipment": invoice["shipment_id"]}
         else:
             raise ValueError("unknown document kind %r; known: %s"
                              % (kind, ", ".join(FOLLOW_UPS)))
 
-        queued = self._send(partner, kind, body, po_number, None, moment, delay_ms)
+        queued = self._send(partner, kind, body, po_number, None, moment, delay_ms,
+                            **numbers)
         self.release(self.now())
         return queued
 
@@ -1296,10 +1330,12 @@ class Pipeline:
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
-                " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " shipment_id, invoice_number, accepted, findings, at, seq)"
+                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", sent_at, sent_seq))
+                 row["reference"], row["shipment_id"], row["invoice_number"],
+                 1, "", sent_at, sent_seq))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(self.conn), row["id"]))

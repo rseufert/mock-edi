@@ -400,6 +400,18 @@ control number and verdict. A `TA1` answers an envelope and no set, so its
 `sets` is empty. The event's own `interchange` is still the envelope the
 acknowledgment travelled in.
 
+A document says which business document it carries, sent or received, in the
+names the business events use. Every one but an acknowledgment has `order`;
+an 856 or `DESADV` has `shipment` as well, the same value as the `packed`
+event's; and an 810 or `INVOIC` has `invoice` and the `shipment` it bills, as
+the `invoiced` event does. So the second 810 of an order shipped in two
+consignments is matched to its invoice by a field, not by where it sits. The
+numbers were recorded when the mock wrote the document, or read a supplier's:
+they are not parsed back out of the payload. A document from a `--db` file
+written before 0.8.0 has the fields and nothing in them. `/_mock/documents`
+serves the same two numbers on each row, as `shipment_id` and
+`invoice_number`.
+
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
 happened in.
