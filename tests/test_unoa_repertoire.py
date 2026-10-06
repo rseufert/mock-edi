@@ -22,10 +22,17 @@ by that definition and are **not** enforced: the only source I could reach
 for *which* twelve is one, and refusing a character level A permits is the
 worse of the two errors. The gap is stated rather than guessed at.
 
-The result is legal and not pretty — `Widget Co` goes out as `W?????????? C??`
-— because a real level A sender folds case instead, which changes data rather
-than encoding and is the question still open on #263. This file is the
-argument for answering it.
+A real level A sender **folds** lower case rather than losing it, and that is
+what Zack decided on #263: `Widget Co` goes out as `WIDGET CO`. So the
+repertoire states what level A permits and folding is what the mock does
+about it — the two are kept apart on purpose, because the first is a fact
+about the standard and the second is a choice about behaviour.
+
+Folding is `a`–`z` to `A`–`Z` and **not** `str.upper()`. Level A's alphabet is
+A–Z, so that is the whole mapping; and `upper()` would turn `ß` into `SS`,
+two characters where there was one, so a value at an element's maximum would
+grow past it and the mock would write a document its own dictionary reports.
+Anything outside ISO 646 is substituted whether folded or not.
 """
 import os
 import sys
@@ -70,10 +77,31 @@ class TheRepertoireBesideTheCodec(unittest.TestCase):
 class WhatFitDoesWithIt(unittest.TestCase):
     """`fit` is the one place substitution happens, and it stays that way."""
 
-    def test_lower_case_goes_where_the_repertoire_excludes_it(self):
-        # One `?` per excluded letter: "idget" and "o" are six of them.
+    def test_folding_is_what_level_a_actually_does(self):
+        self.assertEqual(
+            fit("Widget Co", "ascii", charsets.LOWER_CASE, fold=True),
+            "WIDGET CO")
+
+    def test_and_without_folding_the_repertoire_substitutes(self):
+        # Which is what the repertoire alone means, and is kept because the
+        # repertoire is the statement of what level A permits.
         self.assertEqual(fit("Widget Co", "ascii", charsets.LOWER_CASE),
                          "W????? C?")
+
+    def test_folding_never_changes_the_length(self):
+        # `str.upper()` would: "Straße" becomes "STRASSE", a character longer,
+        # and a value at an element's maximum would grow past it.
+        for value in ("Widget Co", "Stra\u00dfe", "\u0131stanbul", "L\u00f3d\u017a"):
+            with self.subTest(value):
+                self.assertEqual(
+                    len(fit(value, "ascii", charsets.LOWER_CASE, fold=True)),
+                    len(value))
+
+    def test_what_folding_leaves_for_the_codec(self):
+        # The sharp case: ß folds to nothing, so the codec substitutes it
+        # rather than expanding it to SS.
+        self.assertEqual(fit("Stra\u00dfe", "ascii", charsets.LOWER_CASE,
+                             fold=True), "STRA?E")
 
     def test_and_stays_where_it_does_not(self):
         self.assertEqual(fit("Widget Co", "ascii"), "Widget Co")
@@ -87,27 +115,30 @@ class WhatFitDoesWithIt(unittest.TestCase):
         # a lower-case letter the repertoire does.
         self.assertEqual(fit("Éa", "ascii", charsets.LOWER_CASE), "??")
 
-    def test_a_character_the_repertoire_excludes_cannot_escape_a_separator(self):
-        """The #199 property, one level down, and the reason the wire looks odd.
+    def test_a_substituted_character_cannot_escape_a_separator(self):
+        """The #199 property, and the reason it still matters after folding.
 
-        `fit` substitutes first and `escape` runs after, so each `?` the
-        repertoire produced is doubled into a literal `?`: six substitutions
-        become twelve characters. Had the order been the other way round,
-        those `?` would have been release characters and a conforming reader
-        would have lost the separators after them - which is exactly what
-        #199 fixed for the codec and what this inherits for free by
-        substituting in the same place.
+        Folding removes the lower case, so under level A what is left to
+        substitute is what ISO 646 never had: `Łódź` folds to `ŁÓDŹ` and the
+        codec takes the three it cannot carry. `fit` substitutes before
+        `escape` runs, so each `?` is doubled into a literal one. Had the
+        order been the other way round those `?` would have been release
+        characters and a conforming reader would have lost the separator
+        after each - exactly what #199 fixed for the codec, inherited here
+        rather than rebuilt.
         """
-        self.assertEqual(fit("Widget Co", "ascii", charsets.LOWER_CASE),
-                         "W????? C?")
-        self.assertIn("W?????????? C??", rendered("UNOA", "Widget Co"))
+        folded = fit("\u0141\u00f3d\u017a", "ascii", charsets.LOWER_CASE,
+                     fold=True)
+        self.assertEqual(folded, "??D?")
+        # Three substitutions, each doubled: ?? ?? D ?? on the wire.
+        self.assertIn("????D??", rendered("UNOA", "\u0141\u00f3d\u017a"))
 
 
 class WhatEachSyntaxSends(unittest.TestCase):
 
-    def test_level_a_substitutes_lower_case(self):
+    def test_level_a_folds_lower_case(self):
         self.assertEqual(rendered("UNOA", "Widget Co", "", "Lodz"),
-                         "NAD+BY+ACME::91++W?????????? C??++L??????")
+                         "NAD+BY+ACME::91++WIDGET CO++LODZ")
 
     def test_level_b_does_not(self):
         self.assertEqual(rendered("UNOB", "Widget Co", "", "Lodz"),
@@ -141,8 +172,12 @@ class TheEnvelopeIsFittedToo(unittest.TestCase):
         return [line for line in out.replace("\n", "").split("'")
                 if line.startswith(("UNB", "UNZ"))]
 
-    def test_a_lower_case_partner_id_is_fitted_in_the_unb(self):
-        self.assertIn("UNB+UNOA:3+MOCKEDI:ZZ+????????-????:ZZ",
+    def test_a_lower_case_partner_id_is_folded_in_the_unb(self):
+        # The mechanism reaches the envelope, which is what the senior found
+        # missing. A lower-case id cannot be *configured* on a level A
+        # partner - see below - so this is the mechanism being right rather
+        # than a path the control plane allows.
+        self.assertIn("UNB+UNOA:3+MOCKEDI:ZZ+ACME-DC:ZZ",
                       self.envelope("UNOA")[0])
 
     def test_and_is_not_under_a_syntax_that_carries_it(self):
@@ -160,35 +195,88 @@ class TheEnvelopeIsFittedToo(unittest.TestCase):
         self.assertEqual(trailer, "UNZ+1+1")
 
 
-class WhyLevelAIsStillRefusedOnAPartner(MockServerCase):
-    """The mechanism works; what it produces is the reason it is not offered.
+class WhatALevelAPartnerIsSentNow(MockServerCase):
+    """Folding is in, so `UNOA` is offered — and its id is not folded.
 
-    #296 refused `UNOA` because the mock could not hold a document to level
-    A. It can now. The refusal stays because of what level A then *writes* -
-    every lower-case letter substituted - until #263 decides whether a level
-    A answer folds case instead. Switching it on and changing it later would
-    surprise anyone who built against the substitution twice.
+    #296 refused level A because the mock could not hold a document to it;
+    #295 gave it the repertoire; #263 then decided that it folds. With all
+    three, a level A partner gets `WIDGET CO` rather than `W????? C?` and
+    there is nothing left to refuse.
 
-    The envelope test above is the sharper argument: a partner id of
-    `acme-dc` becomes `????????-????`, which is not a partner anything can
-    route to. Whenever level A is offered, a lower-case partner id will want
-    refusing rather than substituting, and that is a decision for whichever
-    change offers it.
+    Except the id. Folding prose is lossless in the sense that matters -
+    `WIDGET CO` is the same description in a smaller alphabet. Folding an
+    **identifier** is not: this mock holds ids case-distinctly, so `acme` and
+    `ACME` can both be partners, and a folded `UNB` would address a document
+    to a party the mock itself cannot tell from another. In real EDI the
+    question does not arise, because a level A partner's id is upper case -
+    the syntax demands it - so a lower-case one is a misconfiguration and is
+    refused rather than folded.
     """
 
-    def test_the_refusal_says_what_it_would_do(self):
+    def test_level_a_is_offered(self):
         status, _headers, body = self.patch("/_mock/partners/" + EURODIS,
                                             {"syntax": "UNOA"})
-        self.assertEqual(status, 400, body)
-        self.assertIn("could write it", body["error"])
-        self.assertIn("substitute every lower-case letter", body["error"])
-        self.assertIn("#263", body["error"])
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["syntax"], "UNOA")
 
-    def test_and_every_other_identifier_is_offered(self):
+    def test_and_every_document_it_is_sent_carries_no_lower_case(self):
+        from support import edifact_order
+        self.patch("/_mock/partners/" + EURODIS, {"syntax": "UNOA"})
+        self.send(edifact_order("UNOA-FOLD"),
+                  {"Content-Type": "application/edifact"})
+        self.post("/_mock/advance?all")
+        rows = self.mailbox(EURODIS, leave=False)
+        self.assertTrue(rows)
+        for row in rows:
+            with self.subTest(row["code"]):
+                flat = row["payload"].replace("\n", "")
+                self.assertIn("UNB+UNOA:3+", flat)
+                self.assertEqual(
+                    [c for c in flat.split("UNH", 1)[1] if c.islower()], [])
+
+    def test_and_it_is_still_legible(self):
+        from support import edifact_order
+        self.patch("/_mock/partners/" + EURODIS, {"syntax": "UNOA"})
+        self.send(edifact_order("UNOA-READ"),
+                  {"Content-Type": "application/edifact"})
+        self.post("/_mock/advance?all")
+        descriptions = []
+        for row in self.mailbox(EURODIS, leave=False):
+            for segment in row["payload"].replace("\n", "").split("'"):
+                if segment.startswith("IMD"):
+                    descriptions.append(segment)
+        self.assertTrue(descriptions)
+        # The point of folding: a reader recognises this.
+        self.assertTrue(any("WIDGET, BLUE, 40MM" in item
+                            for item in descriptions), descriptions)
+
+    def test_a_lower_case_id_cannot_be_set_to_level_a(self):
+        status, _headers, body = self.post("/_mock/partners", {
+            "id": "nordis", "name": "Nordis", "dialect": "EDIFACT",
+            "version": "D:96A:UN", "role": "customer"})
+        self.assertEqual(status, 201, body)
+        status, _headers, body = self.patch("/_mock/partners/nordis",
+                                            {"syntax": "UNOA"})
+        self.assertEqual(status, 400, body)
+        self.assertIn("has lower case", body["error"])
+        self.assertIn("'NORDIS'", body["error"])
+        self.assertIn("wrong for an id", body["error"])
+
+    def test_nor_created_with_one(self):
+        status, _headers, body = self.post("/_mock/partners", {
+            "id": "sudis", "name": "Sudis", "dialect": "EDIFACT",
+            "version": "D:96A:UN", "role": "customer", "syntax": "UNOA"})
+        self.assertEqual(status, 400, body)
+        self.assertIn("has lower case", body["error"])
+
+    def test_but_a_lower_case_id_is_fine_on_any_other_syntax(self):
+        self.post("/_mock/partners", {
+            "id": "westis", "name": "Westis", "dialect": "EDIFACT",
+            "version": "D:96A:UN", "role": "customer"})
         for syntax in ("UNOB", "UNOC", "UNOY"):
             with self.subTest(syntax):
                 status, _headers, body = self.patch(
-                    "/_mock/partners/" + EURODIS, {"syntax": syntax})
+                    "/_mock/partners/westis", {"syntax": syntax})
                 self.assertEqual(status, 200, body)
 
 
