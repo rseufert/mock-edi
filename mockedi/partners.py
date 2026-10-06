@@ -79,22 +79,25 @@ def behaviours_for(role: str) -> List[str]:
 DIALECTS = ("X12", "EDIFACT")
 MDN_MODES = ("sync", "async")
 
-# The syntax identifiers a partner may be set to: the ones the mock can write
-# faithfully, which is every one `charsets` has a codec for.
+# Every syntax identifier `charsets` has a codec for, UNOA included since
+# #263 settled that a level A answer folds case: `Widget Co` goes out as
+# `WIDGET CO`, which is what a real level A sender writes.
+SYNTAXES = tuple(sorted(charsets.EDIFACT_SYNTAX))
+UNFAITHFUL: Dict[str, str] = {}
+
+# What folding must not be applied to: the partner's own id.
 #
-# UNOA is not among them, and that is the one thing here worth reading twice.
-# Level A is "the basic code table of ISO 646 with the exceptions of lower
-# case letters" - a *repertoire*, not an encoding - and `charsets` has it
-# mapped to `ascii`, which admits lower case. Offering it would put
-# `UNB+UNOA:3` on the wire above a description level A cannot carry, which is
-# the kind of lie this mock exists not to tell. It is refused until the
-# repertoire is there to enforce (#295), and the refusal says so.
-SYNTAXES = tuple(sorted(set(charsets.EDIFACT_SYNTAX) - {"UNOA"}))
-UNFAITHFUL = {
-    "UNOA": "level A has no lower case, and the mock cannot yet hold a "
-            "document to that - see #295. UNOB is the same repertoire with "
-            "lower case, and is written the same way on the wire.",
-}
+# Folding prose is lossless in the only sense that matters - `WIDGET CO` is
+# the same description in a smaller alphabet. Folding an *identifier* is not:
+# an id is a key, this mock holds ids case-distinctly, so `acme` and `ACME`
+# can both be partners, and a folded `UNB` would address a document to a
+# party the mock itself cannot tell apart from another one.
+#
+# In real EDI the question does not arise: a level A partner's id is upper
+# case, because the syntax demands it. A lower-case id on a level A partner
+# is a misconfiguration, so it is refused rather than folded - and refusing
+# it is what keeps the ambiguity above out of reach (#263).
+LEVEL_A_IDS = "UNOA"
 
 # What the wire can carry, per dialect.
 #
@@ -199,6 +202,15 @@ def check(fields: Dict[str, Any], dialect: str,
     if "syntax" in out and out["syntax"] not in SYNTAXES:
         raise Invalid("unknown syntax identifier %r; the mock can answer in: %s"
                       % (out["syntax"], ", ".join(SYNTAXES)))
+    if (identifier and out.get("syntax") == LEVEL_A_IDS
+            and identifier != identifier.upper()):
+        raise Invalid(
+            "partner id %r has lower case, and %s has none: level A folds "
+            "lower case, which is right for a description and wrong for an "
+            "id - %r and %r would be two partners this mock can tell apart "
+            "and one identifier on the wire. Give the partner an upper-case "
+            "id, or a syntax that carries lower case."
+            % (identifier, LEVEL_A_IDS, identifier, identifier.upper()))
 
     if "mdn_mode" in out and out["mdn_mode"] not in MDN_MODES:
         raise Invalid("mdn_mode must be one of %s, not %r"
@@ -372,7 +384,7 @@ def update(conn: sqlite3.Connection, identifier: str,
     row = require(conn, identifier)
     if not fields:
         return row
-    changes = check(fields, row["dialect"])
+    changes = check(fields, row["dialect"], identifier)
     # Either half can change, so the pair is checked as it will stand.
     _check_role_fits(changes.get("role", row["role"]),
                      changes.get("behaviour", row["behaviour"]))

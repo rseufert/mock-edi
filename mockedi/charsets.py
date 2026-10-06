@@ -40,6 +40,58 @@ EDIFACT_SYNTAX = {
     "UNOY": "utf-8",
 }
 
+# A *repertoire* is not a codec, and `UNOA` needs one.
+#
+# Two published copies of the service directory give level A as "the basic
+# code table of ISO 646 with the exceptions of lower case letters,
+# alternative graphic character allocations and national or
+# application-oriented graphic character allocations" - GEFEG's JWG1 service
+# code lists and edifactory.de's data element 0001, word for word. So level A
+# and level B differ by exactly lower case, and `ascii` is the right codec
+# for both and the wrong repertoire for one: a codec turns characters into
+# bytes and fails or substitutes, where a repertoire is a set of permitted
+# characters and has to be checked (#295).
+#
+# What is here is the lower-case exclusion, which both sources state. The
+# twelve ISO 646 positions open to national substitution - `# $ @ [ \ ] ^ `
+# { | } ~` - are also excluded by that definition, and are *not* enforced:
+# the only source I could reach for which twelve they are is one, and
+# refusing a character level A permits is the worse of the two errors. A
+# second source widens this; until then the gap is stated rather than
+# guessed at.
+LOWER_CASE = "abcdefghijklmnopqrstuvwxyz"
+REPERTOIRE = {"UNOA": LOWER_CASE}
+
+# What a real level A sender does with lower case: fold it, so `Widget Co`
+# goes out as `WIDGET CO` rather than `W????? C?`. Zack's answer on #263.
+#
+# `a` to `z` only, and not `str.upper()`. Level A's alphabet *is* A-Z, so
+# that is the whole of the mapping - and `upper()` would also turn `ß` into
+# `SS`, which is two characters where there was one: a value at an element's
+# maximum would grow past it and the mock would write a document its own
+# dictionary reports. Everything outside ISO 646 is substituted by the codec
+# whether it is folded or not, so folding it buys nothing and risks that.
+FOLD = str.maketrans(LOWER_CASE, LOWER_CASE.upper())
+FOLDS = {"UNOA"}
+
+
+def outside(syntax: str) -> str:
+    """The characters `syntax` does not permit, beyond what its codec refuses.
+
+    Empty for every identifier but `UNOA`, whose codec admits more than its
+    repertoire does. With folding on there is nothing left for this to
+    catch in text, and it is kept because it is the statement of the
+    repertoire: the repertoire is what is true of level A, and folding is
+    what the mock does about it.
+    """
+    return REPERTOIRE.get(syntax, "")
+
+
+def folds(syntax: str) -> bool:
+    """Whether `syntax` wants lower case folded rather than substituted."""
+    return syntax in FOLDS
+
+
 _SYNTAX = re.compile(r"UNB\s*.(UNO[A-Z])")
 _CHARSET = re.compile(r"charset\s*=\s*\"?([A-Za-z0-9_.:-]+)", re.I)
 

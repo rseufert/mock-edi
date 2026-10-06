@@ -605,7 +605,8 @@ def consignment_lines(conn: sqlite3.Connection,
 # ---------------------------------------------------------------------------
 
 def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
-                    when: Optional[datetime.datetime] = None) -> Optional[Dict[str, Any]]:
+                    when: Optional[datetime.datetime] = None,
+                    promise: int = 0) -> Optional[Dict[str, Any]]:
     """Pack what has been confirmed and not yet shipped.
 
     Returns the shipment a despatch advice should name, which is not always a
@@ -656,13 +657,13 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
 
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
-        " scac, tracking, bol, cartons, weight, at, seq)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " scac, tracking, bol, cartons, weight, promise_id, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (shipment_id, po_number, order["partner"], local(moment).date().isoformat(),
          "United Parcel Service", "UPSN", _tracking(shipment_id),
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
-         quantity_text(units * 2), db.now(conn), db.next_seq(conn)))
+         quantity_text(units * 2), promise, db.now(conn), db.next_seq(conn)))
     conn.execute("UPDATE purchase_order SET status = 'shipped'"
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
@@ -706,7 +707,8 @@ def _tracking(shipment_id: str) -> str:
 def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
                    shipment_id: str = "",
                    when: Optional[datetime.datetime] = None,
-                   tax_rate: str = "0") -> Optional[Dict[str, Any]]:
+                   tax_rate: str = "0",
+                   promise: int = 0) -> Optional[Dict[str, Any]]:
     """Invoice one consignment, at the price the acknowledgment confirmed.
 
     One invoice per consignment, so each 810 names the one shipment it bills
@@ -736,11 +738,12 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
     conn.execute(
         "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
         " invoiced_on, currency, subtotal, tax, total, terms_days, discount_pct,"
-        " discount_days, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " discount_days, promise_id, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (invoice_number, po_number, order["partner"], shipment_id,
          local(moment).date().isoformat(), order["currency"], db.money(subtotal),
-         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now(conn),
-         db.next_seq(conn)))
+         db.money(tax), db.money(subtotal + tax), 30, "2", 10, promise,
+         db.now(conn), db.next_seq(conn)))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
         conn, "SELECT total FROM invoice WHERE partner = ? AND po_number = ?",
         (partner_id, po_number))), Decimal("0.00"))

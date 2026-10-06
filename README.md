@@ -469,6 +469,20 @@ serves the same two numbers on each row, as `shipment_id` and
 `invoice_number`, and so does a row collected from `/_mock/mailbox`: whoever
 collects an 810 is told which invoice it is, without parsing it.
 
+What was done says which promise it kept. A `promised` event has `promise`,
+its id, which is the `id` `/_mock/scheduled` serves for it; and a `packed`,
+an `invoiced`, and a document the mock sent carry the `promise` they were
+done in keeping. An order shipped and then changed to a larger quantity holds
+two promises to despatch, and each consignment and each 856 names its own.
+The promise is the one in whose keeping the thing happened, which is not
+always one of its own kind: a seller that bills before it despatches packs in
+keeping the invoice's promise. One promise to invoice can raise two invoices,
+when two consignments are waiting to be billed. `promise` is `null` where
+none was being kept: an answer sent at once, a document sent with
+`/_mock/send`, or anything in a `--db` file written before 0.8.0. A row
+from `/_mock/documents` or collected from `/_mock/mailbox` has the same
+number as `promise_id`, where 0 means none.
+
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
 happened in.
@@ -522,21 +536,40 @@ to has nothing to mirror, and an answer that depended on which document
 arrived first would undo what `--start-at` is for. X12 declares no character
 set at all, so the field is ignored for an X12 partner.
 
-`UNOA` is refused, and the refusal says why:
+`UNOA` is level A: ISO 646 *without lower case*. That is a **repertoire**
+rather than an encoding — a set of permitted characters, not a way of turning
+them into bytes — so the mock holds a document to it rather than relying on a
+codec, which would admit lower case. And it does what a real level A sender
+does with the lower case it cannot send: **folds it**.
 
 ```
-the mock will not answer in UNOA: level A has no lower case, and the mock
-cannot yet hold a document to that - see #295. UNOB is the same repertoire
-with lower case, and is written the same way on the wire.
+level B   NAD+BY+ACME::91++Widget Co++Lodz
+level A   NAD+BY+ACME::91++WIDGET CO++LODZ
 ```
 
-Level A is ISO 646 *without lower case*, which is a repertoire rather than an
-encoding — a set of permitted characters, not a way of turning them into
-bytes — and the mock has nothing to check a document against one with yet.
-Declaring `UNB+UNOA:3` above a description level A cannot carry is the kind of
-thing a partner discovers in production, so the mock declines instead. An
-unknown identifier is refused too, and the refusal lists the ones it answers
-in.
+Folding is `a`–`z` to `A`–`Z` and not a general upper-casing: level A's
+alphabet *is* A–Z, and `ß` upper-cased would become `SS`, a character longer,
+so a value at an element's maximum would grow past it. Anything outside ISO
+646 is substituted as it always was — `Łódź` becomes `??D?` — and each `?`
+appears doubled on the wire because the release character is escaped after
+the substitution, which is what stops a substituted character from swallowing
+the separator after it.
+
+**A level A partner's id may not have lower case.** Folding a description
+loses nothing that matters; folding an *identifier* does, because this mock
+holds partner ids case-distinctly, so `acme` and `ACME` can both be partners
+and a folded `UNB` would address a document to a party the mock itself cannot
+tell from another. In real EDI the question does not arise — a level A
+partner's id is upper case, because the syntax demands it — so a lower-case
+one is refused with `UNOA` rather than folded. Any other syntax carries it
+unchanged.
+
+The twelve ISO 646 positions open to national substitution — `#`, `$`, `@`,
+`[`, `\`, `]`, `^`, `` ` ``, `{`, `|`, `}`, `~` — are excluded by level A's
+definition too, and the mock does **not** enforce them: only one published
+source for which twelve they are could be found, and refusing a character
+level A permits is the worse mistake to make. An unknown identifier is
+refused, and the refusal lists the ones the mock answers in.
 
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
@@ -984,6 +1017,7 @@ the 856:
 | --- | --- |
 | `billed-before-shipped` | no 856 has arrived for the order |
 | `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
+| `billed-more-than-ordered` | a line billed, over every invoice so far, beyond what was ordered, whether or not anything has shipped; both quantity rules can fire on one invoice. What was ordered is the order as it stands: a confirmation of more does not raise it, a change the mock sent does |
 | `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
 | `total-not-lines` | MOA+79 is not the sum of the lines, or the total (TDS01, MOA+139) is not the lines plus allowances and charges (SAC, ALC) plus tax; not judged when an allowance gives only a percentage |
 | `invoice-repeated` | an invoice number already received for the order; it is counted once |
