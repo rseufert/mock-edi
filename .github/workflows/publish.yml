@@ -20,7 +20,7 @@ jobs:
     name: build and verify distributions
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -40,7 +40,7 @@ jobs:
           if [ "${{ github.event_name }}" = "release" ]; then
             test "${GITHUB_REF_NAME#v}" = "$VERSION"
           fi
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: distributions
           path: dist/*
@@ -56,11 +56,15 @@ jobs:
     permissions:
       id-token: write        # the OIDC token that stands in for an API token
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: distributions
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # Pinned to a commit, not to `release/v1`, which is a branch: this is
+      # the only third-party action here and it runs with `id-token: write`,
+      # so whatever it points at is what gets the token. Dependabot moves the
+      # pin and the version in the comment together (.github/dependabot.yml).
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
 
   testpypi:
     name: publish to TestPyPI
@@ -73,11 +77,12 @@ jobs:
     permissions:
       id-token: write
     steps:
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           name: distributions
           path: dist
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      # The same pin as the `pypi` job, for the same reason.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true

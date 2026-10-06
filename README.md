@@ -8,8 +8,8 @@
 **A mock EDI trading partner.** Not an EDI library and not an AS2 server — the
 thing on the *other end*. Send it an 850 and it sends back a 997, then an 855
 that answers line by line, then an 856 with a shipment tree, then an 810 that
-bills what shipped. Send it an EDIFACT `ORDERS` and the same thing happens in
-`CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
+bills what shipped. An EDIFACT partner sends an `ORDERS` and the same thing
+happens in `CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
 
 ```
    you ──850──▶  mock-edi
@@ -260,6 +260,22 @@ always a bug: its traceback goes to stderr, even with `-q`.
 | Remittance advice, received | **820** | **REMADV** |
 | Syntax acknowledgment | **997** | **CONTRL** |
 
+**The answer comes in the partner's dialect, not the order's.** A partner
+has a `dialect`, as a real one does, and the response, the despatch advice and
+the invoice are written in it whatever the order arrived in. Only the
+acknowledgment follows the interchange, because it answers that interchange's
+syntax:
+
+| Who sends an EDIFACT `ORDERS` | Acknowledgment | Response, despatch, invoice |
+| --- | --- | --- |
+| `ACME`, an X12 partner | `CONTRL` | 855, 856, 810 |
+| `EURODIS`, an EDIFACT partner | `CONTRL` | `ORDRSP`, `DESADV`, `INVOIC` |
+
+So to see the EDIFACT flow, send as `EURODIS` - step 9 of
+[`examples/demo.sh`](examples/demo.sh) does - or give a partner the dialect:
+`PATCH /_mock/partners/ACME` with `{"dialect": "EDIFACT", "version":
+"D:96A:UN"}`.
+
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
 what you assert about an X12 flow holds for the EDIFACT one. `GET
@@ -416,6 +432,19 @@ the `UCI` action or `TA104`), and each set it names with that set's code,
 control number and verdict. A `TA1` answers an envelope and no set, so its
 `sets` is empty. The event's own `interchange` is still the envelope the
 acknowledgment travelled in.
+
+A document says which business document it carries, sent or received, in the
+names the business events use. Every one but an acknowledgment has `order`;
+an 856 or `DESADV` has `shipment` as well, the same value as the `packed`
+event's; and an 810 or `INVOIC` has `invoice` and the `shipment` it bills, as
+the `invoiced` event does. So the second 810 of an order shipped in two
+consignments is matched to its invoice by a field, not by where it sits. The
+numbers were recorded when the mock wrote the document, or read a supplier's:
+they are not parsed back out of the payload. A document from a `--db` file
+written before 0.8.0 has the fields and nothing in them. `/_mock/documents`
+serves the same two numbers on each row, as `shipment_id` and
+`invoice_number`, and so does a row collected from `/_mock/mailbox`: whoever
+collects an 810 is told which invoice it is, without parsing it.
 
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
