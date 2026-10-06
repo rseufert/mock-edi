@@ -173,6 +173,14 @@ class WhatTheBuyerMakesOfIt(unittest.TestCase):
     def test_the_810_bills_what_shipped_and_is_not_billed_more_than_shipped(self):
         self.assertNotIn("billed-more-than-shipped", self.rules("810"))
 
+    def test_but_it_is_billed_more_than_ordered_and_the_invoice_says_so(self):
+        """The invoice used to be clean: 130 billed is not more than 130
+        shipped. The only trace was on the 856 (#309)."""
+        self.assertEqual(self.rules("810"), ["billed-more-than-ordered"])
+        (row,) = [row for row in self.found if row["code"] == "810"]
+        self.assertEqual((row["line"], row["expected"], row["found"]),
+                         ("1", "100", "130"))
+
     def test_every_set_is_still_accepted(self):
         # A disagreement is not a syntax error: the 997s say accepted.
         sets = self.seller.documents(direction="in", code="997", limit=20)

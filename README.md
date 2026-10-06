@@ -961,6 +961,7 @@ the 856:
 | --- | --- |
 | `billed-before-shipped` | no 856 has arrived for the order |
 | `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
+| `billed-more-than-ordered` | a line billed, over every invoice so far, beyond what was ordered, whether or not anything has shipped; both quantity rules can fire on one invoice. What was ordered is the order as it stands: a confirmation of more does not raise it, a change the mock sent does |
 | `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
 | `total-not-lines` | MOA+79 is not the sum of the lines, or the total (TDS01, MOA+139) is not the lines plus allowances and charges (SAC, ALC) plus tax; not judged when an allowance gives only a percentage |
 | `invoice-repeated` | an invoice number already received for the order; it is counted once |
