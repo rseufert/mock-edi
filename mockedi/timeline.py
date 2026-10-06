@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from . import db, reconcile
+from . import db, reconcile, schema
 
 # Within one second, the order things must have happened in - for rows
 # written before the sequence existed. Timestamps are second-precision on
@@ -124,6 +124,7 @@ def _documents(conn, po_number: str, partner_id: str,
             "findings": findings,
             "document": int(row["id"]),
         }
+        event.update(_carries(row))
         if row["direction"] == "out":
             event["delivery"] = _delivery(conn, row)
         if raw:
@@ -170,6 +171,30 @@ def _documents(conn, po_number: str, partner_id: str,
                               ": %s" % row["ack_note"] if row["ack_note"] else ""),
             })
     return out
+
+
+def _carries(row) -> Dict[str, str]:
+    """Which business document a sent or received set is (#273).
+
+    In the names the business events beside it use, so a reader can match
+    the 810 to its `invoiced` event by a field and not by where it sits:
+    `order` on anything about the order, `shipment` on a despatch advice,
+    `invoice` and the `shipment` it bills on an invoice. An acknowledgment
+    has `answers` instead; it is about an interchange, not an order.
+
+    The shipment and the invoice were recorded when the document was
+    written or read. A row from before they were is empty there, and says
+    so with an empty field rather than a guess from its payload.
+    """
+    if row["kind"] in reconcile.ACKNOWLEDGMENT_KINDS:
+        return {}
+    carries = {"order": row["reference"]}
+    if row["kind"] == schema.DESPATCH:
+        carries["shipment"] = row["shipment_id"]
+    elif row["kind"] == schema.INVOICE:
+        carries["invoice"] = row["invoice_number"]
+        carries["shipment"] = row["shipment_id"]
+    return carries
 
 
 def _delivery(conn, row) -> Dict[str, Any]:

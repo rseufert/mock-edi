@@ -529,7 +529,9 @@ class WhatComesBack(BuyingCase):
         self.assertFalse(summary["accepted"])
         contrl = next(parse(self.sent(schema.ACKNOWLEDGMENT, "NORDIC")).messages())[1]
         ucd = contrl.find("UCD")
-        self.assertEqual((ucd.get(1), ucd.comp(2, 1), ucd.comp(2, 2)), ("12", "1", "2"))
+        # 0098 counts the segment tag, so C506 - RFF's first data element -
+        # is 2, and 1154 is still component 2 of it (#208).
+        self.assertEqual((ucd.get(1), ucd.comp(2, 1), ucd.comp(2, 2)), ("12", "2", "2"))
 
     def test_one_for_another_suppliers_order_is_rejected(self):
         self.post("/_mock/partners", {"id": "OTHERSUP", "role": "supplier"})

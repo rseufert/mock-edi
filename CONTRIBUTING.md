@@ -220,8 +220,8 @@ python3 tools/release.py 0.6.0
 It refuses a dirty tree, a `main` not level with `origin/main`, a head whose
 CI has not passed, or an open pull request labelled with the version. Then it
 branches `release/0.6.0`, assembles the section, bumps `pyproject.toml`, runs
-both checks and the suite, opens the release pull request, waits for its
-checks, merges it with a merge commit, tags the merge commit, publishes the
+both checks and the suite, opens the release pull request, waits for the
+check `main` requires (`all checks passed`), merges it with a merge commit, tags the merge commit, publishes the
 GitHub Release with the section as its notes, waits for the Publish workflow,
 and asks PyPI's index directly until the files are listed.
 
