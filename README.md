@@ -8,8 +8,8 @@
 **A mock EDI trading partner.** Not an EDI library and not an AS2 server — the
 thing on the *other end*. Send it an 850 and it sends back a 997, then an 855
 that answers line by line, then an 856 with a shipment tree, then an 810 that
-bills what shipped. Send it an EDIFACT `ORDERS` and the same thing happens in
-`CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
+bills what shipped. An EDIFACT partner sends an `ORDERS` and the same thing
+happens in `CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
 
 ```
    you ──850──▶  mock-edi
@@ -244,6 +244,22 @@ always a bug: its traceback goes to stderr, even with `-q`.
 | Invoice | **810** | **INVOIC** |
 | Remittance advice, received | **820** | **REMADV** |
 | Syntax acknowledgment | **997** | **CONTRL** |
+
+**The answer comes in the partner's dialect, not the order's.** A partner
+has a `dialect`, as a real one does, and the response, the despatch advice and
+the invoice are written in it whatever the order arrived in. Only the
+acknowledgment follows the interchange, because it answers that interchange's
+syntax:
+
+| Who sends an EDIFACT `ORDERS` | Acknowledgment | Response, despatch, invoice |
+| --- | --- | --- |
+| `ACME`, an X12 partner | `CONTRL` | 855, 856, 810 |
+| `EURODIS`, an EDIFACT partner | `CONTRL` | `ORDRSP`, `DESADV`, `INVOIC` |
+
+So to see the EDIFACT flow, send as `EURODIS` - step 9 of
+[`examples/demo.sh`](examples/demo.sh) does - or give a partner the dialect:
+`PATCH /_mock/partners/ACME` with `{"dialect": "EDIFACT", "version":
+"D:96A:UN"}`.
 
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
