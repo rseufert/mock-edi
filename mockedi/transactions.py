@@ -67,7 +67,17 @@ wire_time = hhmm
 SKU_QUALIFIERS = ("VP", "SA", "BP", "IN", "SK", "MG", "MF")
 UPC_QUALIFIERS = ("UP", "EN", "UI")
 # The date qualifiers that all mean "when the buyer wants it".
-REQUESTED_X12 = ("002", "010", "038", "068", "017")
+REQUESTED_X12 = ("002", "010", "038", "067", "068", "017")
+# The date an acknowledged line carries in ACK04/05: when the line is
+# scheduled to arrive, which is 067. It was written 068, the ship date's
+# code, under 067's name; the EDIFACT side writes the same date as a
+# delivery date (#229).
+SCHEDULED_X12 = "067"
+# What a partner may have dated its acknowledgment with in a header DTM,
+# when BAK09 or BCA10 is empty: 097 is the standard's code for it, and 137
+# is what this mock wrote before 0.8.0 and what a document it stored then
+# still says.
+ISSUED_X12 = ("097", "137")
 REQUESTED_EDIFACT = ("2", "17", "10")
 # The date a seller's response puts on a confirmed line: 67, the delivery
 # date its current schedule gives. It was written 2, which says the buyer
@@ -663,7 +673,6 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         order.get("seller_order") or "",      # BAK08: the seller's order
         wire_date(when))]              # BAK09: acknowledged on
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", wire_date(when)))
     if order.get("currency"):
         out.insert(1, seg("CUR", "SE", order["currency"]))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
@@ -679,7 +688,7 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         if status == REJECTED:
             out.append(seg("ACK", status, "0", row["uom"]))
         else:
-            out.append(seg("ACK", status, confirmed, row["uom"], "068",
+            out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
             out.append(seg("PID", "F", "", "", "", row["description"]))
@@ -1063,7 +1072,6 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         date_text(change.changed_on))]
     out.append(seg("CUR", "SE", order.get("currency") or "USD"))
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", wire_date(when)))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
 
     for row in lines:
@@ -1077,7 +1085,7 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         if status == REJECTED:
             out.append(seg("ACK", status, "0", row["uom"]))
         else:
-            out.append(seg("ACK", status, confirmed, row["uom"], "068",
+            out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
             out.append(seg("PID", "F", "", "", "", row["description"]))
@@ -1528,7 +1536,7 @@ def _finish_response_x12(message: Message, response: Response, trigger: str,
                 break
     if response.responded_on is None:
         for item in header:
-            if item.tag == "DTM" and item.get(1) == "137":
+            if item.tag == "DTM" and item.get(1) in ISSUED_X12:
                 response.responded_on = parse_date(item.get(2))
                 break
     detail = message.body[len(header):]
