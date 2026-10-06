@@ -366,6 +366,11 @@ def _e(ref, name, type="AN", min_len=1, max_len=80, req=OPTIONAL, codes=None,
                    repeats=repeats)
 
 
+def _c(ref, name, components, req=OPTIONAL, full_width=0):
+    return Element(ref=ref, name=name, type="AN", req=req,
+                   components=tuple(components), full_width=full_width)
+
+
 def _product_ids(count: int, req_first: str = OPTIONAL) -> Tuple[Element, ...]:
     """The repeating qualifier/identifier pairs that end PO1, IT1 and LIN."""
     out: List[Element] = []
@@ -468,7 +473,17 @@ POC = Segment("POC", "Line Item Change", (
        CHANGE_TYPE_CODES),
     _e("330", "Quantity Ordered", "R", 1, 15),
     _e("671", "Quantity Left to Receive", "R", 1, 9),
-    _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
+    # A composite in X12, unlike PO103: C001 can state a unit as a product of
+    # up to five, each with an exponent and a multiplier. Almost every POC
+    # carries the one unit and nothing else, which reads the same either way;
+    # it is declared as what it is so that a sender who does use the rest is
+    # not told a simple element arrived in pieces (#288).
+    _c("C001", "Composite Unit of Measure", (
+        _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, MANDATORY,
+           UOM_CODES),
+        _e("1018", "Exponent", "R", 1, 15),
+        _e("649", "Multiplier", "R", 1, 10),
+    )),
     _e("212", "Unit Price", "R", 1, 17),
     _e("639", "Basis of Unit Price Code", "ID", 2, 2),
 ) + _product_ids(5), "One line of the change: which line, what to do to it, "
@@ -821,7 +836,12 @@ AK3 = Segment("AK3", "Data Segment Note", (
 ), "Which segment was wrong, counted from ST as segment 1.")
 
 AK4 = Segment("AK4", "Data Element Note", (
-    _e("722", "Element Position in Segment", "N0", 1, 2, MANDATORY),
+    # C030: the element's position, and the component's within it when the
+    # fault is inside a composite. 005010 adds a third, the repetition.
+    _c("C030", "Position in Segment", (
+        _e("722", "Element Position in Segment", "N0", 1, 2, MANDATORY),
+        _e("1528", "Component Data Element Position in Composite", "N0", 1, 2),
+    ), MANDATORY),
     _e("725", "Data Element Reference Number", "N0", 1, 4),
     _e("723", "Data Element Syntax Error Code", "ID", 1, 3, MANDATORY, ELEMENT_ERROR_CODES),
     _e("724", "Copy of Bad Data Element", "AN", 1, 99),
@@ -1287,11 +1307,6 @@ EDIFACT_UOM_CODES = {     # 6411
     "LBR": "Pound", "KGM": "Kilogram", "GLL": "Gallon", "FOT": "Foot",
     "MTR": "Metre", "PF": "Pallet",
 }
-
-
-def _c(ref, name, components, req=OPTIONAL, full_width=0):
-    return Element(ref=ref, name=name, type="AN", req=req,
-                   components=tuple(components), full_width=full_width)
 
 
 # -- EDIFACT service segments
