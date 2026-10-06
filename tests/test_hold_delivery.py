@@ -245,6 +245,19 @@ class AFailureIsAStepToo(ListenerCase):
         self.assertEqual((again["id"], again["status"]), (failed["id"], "delivered"))
         self.assertEqual(len(Listener.received), posts + 1)
 
+    def test_a_resend_is_held_like_a_retry(self):
+        self.mock.send(x12_order("HOLD-RESEND"))
+        first = self.mock.step()
+        self.mock.step(everything=True)
+        posts = len(Listener.received)
+        answer = self.mock.expect("POST", "/_mock/outbox/%d/resend" % first["id"])
+        self.assertEqual(answer["resent"], [first["id"]])
+        time.sleep(0.3)
+        self.assertEqual(len(Listener.received), posts)       # not until asked
+        again = self.mock.step()
+        self.assertEqual((again["id"], again["status"]), (first["id"], "delivered"))
+        self.assertEqual(Listener.received[-1]["body"], Listener.received[0]["body"])
+
     def test_work_that_falls_due_is_released_and_held(self):
         slow = Mock.start(hold_delivery=True, invoice_delay_ms=3600 * 1000)
         self.addCleanup(slow.close)

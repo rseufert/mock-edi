@@ -74,7 +74,8 @@ class OutboxCase(MockServerCase):
         return [row for row in self.outbox() if row["status"] == "failed"]
 
 
-class RedeliveringAFailedDocument(OutboxCase):
+class ListenerCase(OutboxCase):
+    """A mock whose partner ACME has a listener, which can be told to refuse."""
     config_kwargs = {"deliver_timeout": 3.0}
 
     @classmethod
@@ -98,6 +99,9 @@ class RedeliveringAFailedDocument(OutboxCase):
         FlakyListener.refuse_first = 0
         self.patch("/_mock/partners/" + ACME,
                    {"as2_url": "http://127.0.0.1:%d/as2" % self.listener_port})
+
+
+class RedeliveringAFailedDocument(ListenerCase):
 
     def test_the_first_delivery_is_recorded_as_failed(self):
         FlakyListener.refuse_first = 1
@@ -196,6 +200,12 @@ class WhatCannotBeRetried(OutboxCase):
         self.assertEqual(status, 409)
         self.assertIn("not failed", data["error"])
 
+    def test_and_the_refusal_says_what_to_ask_for_instead(self):
+        self.send(x12_order("RETRY-NO-2"))
+        row = self.outbox()[0]
+        _status, _headers, data = self.post("/_mock/outbox/%d/retry" % row["id"])
+        self.assertIn("POST /_mock/outbox/%d/resend" % row["id"], data["error"])
+
     def test_an_unknown_document_is_a_404(self):
         status, _headers, data = self.post("/_mock/outbox/999999/retry")
         self.assertEqual(status, 404)
@@ -208,6 +218,161 @@ class WhatCannotBeRetried(OutboxCase):
     def test_get_is_not_how_you_retry(self):
         status, _headers, _data = self.get("/_mock/outbox/1/retry")
         self.assertEqual(status, 405)
+
+
+class SendingAgainWhatWasDelivered(ListenerCase):
+    """`resend`: the same bytes a second time, after a delivery that worked (#262).
+
+    `retry` refuses anything that did not fail, so the one case it was meant
+    to make testable - a listener given a control number it has already
+    seen - could only be reached through a failure, when the listener may
+    never have seen the document at all.
+    """
+
+    def delivered(self, code):
+        return [row for row in self.outbox()
+                if row["code"] == code and row["status"] == "delivered"][0]
+
+    def test_the_listener_gets_one_control_number_twice(self):
+        self.send(x12_order("AGAIN-A"))
+        self.settle()
+        invoice = self.delivered("810")
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % invoice["id"])
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"resent": [invoice["id"]], "count": 1,
+                                "was": "delivered"})
+        self.settle()
+        bodies = [item["body"] for item in FlakyListener.received
+                  if isa13(item["body"]) == invoice["control"].lstrip("0")]
+        self.assertEqual(len(bodies), 2, "the document went out once, not twice")
+        self.assertEqual(bodies[0], bodies[1], "the second was not byte for byte")
+
+    def test_it_carries_the_same_as2_message_id(self):
+        self.send(x12_order("AGAIN-B"))
+        self.settle()
+        invoice = self.delivered("810")
+        self.post("/_mock/outbox/%d/resend" % invoice["id"])
+        self.settle()
+        ids = [item["headers"].get("Message-ID")
+               for item in FlakyListener.received
+               if isa13(item["body"]) == invoice["control"].lstrip("0")]
+        self.assertEqual(len(ids), 2)
+        self.assertEqual(ids[0], ids[1])
+
+    def test_it_is_delivered_again_and_nothing_new_is_written(self):
+        self.send(x12_order("AGAIN-C"))
+        self.settle()
+        before = self.outbox()
+        invoice = self.delivered("810")
+        self.post("/_mock/outbox/%d/resend" % invoice["id"])
+        self.settle()
+        after = {row["id"]: row for row in self.outbox()}
+        self.assertEqual(sorted(after), sorted(row["id"] for row in before))
+        self.assertEqual(after[invoice["id"]]["status"], "delivered")
+        self.assertEqual(after[invoice["id"]]["attempts"], invoice["attempts"] + 1)
+        # Released once: one interchange and one transaction set on record.
+        _s, _h, sets = self.get("/_mock/documents?direction=out&code=810")
+        self.assertEqual(len(sets), 1)
+
+    def test_a_failed_one_is_sent_again_as_a_retry_would(self):
+        FlakyListener.refuse_first = 1
+        self.send(x12_order("AGAIN-D"))
+        self.settle()
+        failed = self.failed()[0]
+        status, _headers, data = self.post("/_mock/outbox/%d/resend" % failed["id"])
+        self.assertEqual((status, data["was"]), (200, "failed"))
+        self.settle()
+        rows = {row["id"]: row for row in self.outbox()}
+        self.assertEqual(rows[failed["id"]]["status"], "delivered")
+
+
+class SendingAgainFromTheMailbox(OutboxCase):
+    """A partner with no listener collects; `resend` puts it back to collect."""
+
+    def test_a_collected_document_can_be_collected_a_second_time(self):
+        self.send(x12_order("AGAIN-BOX"))
+        first = self.mailbox(ACME, "invoice", leave=False)[0]
+        self.assertEqual(self.mailbox(ACME, "invoice"), [])
+        status, _headers, data = self.post("/_mock/outbox/%d/resend" % first["id"])
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"resent": [first["id"]], "count": 1,
+                                "was": "collected"})
+        second = self.mailbox(ACME, "invoice", leave=False)
+        self.assertEqual(len(second), 1)
+        self.assertEqual(second[0]["id"], first["id"])
+        self.assertEqual(second[0]["payload"], first["payload"])
+
+    def test_one_still_waiting_has_no_first_time_to_repeat(self):
+        self.send(x12_order("AGAIN-WAIT"))
+        waiting = self.mailbox(ACME, "invoice")[0]            # looked at, not taken
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % waiting["id"])
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"resent": [], "count": 0, "was": "ready",
+                                "sent_before": False})
+        self.assertEqual(len(self.mailbox(ACME, "invoice")), 1)
+
+    def test_asking_twice_queues_it_once_and_says_it_is_queued(self):
+        # Two posts before the first copy has gone are one copy, not two; and
+        # the second answer is not the one a never-sent document gets.
+        self.send(x12_order("AGAIN-TWICE"))
+        taken = self.mailbox(ACME, "invoice", leave=False)[0]
+        self.post("/_mock/outbox/%d/resend" % taken["id"])
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % taken["id"])
+        self.assertEqual(status, 200, data)
+        self.assertEqual(data, {"resent": [], "count": 0, "was": "ready",
+                                "sent_before": True})
+        self.assertEqual(len(self.mailbox(ACME, "invoice", leave=False)), 1)
+        self.assertEqual(self.mailbox(ACME, "invoice"), [])
+
+
+class WhatCannotBeSentAgain(OutboxCase):
+    config_kwargs = {"invoice_delay_ms": 3600 * 1000}
+
+    def test_a_document_not_yet_due_has_not_been_sent_once(self):
+        status, _h, queued = self.post("/_mock/send", {
+            "partner": ACME, "kind": "response", "order": self.an_order(),
+            "delayMs": 3600000})
+        self.assertEqual(status, 201, queued)
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % queued["id"])
+        self.assertEqual(status, 409, data)
+        self.assertIn("is pending: it has not been sent once", data["error"])
+
+    def an_order(self):
+        self.send(x12_order("AGAIN-PENDING"))
+        return "AGAIN-PENDING"
+
+    def test_a_cancelled_one_has_not_either(self):
+        status, _h, queued = self.post("/_mock/send", {
+            "partner": "GLOBEX", "kind": "response",
+            "order": self.an_order_from("GLOBEX"), "delayMs": 3600000})
+        self.assertEqual(status, 201, queued)
+        self.request("DELETE", "/_mock/partners/GLOBEX")
+        status, _headers, data = self.post(
+            "/_mock/outbox/%d/resend" % queued["id"])
+        self.assertEqual(status, 409, data)
+        self.assertIn("is cancelled", data["error"])
+
+    def an_order_from(self, partner):
+        self.send(x12_order("AGAIN-GONE", sender=partner))
+        return "AGAIN-GONE"
+
+    def test_an_unknown_document_is_a_404(self):
+        for identifier in ("999999", "abc"):
+            with self.subTest(identifier=identifier):
+                status, _headers, data = self.post(
+                    "/_mock/outbox/%s/resend" % identifier)
+                self.assertEqual(status, 404)
+                self.assertIn("no outbound document", data["error"])
+
+    def test_get_is_not_how_you_send_again(self):
+        status, headers, data = self.request("GET", "/_mock/outbox/1/resend",
+                                             raw=True)
+        self.assertEqual((status, data), (405, b"POST to send a document again\n"))
+        self.assertEqual(headers["Allow"], "POST")
 
 
 if __name__ == "__main__":

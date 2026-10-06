@@ -215,7 +215,7 @@ Both are walked through, test by test, in
 | Plain EDI inbound | `POST /edi` — the same pipeline, answering with a JSON summary |
 | Validate only | `POST /_mock/validate` — findings, and nothing changed |
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
-| Outbox | `GET /_mock/outbox` — the queue, including what is not due yet |
+| Outbox | `GET /_mock/outbox` — the queue, including what is not due yet; `POST /_mock/outbox/<id>/retry` for a failed delivery, `POST /_mock/outbox/<id>/resend` to send one again unchanged |
 | Deliver one | `POST /_mock/deliver` — with `--hold-delivery`, send the next held document or asynchronous MDN and say what it was; `?all` sends everything held |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
@@ -644,9 +644,10 @@ has finished, `delivered` or `failed`. With nothing to send the answer is
   between the two steps shows the document delivered and the receipt still
   `pending`. A synchronous MDN is the HTTP response to the document it
   answers and travels with it.
-- **A retry is held too.** `/_mock/outbox/<id>/retry` and `/_mock/advance?failed`
-  put the document back on the end of the queue and answer as they always
-  did; it goes when it is stepped. So does anything `/_mock/advance` releases.
+- **A retry is held too, and so is a resend.** `/_mock/outbox/<id>/retry`,
+  `/_mock/outbox/<id>/resend` and `/_mock/advance?failed` put the document
+  back on the end of the queue and answer as they always did; it goes when
+  it is stepped. So does anything `/_mock/advance` releases.
 - **`settle()` and `exchange()` raise on a held mock**, at once, naming the
   hold. They wait for deliveries, and a held mock makes none on its own.
 - **What is not held:** receiving (the mock answers what it is sent, MDN
@@ -670,10 +671,28 @@ curl -X POST "http://127.0.0.1:8080/_mock/advance?failed"   # everything that fa
 ```
 
 The same bytes and the same control numbers go out again, in the order they
-were queued. That is a *retry*, not a resend: `/_mock/send` builds a new
-document with a new control number, which is a different event on the wire —
-and being idempotent about a control number it has already seen is exactly
-the thing a listener has to get right.
+were queued. That is not `/_mock/send`, which writes a new document with a
+new control number, a different event on the wire.
+
+A retry is for a delivery that **failed**, and refuses any other. To send a
+document that **arrived** a second time - which is how to find out whether a
+listener is idempotent about a control number it has already seen - ask for
+that by name:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/outbox/3/resend
+```
+
+A delivered document is posted to the partner again with the same bytes,
+control numbers and AS2 `Message-ID`; a collected one goes back in the mailbox
+to be collected again. The answer's `was` says what had become of it. A
+document not yet due, or cancelled, has not been sent once and is a `409`.
+
+One that is waiting to go is left waiting, and nothing is resent. Its answer
+carries `sent_before`: `false` for a document that has not gone out at all,
+`true` for one already queued to go again. So two `resend` posts in a row put
+one more copy on the wire, not two. Let the first be delivered or collected
+before asking for another: `mock.settle()`, with `mockedi.testing`.
 
 `/_mock/outbox` carries the history: `attempts`, `last_error` and
 `last_attempt_at`, so a document delivered on the second try says so.
