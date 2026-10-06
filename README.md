@@ -328,12 +328,14 @@ the facts the orders and invoices of this mock state for themselves.
 Two findings come with it. `remittance-currency-not-the-invoice` is an advice
 in one currency paying an invoice the mock issued in another — the amounts can
 agree to the penny and still be two different sums of money. And
-`remittance-currency-disagrees` is a REMADV whose header `CUX` and summary
-`MOA` name different currencies: D.96A lets both state one, `CUX` recurring at
-three levels, and gives no rule for which wins, so the mock reports the
-disagreement rather than choosing a side. An advice naming an invoice the mock
-never issued draws neither: it can only say two currencies differ about an
-invoice it wrote.
+`remittance-currency-disagrees` is a REMADV that contradicts itself: a header
+`CUX` and a summary `MOA` naming different currencies, or several header `CUX`
+segments naming different ones — the group repeats up to nine times. D.96A
+permits all of it and gives no rule for which wins, so the mock takes the
+**reference** currency (`6347` code 2, "the currency applicable to amounts
+stated") and reports the rest rather than keeping one quietly. An advice naming
+an invoice the mock never issued draws neither finding: it can only say two
+currencies differ about an invoice it wrote.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

@@ -44,6 +44,11 @@ CURRENCY_NOT_THE_INVOICE = "remittance-currency-not-the-invoice"
 # recurs in SG3, SG5 and SG9, and C516 carries 6345 itself - so the mock
 # reports the disagreement rather than picking a side silently (#281).
 CURRENCY_DISAGREES = "remittance-currency-disagrees"
+# 6347's code for the currency an advice's amounts are in: "Reference
+# currency - the currency applicable to amounts stated. It may have to be
+# converted." Which is what a total is in, where the other codes are about
+# conversion, accounts and information.
+REFERENCE_CURRENCY = "2"
 BEFORE_SETTLEMENT = "remitted-before-settlement"
 REVERSES_NOTHING = "reversal-of-nothing"
 
@@ -68,6 +73,10 @@ class Advice:
     # reported. Always None for X12, which has one CUR at heading level and
     # none inside the loop that holds the invoices.
     header_currency: Optional[str] = None
+    # Every currency the header CUX segments name, in document order. The
+    # group repeats up to nine times, so a REMADV can name several and the
+    # mock reports that rather than keeping one quietly.
+    header_currencies: List[str] = field(default_factory=list)
 
 
 def read(message: Message, dialect: str) -> Advice:
@@ -88,15 +97,26 @@ def read(message: Message, dialect: str) -> Advice:
     bgm = message.find("BGM")
     advice.trace = bgm.comp(2, 1) if bgm is not None else ""
     within = ""
+    header: List[Tuple[str, Optional[str]]] = []
     for item in message.segments:
         if item.tag in ("DOC", "AJT", "UNS"):
             within = item.tag
             if item.tag == "DOC":
                 advice.invoices.append((item.comp(2, 1), None))
-        elif item.tag == "CUX" and within != "DOC":
-            # C504's second component. The header one; a CUX inside a DOC or
-            # a line group is that document's, not the advice's.
-            advice.header_currency = item.comp(1, 2) or None
+        elif item.tag == "CUX" and within not in ("DOC", "AJT"):
+            # C504's qualifier and its currency. The header CUX group repeats
+            # up to nine times, so there may be several, each qualified: the
+            # advice's amounts are in the *reference* currency, 6347 code 2,
+            # whose own definition is "the currency applicable to amounts
+            # stated". Collected rather than overwritten, because keeping the
+            # last one silently is the same silence this change removes a
+            # level up (#281).
+            #
+            # A CUX inside a DOC or an AJT group is not read: D.96A has one in
+            # SG5 and SG9, and this dictionary declares CUX at header level
+            # only, so the validator calls it an unexpected segment. Reading
+            # it here would be answering a document the mock refuses (#298).
+            header.append((item.comp(1, 1), item.comp(1, 2) or None))
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
                 advice.invoices[-1] = (advice.invoices[-1][0],
@@ -106,6 +126,11 @@ def read(message: Message, dialect: str) -> Advice:
                 # C516's third component, which the summary MOA may state
                 # even where the header CUX does not.
                 advice.currency = item.comp(1, 3) or None
+    stated = [currency for _qualifier, currency in header if currency]
+    reference = [currency for qualifier, currency in header
+                 if currency and qualifier == REFERENCE_CURRENCY]
+    advice.header_currency = (reference or stated or [None])[0]
+    advice.header_currencies = stated
     advice.currency = advice.currency or advice.header_currency
     return advice
 
@@ -244,6 +269,23 @@ def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
     compare against would be the guess #281 asks us not to make.
     """
     out: List[BusinessFinding] = []
+    others = [currency for currency in advice.header_currencies
+              if currency != advice.header_currency]
+    if others:
+        # Several header CUX segments naming different currencies. The
+        # reference one (6347 code 2) is taken as the advice's, and the rest
+        # are said out loud rather than dropped: D.96A permits up to nine and
+        # does not say they must agree.
+        out.append(BusinessFinding(
+            rule=CURRENCY_DISAGREES, kind=kind, code=message.code,
+            control=message.control, po_number="",
+            expected=advice.header_currency or "",
+            found=", ".join(sorted(set(others))),
+            note="the header names %s; %s taken as the advice's, being the "
+                 "reference currency, and D.96A does not say they must agree"
+                 % (", ".join(sorted(set(advice.header_currencies))),
+                    advice.header_currency),
+            interchange=interchange))
     if (advice.header_currency and advice.currency
             and advice.header_currency != advice.currency):
         out.append(BusinessFinding(

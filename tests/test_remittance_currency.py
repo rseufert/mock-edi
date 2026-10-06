@@ -66,14 +66,20 @@ def an_820(currency=None, total="100.00", invoice=ACME_INVOICE):
 
 
 def a_remadv(header=None, summary_currency=None, total="100.00",
-             invoice=EURODIS_INVOICE):
-    """A REMADV with a header CUX, a summary MOA currency, either or neither."""
+             invoice=EURODIS_INVOICE, headers=()):
+    """A REMADV with a header CUX, a summary MOA currency, either or neither.
+
+    `headers` writes several header CUX segments as `(qualifier, currency)`
+    pairs, which the group's repeat of nine allows.
+    """
     body = [seg("BGM", ["481"], ["RA-CUR"], "9"),
             seg("DTM", ["137", "20260928", "102"]),
             seg("NAD", "PR", ["EURODIS", "", "92"]),
             seg("NAD", "PE", ["MOCKEDI", "", "92"])]
     if header:
         body.append(seg("CUX", ["2", header, "11"]))
+    for qualifier, currency in headers:
+        body.append(seg("CUX", [qualifier, currency, "11"]))
     body += [seg("DOC", ["380"], [invoice]), seg("MOA", ["12", total]),
              seg("UNS", "S")]
     body.append(seg("MOA", ["12", total] + ([summary_currency]
@@ -163,6 +169,54 @@ class WhenItDisagreesWithTheInvoice(MockServerCase):
         # wrote. An advice naming somebody else's gets no finding.
         found = self.findings(an_820("EUR", invoice="INV-NOT-OURS"), X12_TYPE)
         self.assertNotIn(remittance.CURRENCY_NOT_THE_INVOICE, found)
+
+
+class WhenTheHeaderNamesSeveral(MockServerCase):
+    """The CUX group repeats up to nine times, so a REMADV can name several.
+
+    Keeping the last one quietly would be the same silence this change
+    removes a level up, so the reference currency - 6347 code 2, defined as
+    "the currency applicable to amounts stated" - is the advice's, and the
+    rest are reported.
+    """
+
+    def advised(self, payload):
+        status, _h, data = self.post("/edi", payload, headers=EDIFACT_TYPE)
+        self.assertEqual(status, 200, data)
+        _s, _h, rows = self.get("/_mock/remittances")
+        _s, _h, found = self.get("/_mock/disagreements")
+        return rows[-1], {row["rule"]: row for row in found}
+
+    def test_the_reference_currency_is_the_advices(self):
+        # Target currency first, reference second: document order does not
+        # decide it, the qualifier does.
+        row, _found = self.advised(a_remadv(headers=[("3", "GBP"),
+                                                     ("2", "EUR")]))
+        self.assertEqual(row["currency"], "EUR")
+
+    def test_and_the_others_are_reported(self):
+        _row, found = self.advised(a_remadv(headers=[("3", "GBP"),
+                                                     ("2", "EUR")]))
+        self.assertIn(remittance.CURRENCY_DISAGREES, found)
+        note = found[remittance.CURRENCY_DISAGREES]["note"]
+        self.assertIn("EUR", note)
+        self.assertIn("GBP", note)
+        self.assertIn("reference currency", note)
+
+    def test_several_that_agree_are_not_a_finding(self):
+        _row, found = self.advised(a_remadv(headers=[("3", "EUR"),
+                                                     ("2", "EUR")]))
+        self.assertNotIn(remittance.CURRENCY_DISAGREES, found)
+
+    def test_with_no_reference_currency_the_first_stands(self):
+        row, found = self.advised(a_remadv(headers=[("3", "GBP"),
+                                                    ("4", "USD")]))
+        self.assertEqual(row["currency"], "GBP")
+        self.assertIn(remittance.CURRENCY_DISAGREES, found)
+
+    def test_one_header_cux_is_not_a_finding(self):
+        _row, found = self.advised(a_remadv(header="EUR"))
+        self.assertNotIn(remittance.CURRENCY_DISAGREES, found)
 
 
 class WhenAREMADVDisagreesWithItself(MockServerCase):
