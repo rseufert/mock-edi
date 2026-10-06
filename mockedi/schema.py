@@ -63,6 +63,10 @@ class Element:
     req: str = OPTIONAL
     codes: Optional[Dict[str, str]] = None
     components: Tuple["Element", ...] = ()
+    # The header element this one has to say again, as the standards name
+    # it: IEA02 repeats ISA13. Declared on the trailer's element, so that the
+    # validator's check and the dictionary read one statement of it (#210).
+    repeats: str = ""
 
     @property
     def composite(self) -> bool:
@@ -332,9 +336,10 @@ CURRENCY_CODES = {"USD": "US Dollar", "EUR": "Euro", "GBP": "Pound Sterling",
 
 
 def _e(ref, name, type="AN", min_len=1, max_len=80, req=OPTIONAL, codes=None,
-       components=()):
+       components=(), repeats=""):
     return Element(ref=ref, name=name, type=type, min_len=min_len,
-                   max_len=max_len, req=req, codes=codes, components=components)
+                   max_len=max_len, req=req, codes=codes, components=components,
+                   repeats=repeats)
 
 
 def _product_ids(count: int, req_first: str = OPTIONAL) -> Tuple[Element, ...]:
@@ -367,7 +372,8 @@ ST_005010 = Segment("ST", ST.name, ST.elements + (
 
 SE = Segment("SE", "Transaction Set Trailer", (
     _e("96", "Number of Included Segments", "N0", 1, 10, MANDATORY),
-    _e("329", "Transaction Set Control Number", "AN", 4, 9, MANDATORY),
+    _e("329", "Transaction Set Control Number", "AN", 4, 9, MANDATORY,
+       repeats="ST02"),
 ), "Ends a transaction set; the count includes ST and SE themselves.")
 
 BEG = Segment("BEG", "Beginning Segment for Purchase Order", (
@@ -887,13 +893,14 @@ GS = Segment("GS", "Functional Group Header", (
 
 GE = Segment("GE", "Functional Group Trailer", (
     _e("97", "Number of Transaction Sets Included", "N0", 1, 6, MANDATORY),
-    _e("28", "Group Control Number", "N0", 1, 9, MANDATORY),
+    _e("28", "Group Control Number", "N0", 1, 9, MANDATORY, repeats="GS06"),
 ), "Ends a functional group: counts its transaction sets and repeats the control number "
    "GS06 gave.")
 
 IEA = Segment("IEA", "Interchange Control Trailer", (
     _e("I16", "Number of Included Functional Groups", "N0", 1, 5, MANDATORY),
-    _e("I12", "Interchange Control Number", "N0", 9, 9, MANDATORY),
+    _e("I12", "Interchange Control Number", "N0", 9, 9, MANDATORY,
+       repeats="ISA13"),
 ), "Ends the interchange: counts its functional groups and repeats the control number "
    "ISA13 gave.")
 
@@ -1286,13 +1293,15 @@ UNH = Segment("UNH", "Message Header", (
 
 UNT = Segment("UNT", "Message Trailer", (
     _e("0074", "Number of segments in the message", "N0", 1, 10, MANDATORY),
-    _e("0062", "Message reference number", "AN", 1, 14, MANDATORY),
+    _e("0062", "Message reference number", "AN", 1, 14, MANDATORY,
+       repeats="UNH01"),
 ), "Ends a message: counts its segments, UNH and UNT included, and repeats the reference "
    "UNH gave.")
 
 UNZ = Segment("UNZ", "Interchange Trailer", (
     _e("0036", "Interchange control count", "N0", 1, 6, MANDATORY),
-    _e("0020", "Interchange control reference", "AN", 1, 14, MANDATORY),
+    _e("0020", "Interchange control reference", "AN", 1, 14, MANDATORY,
+       repeats="UNB05"),
 ), "Ends the interchange: counts its messages, or its groups when it has them, and "
    "repeats the reference UNB gave.")
 
@@ -1329,7 +1338,8 @@ UNG = Segment("UNG", "Functional Group Header", (
 
 UNE = Segment("UNE", "Functional Group Trailer", (
     _e("0060", "Number of messages", "N0", 1, 6, MANDATORY),
-    _e("0048", "Functional group reference number", "AN", 1, 14, MANDATORY),
+    _e("0048", "Functional group reference number", "AN", 1, 14, MANDATORY,
+       repeats="UNG05"),
 ), "Ends a functional group: counts its messages and repeats the reference UNG gave.")
 
 # UNA is not a segment in the delimited sense: it is the three letters and
@@ -2021,8 +2031,41 @@ def supports(dialect: str, version: str) -> bool:
     return base_version(dialect, version) in VERSIONS.get(dialect, ())
 
 
+@dataclass(frozen=True)
+class Repeat:
+    """A trailer's element and the header's element it has to say again."""
+    position: int           # in the trailer: IEA02 is 2
+    label: str              # "IEA02"
+    header_tag: str         # "ISA"
+    header_position: int    # 13
+    header_label: str       # "ISA13"
+
+
+def repeat(segment: Segment) -> Optional[Repeat]:
+    """What a trailer repeats from its header, as its definition declares it.
+
+    The one statement of "IEA02 is ISA13": the validator compares the two
+    positions this names and the dictionary publishes them, so neither can
+    say something the other does not (#210).
+    """
+    for position, element in enumerate(segment.elements, start=1):
+        if element.repeats:
+            return Repeat(position, segment.label(position),
+                          element.repeats[:-2], int(element.repeats[-2:]),
+                          element.repeats)
+    return None
+
+
 INTERCHANGE = "interchange"
 GROUP = "group"
+# "As many as there are", in the number the standards print for it.
+MANY = 999999
+# What an envelope calls its own version, which is not the version of the
+# sets inside it: ISA12 for the X12 version asked for, and for EDIFACT the
+# syntax version in UNB's S001, which the message directory does not change.
+ENVELOPE_VERSIONS = {"X12": {"004010": "00401", "005010": "00501"},
+                     "EDIFACT": {}}
+EDIFACT_SYNTAX_VERSION = "3"
 HEADER = "header"
 TRAILER = "trailer"
 ADVICE = "advice"
@@ -2037,6 +2080,9 @@ class EnvelopeUse:
     req: str = MANDATORY
     # The whole of it, in characters, when it is not split on delimiters.
     fixed_length: int = 0
+    # An interchange has one header and one trailer; it may hold any number
+    # of functional groups, each with its own.
+    max_use: int = 1
 
     @property
     def tag(self) -> str:
@@ -2049,15 +2095,15 @@ class EnvelopeUse:
 ENVELOPES: Dict[str, Tuple[EnvelopeUse, ...]] = {
     "X12": (
         EnvelopeUse(ISA, INTERCHANGE, HEADER, fixed_length=106),
-        EnvelopeUse(GS, GROUP, HEADER),
-        EnvelopeUse(GE, GROUP, TRAILER),
+        EnvelopeUse(GS, GROUP, HEADER, max_use=MANY),
+        EnvelopeUse(GE, GROUP, TRAILER, max_use=MANY),
         EnvelopeUse(IEA, INTERCHANGE, TRAILER),
     ),
     "EDIFACT": (
         EnvelopeUse(UNA, INTERCHANGE, ADVICE, OPTIONAL, fixed_length=9),
         EnvelopeUse(UNB, INTERCHANGE, HEADER),
-        EnvelopeUse(UNG, GROUP, HEADER, OPTIONAL),
-        EnvelopeUse(UNE, GROUP, TRAILER, OPTIONAL),
+        EnvelopeUse(UNG, GROUP, HEADER, OPTIONAL, max_use=MANY),
+        EnvelopeUse(UNE, GROUP, TRAILER, OPTIONAL, max_use=MANY),
         EnvelopeUse(UNZ, INTERCHANGE, TRAILER),
     ),
 }

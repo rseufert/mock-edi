@@ -373,6 +373,19 @@ def _is_acknowledgment_only(interchange: Interchange) -> bool:
             and any(item.tag == "TA1" for item in interchange.preamble))
 
 
+def _from_header(header: Optional[Seg], said: "schema.Repeat",
+                 otherwise: str) -> str:
+    """The header's value at the position a trailer is declared to repeat.
+
+    From the header segment itself, at the position `schema.py` names. The
+    parser's own reading of it stands in when there is no such header to
+    read - a group or a message built in code rather than parsed.
+    """
+    if header is None or header.tag != said.header_tag:
+        return otherwise
+    return header.get(said.header_position) or otherwise
+
+
 def _same_number(left: str, right: str) -> bool:
     """Control numbers compared as numbers when both are: 000000077 is 77."""
     left, right = (left or "").strip(), (right or "").strip()
@@ -430,10 +443,14 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
                 errors.append(("5", "GE01 counts %s transaction sets, the group "
                                     "holds %d" % (trailer.get(1) or "(empty)",
                                                   len(group.messages))))
-            if not _same_number(trailer.get(2), group.control):
-                errors.append(("4", "GE02 says group control number %s, GS06 "
-                                    "says %s" % (trailer.get(2) or "(empty)",
-                                                 group.control)))
+            said = schema.repeat(schema.GE)
+            given = _from_header(group.header, said, group.control)
+            if not _same_number(trailer.get(said.position), given):
+                errors.append(("4", "%s says group control number %s, %s "
+                                    "says %s" % (said.label,
+                                                 trailer.get(said.position)
+                                                 or "(empty)",
+                                                 said.header_label, given)))
         if errors:
             report.group_errors[(group.functional_id, group.control)] = errors
 
@@ -448,11 +465,14 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
             code="021", tag="IEA", position=1,
             note="IEA01 counts %s functional groups, the interchange holds %d"
                  % (trailer.get(1) or "(empty)", len(explicit))))
-    if not _same_number(trailer.get(2), header.get(13)):
+    said = schema.repeat(schema.IEA)
+    given = header.get(said.header_position)
+    if not _same_number(trailer.get(said.position), given):
         findings.append(EnvelopeFinding(
-            code="001", tag="IEA", position=2,
-            note="IEA02 says interchange control number %s, ISA13 says %s"
-                 % (trailer.get(2) or "(empty)", header.get(13))))
+            code="001", tag="IEA", position=said.position,
+            note="%s says interchange control number %s, %s says %s"
+                 % (said.label, trailer.get(said.position) or "(empty)",
+                    said.header_label, given)))
 
 
 def _check_edifact_envelope(interchange: Interchange,
@@ -471,11 +491,13 @@ def _check_edifact_envelope(interchange: Interchange,
                 code="29", tag="UNE", position=1,
                 note="UNE counts %s messages, the group holds %d"
                      % (trailer.get(1) or "(empty)", len(group.messages))))
-        if not _same_number(trailer.get(2), group.control):
+        said = schema.repeat(schema.UNE)
+        given = _from_header(group.header, said, group.control)
+        if not _same_number(trailer.get(said.position), given):
             findings.append(EnvelopeFinding(
-                code="28", tag="UNE", position=2,
+                code="28", tag="UNE", position=said.position,
                 note="UNE says group reference %s, UNG says %s"
-                     % (trailer.get(2) or "(empty)", group.control)))
+                     % (trailer.get(said.position) or "(empty)", given)))
 
     trailer = interchange.trailer
     if trailer is None:
@@ -492,11 +514,13 @@ def _check_edifact_envelope(interchange: Interchange,
             code="29", tag="UNZ", position=1,
             note="UNZ counts %s %s, the interchange holds %d"
                  % (trailer.get(1) or "(empty)", what, counted)))
-    if (trailer.get(2) or "").strip() != (interchange.control or "").strip():
+    said = schema.repeat(schema.UNZ)
+    given = _from_header(interchange.header, said, interchange.control)
+    if (trailer.get(said.position) or "").strip() != (given or "").strip():
         findings.append(EnvelopeFinding(
-            code="28", tag="UNZ", position=2,
+            code="28", tag="UNZ", position=said.position,
             note="UNZ says interchange reference %s, UNB says %s"
-                 % (trailer.get(2) or "(empty)", interchange.control)))
+                 % (trailer.get(said.position) or "(empty)", given)))
 
 
 # ---------------------------------------------------------------------------
@@ -509,11 +533,14 @@ def _check_trailer(message: Message, dialect: str, report: MessageReport) -> Non
     if trailer is None:
         report.set_errors.append(("2", "the %s trailer is missing" % trailer_tag))
         return
-    declared_control = trailer.get(2)
-    if declared_control != message.control:
+    said = schema.repeat(schema.SE if dialect == "X12" else schema.UNT)
+    head = message.segments[0] if message.segments else None
+    given = _from_header(head, said, message.control)
+    declared_control = trailer.get(said.position)
+    if declared_control != given:
         report.set_errors.append((
-            "3", "%s02 says control number %s, the header says %s"
-            % (trailer_tag, declared_control or "(empty)", message.control)))
+            "3", "%s says control number %s, the header says %s"
+            % (said.label, declared_control or "(empty)", given)))
     declared = trailer.get(1)
     actual = len(message.segments)
     if declared and declared.isdigit() and int(declared) != actual:

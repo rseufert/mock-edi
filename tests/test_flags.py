@@ -131,6 +131,45 @@ class TheTaxRate(unittest.TestCase):
         self.assertIn("tax rate", said.getvalue())
 
 
+class OnlyABadConfigurationIsATidyMessage(unittest.TestCase):
+    """`main` prints a configuration it cannot use as one line and exits 2.
+
+    It used to do that for every `ValueError` raised while starting, so a bug
+    that happened to raise one would have lost its traceback and looked like
+    a mistake of the user's.
+    """
+
+    def start(self, failure):
+        import contextlib
+        import io
+        from mockedi import __main__ as cli
+        from unittest import mock
+
+        def fails(_config):
+            raise failure
+
+        said = io.StringIO()
+        with mock.patch.object(cli, "make_server", fails):
+            with contextlib.redirect_stderr(said):
+                return cli.main(["--port", "0"]), said.getvalue()
+
+    def test_a_bad_configuration_is_one_line_and_exit_2(self):
+        from mockedi.server import BadConfig
+        code, said = self.start(BadConfig("tax rate 'abc' is not a number"))
+        self.assertEqual(code, 2)
+        self.assertEqual(said.strip(), "mock-edi: tax rate 'abc' is not a number")
+
+    def test_any_other_value_error_is_not_swallowed(self):
+        with self.assertRaises(ValueError) as raised:
+            self.start(ValueError("a bug"))
+        self.assertEqual(str(raised.exception), "a bug")
+
+    def test_make_server_raises_it_for_a_bad_tax_rate(self):
+        from mockedi.server import BadConfig, make_server
+        with self.assertRaises(BadConfig):
+            make_server(Config(port=0, db_path=":memory:", tax_rate="abc"))
+
+
 class AddressedToSomeoneElse(MockServerCase):
     def test_it_is_refused_by_default(self):
         status, _h, data = self.post(
