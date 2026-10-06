@@ -800,6 +800,9 @@ BEHAVIOURS = {
     "accept": "Acknowledge everything in full and ship what was ordered.",
     "short-ship": "Confirm less than was ordered on some lines (855 IQ), and "
                   "ship and invoice the confirmed quantity.",
+    "over-ship": "Confirm every line as ordered (855 IA), then ship three in "
+                 "ten more than was confirmed on every line, and invoice "
+                 "what shipped.",
     "reject-line": "Reject one line outright (855 IR) and leave it out of the "
                    "shipment and the invoice.",
     "reject-all": "Acknowledge the syntax, then refuse the order (855 RD).",
@@ -848,6 +851,7 @@ SUPPLIER_ONLY = ("supplier",)
 BEHAVIOUR_ROLES = {
     "accept": BOTH,
     "short-ship": CUSTOMER_ONLY,
+    "over-ship": CUSTOMER_ONLY,
     "reject-line": CUSTOMER_ONLY,
     "reject-all": CUSTOMER_ONLY,
     "no-ack": BOTH,

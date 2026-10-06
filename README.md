@@ -461,6 +461,7 @@ what the mock did.
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
 | `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
+| `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
 | `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
 | `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
