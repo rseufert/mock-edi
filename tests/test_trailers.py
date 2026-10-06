@@ -287,7 +287,8 @@ class EdifactTrailers(MockServerCase):
     def test_a_unz_that_miscounts_is_29(self):
         uci = self.refused(edifact_order("UNZ-COUNT").replace("UNZ+1+", "UNZ+3+"),
                            "29")
-        self.assertEqual(uci.comp(7, 1), "1")        # UNZ element 1
+        # UNZ01, which is position 2 once the segment tag is counted (#208).
+        self.assertEqual(uci.comp(7, 1), "2")
 
     def test_a_unz_that_names_another_interchange_is_28(self):
         text = edifact_order("UNZ-REF", control="9001")

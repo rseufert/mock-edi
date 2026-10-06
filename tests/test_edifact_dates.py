@@ -176,7 +176,9 @@ class OverTheWire(MockServerCase):
         sent = self.mailbox(EURODIS, "acknowledgment")[0]["payload"]
         # 0085 has no word for a date of its own: 12, invalid value, at the
         # second component of the DTM's composite.
-        self.assertIn("UCD+12+1:2'", sent.replace("\n", ""))
+        # C507 is DTM's first data element and 0098 counts the tag, so 2
+        # rather than 1; 2380 is still component 2 (#208).
+        self.assertIn("UCD+12+2:2'", sent.replace("\n", ""))
 
 
 if __name__ == "__main__":

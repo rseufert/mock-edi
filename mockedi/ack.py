@@ -211,7 +211,8 @@ def syntax_report(interchange: Interchange, report: InterchangeReport,
                    if f.severity == "fatal"][0]
         return [seg("UCI", interchange.control, sender, receiver, REJECTED,
                     finding.code, finding.tag,
-                    [str(finding.position)] if finding.position else "")]
+                    [_in_segment(finding.position)]
+                    if finding.position else "")]
     # UCI speaks for the interchange as such. A sound UNB carrying messages
     # that were refused is acknowledged at this level, 7, with the refusals in
     # their UCMs; 4 means the interchange itself was at fault. An interchange
@@ -237,9 +238,26 @@ def syntax_report(interchange: Interchange, report: InterchangeReport,
                            finding.edifact_code))
             for element in finding.elements:
                 out.append(seg("UCD", element.edifact_code,
-                               [str(element.position),
+                               [_in_segment(element.position),
                                 str(element.component) if element.component else ""]))
     return out
+
+
+def _in_segment(position: int) -> str:
+    """A data element's position as S011's 0098 counts it.
+
+    One more than the mock's own, because the standard counts the segment tag:
+    "The segment code and each following simple or composite data element
+    defined in the segment description shall cause the count to be
+    incremented. The segment tag has position number 1." So `QTY01` is 2 here
+    and `BGM03` is 4 (#208).
+
+    0104 beside it is *not* shifted: "the count starts at 1" for a component,
+    with no tag to count, so the second component of C186 is 2 in both
+    numberings. The two components of one composite are counted differently
+    on purpose, which is the whole reason this has its own function.
+    """
+    return str(position + 1)
 
 
 def _worst(item: MessageReport) -> Tuple[str, str]:
