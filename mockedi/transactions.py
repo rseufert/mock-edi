@@ -82,7 +82,9 @@ REQUESTED_EDIFACT = ("2", "17", "10")
 # The date a seller's response puts on a confirmed line: 67, the delivery
 # date its current schedule gives. It was written 2, which says the buyer
 # requested it (#305). Read back from 67 first, then from 2 and 17, which is
-# what this mock wrote before 0.8.0 and what other senders use.
+# what this mock wrote before 0.8.0 and what other senders use. The price of
+# still reading those: a partner whose response dates a line only with 2,
+# meaning to echo what the buyer asked for, is read as having scheduled it.
 SCHEDULED_EDIFACT = "67"
 SCHEDULED_READ_EDIFACT = ("67", "2", "17")
 
