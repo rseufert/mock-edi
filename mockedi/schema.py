@@ -67,10 +67,27 @@ class Element:
     # it: IEA02 repeats ISA13. Declared on the trailer's element, so that the
     # validator's check and the dictionary read one statement of it (#210).
     repeats: str = ""
+    # How many components the standard gives this composite, declared or not -
+    # the component-level `Segment.full_width`, and for the same reason. Most
+    # composites here are deliberately short: D.96A's `C058` holds five
+    # `3124`s and one carries almost every real address, so reporting the
+    # other four as "no component at position" would be the false positive
+    # #54 removed at the segment level. A composite that says its width is
+    # saying it is *complete*, and a component past it then gets code 3.
+    #
+    # Left at 0, a composite's component list is not claimed to be complete
+    # and nothing past it is reported, which is where every composite but
+    # `C506` stands (#186).
+    full_width: int = 0
 
     @property
     def composite(self) -> bool:
         return bool(self.components)
+
+    @property
+    def component_width(self) -> int:
+        """How many components the standard allows, declared here or not."""
+        return max(self.full_width, len(self.components))
 
     def code_meaning(self, value: str) -> str:
         """What a code means, for the human-readable side of an error."""
@@ -1244,8 +1261,9 @@ UOM_FROM_EDIFACT = {"PCE": "EA", "CT": "CA", "BX": "BX", "DZN": "DZ",
                     "MTR": "M", "PF": "PL"}
 
 
-def _c(ref, name, components, req=OPTIONAL):
-    return Element(ref=ref, name=name, type="AN", req=req, components=tuple(components))
+def _c(ref, name, components, req=OPTIONAL, full_width=0):
+    return Element(ref=ref, name=name, type="AN", req=req,
+                   components=tuple(components), full_width=full_width)
 
 
 # -- EDIFACT service segments
@@ -1370,6 +1388,12 @@ BGM = Segment("BGM", "Beginning of Message", (
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("1000", "Document/message name", "AN", 1, 35),
     )),
+    # C106 is a later directory's: D.96A has the number as element 1004 on
+    # its own. It stays until #186 settles where an ORDCHG's change sequence
+    # lives, because the mock writes that sequence in C106's 1060 and reads
+    # it back from there - so declaring this simple would leave the dictionary
+    # and the writer disagreeing, and #288 would then refuse the mock's own
+    # ORDCHG. Where the sequence goes changes bytes, so it is not decided here.
     _c("C106", "Document/Message Identification", (
         _e("1004", "Document/message number", "AN", 1, 35),
         _e("1056", "Version identifier", "AN", 1, 9),
@@ -1400,8 +1424,9 @@ RFF = Segment("RFF", "Reference", (
         _e("1154", "Reference number", "AN", 1, 35),
         _e("1156", "Line number", "AN", 1, 6),
         _e("4000", "Reference version number", "AN", 1, 35),
-        _e("1060", "Revision identifier", "AN", 1, 6),
-    ), MANDATORY),
+    # Four components, and complete: 1060 is a later directory's, so a fifth
+    # here is a reference the D.96A these messages declare cannot carry.
+    ), MANDATORY, full_width=4),
 ), "A reference to something else, named by its qualifier: the order, the seller's "
    "order, a delivery note.")
 
