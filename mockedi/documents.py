@@ -229,6 +229,40 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
 CHANGE_ACTIONS = {"add": "AI", "change": "CA", "delete": "DI"}
 
 
+def _refuse_an_unwritable_change_number(conn, partner_id: str, po_number: str,
+                                        sequence: str) -> None:
+    """Refuse a change the ORDCHG could not carry the number of (#186).
+
+    An ORDCHG identifies itself by the order's number and the sequence
+    together, in BGM's 1004, which D.96A makes `an..35`. A long enough order
+    number overflows it, and then the mock would write a document its own
+    dictionary reports - the fault #291 is about, one element over. Refused at
+    the door instead, the way `/_mock/purchase` refuses what the dictionary
+    would reject (#237).
+
+    EDIFACT only. The 860 carries the sequence in `BCH05` on its own and the
+    order number in `BCH03`, so nothing is packed together and nothing
+    overflows; refusing an X12 change for an EDIFACT limit would be a lie
+    about the document being written.
+    """
+    from . import schema, transactions
+    row = conn.execute("SELECT dialect FROM partner WHERE id = ?",
+                       (partner_id,)).fetchone()
+    if row is None or row["dialect"] != "EDIFACT":
+        return
+    # The width is the dictionary's, read rather than repeated.
+    limit = schema.BGM.elements[1].max_len
+    number = transactions.change_number(po_number, sequence)
+    if len(number) <= limit:
+        return
+    raise Refused([
+        "an ORDCHG for %s would be numbered %r, which is %d characters; "
+        "BGM's 1004 allows %d. A change request is numbered by the order and "
+        "the sequence together, so an order number of %d characters leaves "
+        "no room for one. Place the order under a shorter number."
+        % (po_number, number, len(number), limit, len(po_number))])
+
+
 def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                   request: Dict[str, Any],
                   when: Optional[datetime.datetime] = None):
@@ -252,6 +286,9 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                     currency=order["currency"],
                     sequence=str(db.next_number(conn, "purchase_change",
                                                 "%s/%s" % (partner_id, po_number))))
+
+    _refuse_an_unwritable_change_number(conn, partner_id, po_number,
+                                        change.sequence)
 
     if not isinstance(request.get("cancel", False), bool):
         # "no" is a string, and a string is true.
