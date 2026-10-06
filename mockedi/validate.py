@@ -59,6 +59,9 @@ class ElementFinding:
     value: str
     note: str
     severity: str = ERROR
+    # The 0085 code, where the fault has a word of its own in EDIFACT that
+    # the mapping below would not arrive at from the 723 code.
+    edifact: str = ""
 
     @property
     def edifact_code(self) -> str:
@@ -68,8 +71,9 @@ class ElementFinding:
         too long 39, a character of the wrong type 37. An invalid code, date
         or time is 12, Invalid value.
         """
-        return {"1": "13", "2": "13", "3": "16", "4": "40", "5": "39",
-                "6": "37", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
+        return self.edifact or {
+            "1": "13", "2": "13", "3": "16", "4": "40", "5": "39",
+            "6": "37", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
 
 
 @dataclass
@@ -927,6 +931,25 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
         else:
             value = raw[0] if isinstance(raw, list) and raw else (
                 "" if isinstance(raw, list) else raw)
+            sent = [part for part in raw if part] if isinstance(raw, list) else []
+            if len(sent) > 1:
+                # The parser splits on the component separator wherever it
+                # finds one; it does not know which elements are composites.
+                # This one is not, so the sender put a separator in a simple
+                # element, and what follows reads only the first piece of it.
+                # Said rather than done in silence: the mock would otherwise
+                # read a document differently from how it was sent (#288).
+                #
+                # Only here, for a position the dictionary declares. One past
+                # the declaration and inside the segment's width was passed
+                # over above and is not judged - REF04 really is a composite.
+                findings.append(ElementFinding(
+                    position=position, component=0, ref=element.ref, code="6",
+                    value=str(raw), severity=ERROR, edifact="16",
+                    note="%s is a simple element and arrived with %d "
+                         "components (%s); read as %r"
+                         % (definition.label(position), len(sent),
+                            ", ".join(repr(part) for part in sent), value)))
             findings.extend(_check_value(value, element, position, 0, definition))
 
     if findings:
