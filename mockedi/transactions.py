@@ -960,21 +960,56 @@ def _read_change_x12(message: Message) -> Change:
     return change
 
 
+def change_number(po_number: str, sequence: str) -> str:
+    """The number an ORDCHG identifies itself by: the order's and the sequence.
+
+    D.96A asks the sender to identify the order change uniquely, and the
+    sequence alone does not - every order's first change would be `1`. The
+    order is still named in its own right by `RFF+ON` (#186).
+    """
+    return "%s-%s" % (po_number, sequence or "1")
+
+
+def change_sequence(number: str, po_number: str) -> str:
+    """The sequence back out of a change request's number.
+
+    `change_number`'s inverse, and it has to be, or a change request read
+    and written again would carry `PO4711-PO4711-2`. A number that is not of
+    that shape is taken whole, which is what a partner's own numbering
+    looks like.
+    """
+    prefix = "%s-" % po_number
+    if po_number and number.startswith(prefix):
+        return number[len(prefix):]
+    return number
+
+
 def _read_change_edifact(message: Message) -> Change:
     change = Change()
-    bgm = message.find("BGM")
-    if bgm is not None:
-        change.po_number = bgm.comp(2, 1)
-        # BGM's message function code says whether this is a change or a
-        # cancellation; 1 is cancellation in both dialects' vocabulary.
-        change.purpose = "01" if bgm.get(3) == "1" else "04"
-        change.sequence = bgm.comp(2, 3)
-
     header: List[Seg] = []
     for item in message.body:
         if item.tag == "LIN":
             break
         header.append(item)
+
+    bgm = message.find("BGM")
+    if bgm is not None:
+        # BGM's message function code says whether this is a change or a
+        # cancellation; 1 is cancellation in both dialects' vocabulary.
+        change.purpose = "01" if bgm.get(3) == "1" else "04"
+        # Both forms, during the change and after it (#186). D.96A's: the
+        # order is named by RFF+ON and 1004 is the change request's own
+        # number. The one this mock wrote before: the order number in 1004
+        # and the sequence in a C106 third component D.96A does not have.
+        # A document a buyer sends either way is understood.
+        order_reference = _edifact_rff(header, "ON")
+        named = order_reference.comp(1, 2) if order_reference is not None else ""
+        if bgm.comp(2, 3):
+            change.po_number = bgm.comp(2, 1)
+            change.sequence = bgm.comp(2, 3)
+        else:
+            change.po_number = named or bgm.comp(2, 1)
+            change.sequence = change_sequence(bgm.comp(2, 1), change.po_number)
     for item in header:
         if item.tag == "DTM" and item.comp(1, 1) == "137":
             change.changed_on = _dtm_date(item)
@@ -1325,8 +1360,18 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
     """An ORDCHG.
 
     EDIFACT says "change" and "cancel" in BGM's 1225 rather than in a purpose
-    code of its own, and carries the change's sequence as C106's third
-    component - which is what `_read_change_edifact` reads it back out of.
+    code of its own.
+
+    BGM's 1004 is the change request's *own* number, not the order's: D.96A's
+    note is "a segment by which the sender must uniquely identify the order
+    change by means of its number and when necessary its function", and the
+    order being amended is named by the `RFF+ON` below, which this message has
+    always written. So the number is the order's and the sequence together -
+    `PO4711-2` - because a bare `2` does not uniquely identify anything
+    (#186).
+
+    Before #186 this wrote the order number in 1004 and the sequence in
+    C106's third component, which D.96A's BGM does not have at all.
     """
     po_number = change.po_number or order["po_number"]
     # 230 is "Purchase order change request" in 1001, which is what an ORDCHG
@@ -1334,7 +1379,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
     # 4 rather than 5: "change" is what a buyer amending some lines means, and
     # "replace" would tell the supplier to read the message as the whole order.
     out: List[Seg] = [seg(
-        "BGM", ["230"], [po_number, "", change.sequence or "1"],
+        "BGM", ["230"], change_number(po_number, change.sequence),
         "1" if change.cancels else "4")]
     out.append(seg("DTM", ["137", date_text(change.changed_on)
                            or wire_date(when), "102"]))
