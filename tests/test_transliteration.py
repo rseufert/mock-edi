@@ -138,6 +138,46 @@ class OneTestForEachIdentifier(unittest.TestCase):
         self.assertIn("+??5", nad("UNOB", "Poldis", "Piotrkowska 1", "€5"))
 
 
+class ALetterThatBecomesADelimiter(unittest.TestCase):
+    """`\u0149` is `'n`, and `'` ends a segment.
+
+    Every earlier path in the mock could turn a character only into `?`.
+    This is the first that can turn one that is not a delimiter into one,
+    and the only entry of the table that does (held below). It is safe
+    because `fit` runs before `escape`: the apostrophe is released like any
+    other. Reorder those two and this, not the `?` tests, is what breaks -
+    a stray `?` is harmless and a stray `'` cuts the segment in two. Asked
+    for by Eddie on the review of #318.
+    """
+
+    def test_the_apostrophe_it_brings_is_released(self):
+        # Not through `nad`, which cuts at every apostrophe as a naive
+        # reader would - and so shows what an unreleased one would cost.
+        message = edifact.message(
+            "ORDERS", "1", [seg("NAD", "BY", ["ACME", "", "91"], "",
+                                "A\u0149B")], "D:96A:UN")
+        out = edifact.render(edifact.wrap([message], "MOCKEDI", "ACME", "1",
+                                          syntax="UNOB"))
+        self.assertIn("NAD+BY+ACME::91++A?'nB'UNT", out.replace("\n", ""))
+
+    def test_and_the_document_reads_back_with_the_segment_whole(self):
+        message = edifact.message(
+            "ORDERS", "1", [seg("NAD", "BY", ["ACME", "", "91"], "",
+                                "A\u0149B", "Street", "City")], "D:96A:UN")
+        out = edifact.render(edifact.wrap([message], "MOCKEDI", "ACME", "1",
+                                          syntax="UNOB"))
+        (read,) = [item for _group, item in edifact.parse(out).messages()]
+        (party,) = [item for item in read.segments if item.tag == "NAD"]
+        self.assertEqual((party.get(4), party.get(5), party.get(6)),
+                         ("A'nB", "Street", "City"))
+
+    def test_it_is_the_only_letter_that_does(self):
+        from mockedi.envelope import EDIFACT_DEFAULTS, _LETTERS
+        risky = sorted(letter for letter, plain in _LETTERS.items()
+                       if set(plain) & set(EDIFACT_DEFAULTS.all))
+        self.assertEqual(risky, ["\u0149"])
+
+
 class AValueNeverOutgrowsItsElement(unittest.TestCase):
     """`ß` is `ss`: one character becomes two, and 35 would become 36."""
 

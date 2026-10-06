@@ -241,7 +241,11 @@ def _room(definition, tag: str):
         if element is None:
             return 0
         if not component:
-            # A composite written as a bare value is its first component.
+            # A composite written as a bare value is its first component,
+            # and takes that one's room. Which is not always the room the
+            # text has: C273's first is 7009 at 17 where its text, 7008, is
+            # 35. No writer passes an IMD's composite bare today, and if one
+            # did the error would be on the safe side - less growth.
             return (element.components[0].max_len if element.components
                     else element.max_len)
         if 1 <= component <= len(element.components):

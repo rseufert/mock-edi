@@ -516,6 +516,9 @@ def fit(value: str, charset: str, outside: str = "", fold: bool = False,
     """
     text = "" if value is None else str(value)
     if charset and not text.isascii():
+        # Only with a character set, and that is all that keeps X12 out of
+        # this: `x12.render` calls `render_segment` too, and passes none.
+        #
         # Before folding, so that `\u0142` is `l` and then `L` under level A.
         plain = transliterate(text, charset)
         if len(plain) > len(text) and not (limit and len(plain) <= limit):
