@@ -478,6 +478,37 @@ def billed_more_than_shipped(received: Received) -> None:
                    received.code, received.document.invoice_number))
 
 
+def billed_more_than_ordered(received: Received) -> None:
+    """Per line, everything billed so far against what the mock asked for.
+
+    Separate from the rule above, and both can fire on one line: a seller
+    that ships 130 against an order for 100 and bills the 130 has billed no
+    more than it shipped, and the invoice was then clean - the only trace was
+    on the despatch, a document earlier and of another kind (#309).
+
+    What was ordered is the order line as it stands. A confirmation of more
+    does not raise it: that is the seller's statement, with a disagreement of
+    its own, and a seller could otherwise make an over-bill clean by
+    announcing it first.
+
+    Unlike the rule above it does not wait for a despatch, because the
+    order's quantity is known from the start. Not for a repeated invoice,
+    which is the same bill rather than more of it.
+    """
+    if _repeated(received):
+        return
+    billed_before = _billed(_earlier(received, schema.INVOICE))
+    for claim, row in _known(received):
+        ordered = number(row["quantity"])
+        billed = billed_before.get(claim.line, Decimal("0")) + claim.quantity
+        if billed > ordered:
+            received.disagree(
+                "billed-more-than-ordered", claim.line, ordered, billed,
+                "line %s: ordered %s, %s billed with %s %s"
+                % (claim.line, quantity_text(ordered), quantity_text(billed),
+                   received.code, received.document.invoice_number))
+
+
 def price_not_agreed(received: Received) -> None:
     """A price that is neither what the mock ordered at nor what was confirmed."""
     answers = [claim for claim in received.earlier if claim["kind"] in ANSWERS]
@@ -683,6 +714,6 @@ RULES: Dict[str, List[Callable[[Received], None]]] = {
                       shipped_more_than_confirmed,
                       shipped_more_than_ordered],
     schema.INVOICE: [billed_before_shipped, invoice_repeated,
-                     billed_more_than_shipped, price_not_agreed, total_not_lines,
-                     billed_cancelled],
+                     billed_more_than_shipped, billed_more_than_ordered,
+                     price_not_agreed, total_not_lines, billed_cancelled],
 }
