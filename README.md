@@ -453,10 +453,21 @@ to has nothing to mirror, and an answer that depended on which document
 arrived first would undo what `--start-at` is for. X12 declares no character
 set at all, so the field is ignored for an X12 partner.
 
-`UNOA` is refused, and the refusal says why: level A is ISO 646 *without lower
-case*, which is a repertoire rather than an encoding, and the mock cannot yet
-hold a document to one. `UNOB` is the same repertoire with lower case and is
-written the same way on the wire.
+`UNOA` is refused, and the refusal says why:
+
+```
+the mock will not answer in UNOA: level A has no lower case, and the mock
+cannot yet hold a document to that - see #295. UNOB is the same repertoire
+with lower case, and is written the same way on the wire.
+```
+
+Level A is ISO 646 *without lower case*, which is a repertoire rather than an
+encoding — a set of permitted characters, not a way of turning them into
+bytes — and the mock has nothing to check a document against one with yet.
+Declaring `UNB+UNOA:3` above a description level A cannot carry is the kind of
+thing a partner discovers in production, so the mock declines instead. An
+unknown identifier is refused too, and the refusal lists the ones it answers
+in.
 
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
