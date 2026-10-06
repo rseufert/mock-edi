@@ -469,6 +469,20 @@ serves the same two numbers on each row, as `shipment_id` and
 `invoice_number`, and so does a row collected from `/_mock/mailbox`: whoever
 collects an 810 is told which invoice it is, without parsing it.
 
+What was done says which promise it kept. A `promised` event has `promise`,
+its id, which is the `id` `/_mock/scheduled` serves for it; and a `packed`,
+an `invoiced`, and a document the mock sent carry the `promise` they were
+done in keeping. An order shipped and then changed to a larger quantity holds
+two promises to despatch, and each consignment and each 856 names its own.
+The promise is the one in whose keeping the thing happened, which is not
+always one of its own kind: a seller that bills before it despatches packs in
+keeping the invoice's promise. One promise to invoice can raise two invoices,
+when two consignments are waiting to be billed. `promise` is `null` where
+none was being kept: an answer sent at once, a document sent with
+`/_mock/send`, or anything in a `--db` file written before 0.8.0. A row
+from `/_mock/documents` or collected from `/_mock/mailbox` has the same
+number as `promise_id`, where 0 means none.
+
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
 happened in.
@@ -984,6 +998,7 @@ the 856:
 | --- | --- |
 | `billed-before-shipped` | no 856 has arrived for the order |
 | `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
+| `billed-more-than-ordered` | a line billed, over every invoice so far, beyond what was ordered, whether or not anything has shipped; both quantity rules can fire on one invoice. What was ordered is the order as it stands: a confirmation of more does not raise it, a change the mock sent does |
 | `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
 | `total-not-lines` | MOA+79 is not the sum of the lines, or the total (TDS01, MOA+139) is not the lines plus allowances and charges (SAC, ALC) plus tax; not judged when an allowance gives only a percentage |
 | `invoice-repeated` | an invoice number already received for the order; it is counted once |
