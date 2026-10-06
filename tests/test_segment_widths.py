@@ -37,29 +37,91 @@ def element_problems(tag, *elements, **kwargs):
             if "no element at position" in line]
 
 
+# How many elements the standard gives every X12 segment the dictionary
+# declares: (004010, 005010). Counted as the highest position in two published
+# copies, which agree on every row (#202): Stedi's reference, at
+# stedi.com/edi/x12-004010/segment/<TAG> and .../x12-005010/segment/<TAG>,
+# and the bots translator's grammars, x12/4010/records004010.py and
+# x12/5010/records005010.py in github.com/bots-edi/bots-grammars.
+STANDARD = {
+    "ST": (2, 3), "SE": (2, 2), "BEG": (12, 12), "BAK": (10, 10),
+    "BCH": (16, 16), "BCA": (15, 15), "POC": (27, 27), "BSN": (7, 7),
+    "BIG": (10, 11), "CUR": (21, 21), "REF": (4, 4), "PER": (9, 9),
+    "FOB": (9, 9), "DTM": (6, 6), "N1": (6, 6), "N2": (2, 2), "N3": (2, 2),
+    "N4": (6, 7), "PO1": (25, 25), "PID": (9, 9), "PO4": (18, 18),
+    "ACK": (29, 29), "CTT": (7, 7), "HL": (4, 4), "TD1": (10, 10),
+    "TD5": (15, 15), "TD3": (10, 10), "PRF": (7, 7), "LIN": (31, 31),
+    "SN1": (8, 8), "IT1": (25, 25), "ITD": (15, 15), "TXI": (10, 10),
+    "SAC": (16, 16), "TDS": (4, 4), "CAD": (9, 9), "BPR": (21, 21),
+    "TRN": (4, 4), "ENT": (9, 9), "RMR": (8, 8), "ADX": (4, 4),
+    "AK1": (2, 3), "AK2": (2, 3), "AK3": (4, 4), "AK4": (4, 4),
+    "AK5": (6, 6), "AK9": (9, 9), "ISA": (16, 16), "GS": (8, 8),
+    "GE": (2, 2), "IEA": (2, 2), "TA1": (5, 5),
+}
+VERSIONS = ("004010", "005010")
+
+
+def declared(version):
+    """Every X12 segment the dictionary declares, as it stands at a version."""
+    found = {}
+    for code in schema.X12_SETS:
+        for use, _loop in schema.lookup("X12", code, version).uses():
+            found[use.tag] = use.segment
+    for use in schema.ENVELOPES["X12"]:
+        found[use.tag] = use.segment
+    found["TA1"] = schema.TA1
+    return found
+
+
+def beyond(definition, count):
+    """Where a segment of `count` elements is told it has one too many."""
+    item = seg(definition.tag, *["X"] * count)
+    report = validate.MessageReport(code="850", control="0001")
+    validate._check_elements(item, definition, "", report)
+    return [element.position for finding in report.segments
+            for element in finding.elements
+            if "no element at position" in element.note]
+
+
 class TheWidthTheStandardGives(unittest.TestCase):
-    """The nine segments the dictionary deliberately stops short of."""
+    """Every declared segment is as wide as the standard makes it (#202)."""
 
-    EXPECTED = {"SAC": 16, "PO4": 18, "TD5": 15, "ITD": 15, "N1": 6,
-                "CTT": 7, "PO1": 25, "IT1": 25, "LIN": 31}
+    def test_the_table_covers_every_segment_the_dictionary_declares(self):
+        for version in VERSIONS:
+            self.assertEqual(set(declared(version)), set(STANDARD), version)
 
-    def test_each_declares_it(self):
-        for tag, width in self.EXPECTED.items():
-            definition = getattr(schema, tag)
-            self.assertEqual(definition.width, width, tag)
+    def test_each_is_as_wide_as_the_standard_at_each_version(self):
+        for index, version in enumerate(VERSIONS):
+            for tag, definition in sorted(declared(version).items()):
+                with self.subTest(version=version, tag=tag):
+                    self.assertEqual(definition.width, STANDARD[tag][index])
 
-    def test_and_each_is_still_shorter_than_it(self):
-        # If one of these ever gets completed, its full_width becomes noise
-        # and should go - the guard is here so that nobody has to remember.
-        for tag in self.EXPECTED:
-            definition = getattr(schema, tag)
-            self.assertLess(len(definition.elements), definition.width, tag)
+    def test_a_full_width_segment_draws_no_finding(self):
+        for index, version in enumerate(VERSIONS):
+            for tag, definition in sorted(declared(version).items()):
+                with self.subTest(version=version, tag=tag):
+                    self.assertEqual(beyond(definition, STANDARD[tag][index]), [])
+
+    def test_and_one_element_wider_is_still_error_3(self):
+        for index, version in enumerate(VERSIONS):
+            for tag, definition in sorted(declared(version).items()):
+                with self.subTest(version=version, tag=tag):
+                    width = STANDARD[tag][index]
+                    self.assertEqual(beyond(definition, width + 1), [width + 1])
+
+    def test_a_width_is_said_only_where_the_definition_stops_short(self):
+        # If a segment ever gets completed, its full_width becomes noise and
+        # should go - the guard is here so that nobody has to remember.
+        for tag, definition in sorted(declared("004010").items()):
+            if definition.full_width:
+                with self.subTest(tag=tag):
+                    self.assertLess(len(definition.elements), definition.width)
 
     def test_a_complete_definition_needs_no_width(self):
-        # BEG declares all five of its elements, so its width is its length
+        # TDS declares all four of its elements, so its width is its length
         # with nothing extra said.
-        self.assertEqual(schema.BEG.full_width, 0)
-        self.assertEqual(schema.BEG.width, len(schema.BEG.elements))
+        self.assertEqual(schema.TDS.full_width, 0)
+        self.assertEqual(schema.TDS.width, len(schema.TDS.elements))
 
 
 class AnUndeclaredElementInsideTheWidth(unittest.TestCase):
@@ -91,6 +153,32 @@ class AnUndeclaredElementInsideTheWidth(unittest.TestCase):
                              "VP", "WIDGET-001", "UP", "076123400003",
                              "BP", "B1", "EN", "E1", "IN", "I1", "MG", "M1"),
             [])
+
+
+class TheOrderThatWasRefused(unittest.TestCase):
+    """The segments #202 was reported with, in the order it was reported on."""
+
+    EXTRA = [seg("PER", "BD", "Jane Doe", "TE", "6145550100", "EM",
+                 "jane@acme.example"),
+             seg("N1", "SF", "Acme Plant 2", "92", "ACME-P2"),
+             seg("N4", "Columbus", "OH", "43217", "US", "SL", "DOCK4"),
+             seg("PID", "F", "", "", "", "Widget", "", "", "", "EN")]
+
+    def test_a_contact_a_dock_and_a_language_are_not_too_many_elements(self):
+        self.assertEqual(
+            [line for line in findings_for("REF", "DP", "042", "Housewares", "",
+                                           po_number="WIDTH-202")
+             if "no element at position" in line], [])
+        payload = x12_order("WIDTH-202", extra=self.EXTRA)
+        report = validate.validate(x12.parse(payload))
+        self.assertEqual([line for line in ack.explain(report)
+                          if "no element at position" in line], [])
+
+    def test_n407_is_an_element_in_005010_and_not_in_004010(self):
+        full = ["Columbus", "OH", "43217", "US", "SL", "DOCK4", "OH"]
+        self.assertEqual(beyond(declared("005010")["N4"], 7), [])
+        self.assertEqual(beyond(declared("004010")["N4"], 7), [7])
+        self.assertEqual(len(full), 7)
 
 
 class AnElementBeyondTheWidth(unittest.TestCase):
@@ -160,7 +248,13 @@ class TheDictionarySaysWhichIsWhich(MockServerCase):
     def test_a_complete_segment_reports_the_same_number_twice(self):
         _status, _headers, data = self.get("/_mock/dictionary/X12/850")
         rows = {row["tag"]: row for row in data["segments"]}
-        self.assertEqual(rows["BEG"]["width"], rows["BEG"]["checkedTo"])
+        self.assertEqual(rows["N3"]["width"], rows["N3"]["checkedTo"])
+
+    def test_a_segment_that_was_narrow_says_how_far_it_is_checked(self):
+        _status, _headers, data = self.get("/_mock/dictionary/X12/850")
+        rows = {row["tag"]: row for row in data["segments"]}
+        self.assertEqual((rows["PER"]["width"], rows["PER"]["checkedTo"]), (9, 4))
+        self.assertEqual((rows["BEG"]["width"], rows["BEG"]["checkedTo"]), (12, 7))
 
 
 class TheOrderIsStillProcessed(MockServerCase):
