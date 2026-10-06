@@ -92,7 +92,7 @@ ST*855*0002~
 BAK*00*AD*4500000042*20260924****5100002*20260924~
 ...
 PO1*1*100*EA*12.50**VP*WIDGET-001*UP*076123400003~
-ACK*IA*100*EA*068*20260926~
+ACK*IA*100*EA*067*20260926~
 ```
 
 Run it from a checkout with no install at all, or in a container:
@@ -879,7 +879,7 @@ be fulfilled as the order it withdraws.
 
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
-ACK*IA*60*EA*068*20260926~                 the seller agrees
+ACK*IA*60*EA*067*20260926~                 the seller agrees
 POC*2*DI*40**EA*4.15**VP*BRKT-050~         the buyer drops line 2
 ACK*IR*0*EA~
 REF*ZZ**Line deleted at the buyer's request~
@@ -1250,6 +1250,20 @@ the interchange is still read; that is the mock's choice, since receivers
 differ. On the EDIFACT side a `UNZ` that miscounts, names another interchange
 or never arrives rejects the interchange in the CONTRL's `UCI`, with `0085`
 codes 29, 28 and 13.
+
+**A simple element that arrives in pieces is reported.** The component
+separator means something only inside a composite. An element the standard
+makes simple, sent with one in it - `REF*ZZ*A>B` where `ISA16` is `>`, or a
+`BGM` whose message function is `9:X` - is read as its first piece, as it
+always was, and now says so: `REF02 is a simple element and arrived with 2
+components ('A', 'B'); read as 'A'`, with `AK403` 6 in a 997 and `0085` 16 in
+a CONTRL. It is an error and not a fatal one, so the set is accepted with
+errors unless the partner is `strict`. Only a position the dictionary
+declares is judged: one past the declaration and inside the segment's width
+is carried and not checked, because the standard may have a composite there,
+as it does at `REF04`. Free text that contains the sender's own separator is
+the usual way to meet this, and a real translator on the other side would
+split it too.
 
 Two limits, stated plainly: loop *membership* and repetition counts are
 checked but loop *sequence* is not, and conditional requirements ("if PO104 is

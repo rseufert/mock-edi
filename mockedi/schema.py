@@ -258,12 +258,19 @@ UOM_CODES = {              # 355
     "PC": "Piece", "DZ": "Dozen", "LB": "Pound", "KG": "Kilogram",
     "GA": "Gallon", "FT": "Foot", "M": "Metre", "PL": "Pallet",
 }
+# The names are the standard's, from four published copies of element 374
+# that agree (#229). Two things here were once wrong and are worth knowing
+# about: 068 carried 067's name, and 137 carried the meaning it has in
+# EDIFACT's 2005 - in X12 it is a supplier rating, not a date of issue, and
+# it is listed only so that a partner's document carrying it is named for
+# what it says. The mock writes neither 068 nor 137.
 DATE_QUALIFIER_CODES = {   # 374
-    "002": "Delivery Requested", "010": "Requested Ship", "011": "Shipped",
-    "017": "Estimated Delivery", "035": "Delivered", "037": "Ship Not Before",
-    "038": "Ship No Later Than", "068": "Current Schedule Delivery",
-    "118": "Requested Pick Up", "137": "Document/Message Date",
-    "003": "Invoice",
+    "002": "Delivery Requested", "003": "Invoice", "010": "Requested Ship",
+    "011": "Shipped", "017": "Estimated Delivery", "035": "Delivered",
+    "037": "Ship Not Before", "038": "Ship No Later",
+    "067": "Current Schedule Delivery", "068": "Current Schedule Ship",
+    "097": "Transaction Creation", "118": "Requested Pick-up",
+    "137": "Delivery Rating",
 }
 ENTITY_CODES = {           # 98
     "BY": "Buying Party", "SE": "Selling Party", "ST": "Ship To",
@@ -357,6 +364,11 @@ def _e(ref, name, type="AN", min_len=1, max_len=80, req=OPTIONAL, codes=None,
     return Element(ref=ref, name=name, type=type, min_len=min_len,
                    max_len=max_len, req=req, codes=codes, components=components,
                    repeats=repeats)
+
+
+def _c(ref, name, components, req=OPTIONAL, full_width=0):
+    return Element(ref=ref, name=name, type="AN", req=req,
+                   components=tuple(components), full_width=full_width)
 
 
 def _product_ids(count: int, req_first: str = OPTIONAL) -> Tuple[Element, ...]:
@@ -461,7 +473,17 @@ POC = Segment("POC", "Line Item Change", (
        CHANGE_TYPE_CODES),
     _e("330", "Quantity Ordered", "R", 1, 15),
     _e("671", "Quantity Left to Receive", "R", 1, 9),
-    _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
+    # A composite in X12, unlike PO103: C001 can state a unit as a product of
+    # up to five, each with an exponent and a multiplier. Almost every POC
+    # carries the one unit and nothing else, which reads the same either way;
+    # it is declared as what it is so that a sender who does use the rest is
+    # not told a simple element arrived in pieces (#288).
+    _c("C001", "Composite Unit of Measure", (
+        _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, MANDATORY,
+           UOM_CODES),
+        _e("1018", "Exponent", "R", 1, 15),
+        _e("649", "Multiplier", "R", 1, 10),
+    )),
     _e("212", "Unit Price", "R", 1, 17),
     _e("639", "Basis of Unit Price Code", "ID", 2, 2),
 ) + _product_ids(5), "One line of the change: which line, what to do to it, "
@@ -814,7 +836,12 @@ AK3 = Segment("AK3", "Data Segment Note", (
 ), "Which segment was wrong, counted from ST as segment 1.")
 
 AK4 = Segment("AK4", "Data Element Note", (
-    _e("722", "Element Position in Segment", "N0", 1, 2, MANDATORY),
+    # C030: the element's position, and the component's within it when the
+    # fault is inside a composite. 005010 adds a third, the repetition.
+    _c("C030", "Position in Segment", (
+        _e("722", "Element Position in Segment", "N0", 1, 2, MANDATORY),
+        _e("1528", "Component Data Element Position in Composite", "N0", 1, 2),
+    ), MANDATORY),
     _e("725", "Data Element Reference Number", "N0", 1, 4),
     _e("723", "Data Element Syntax Error Code", "ID", 1, 3, MANDATORY, ELEMENT_ERROR_CODES),
     _e("724", "Copy of Bad Data Element", "AN", 1, 99),
@@ -1275,11 +1302,6 @@ EDIFACT_UOM_CODES = {     # 6411
     "LBR": "Pound", "KGM": "Kilogram", "GLL": "Gallon", "FOT": "Foot",
     "MTR": "Metre", "PF": "Pallet",
 }
-
-
-def _c(ref, name, components, req=OPTIONAL, full_width=0):
-    return Element(ref=ref, name=name, type="AN", req=req,
-                   components=tuple(components), full_width=full_width)
 
 
 # -- EDIFACT service segments
