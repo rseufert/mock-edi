@@ -20,6 +20,7 @@ lock while a route runs, and logs the answer.
 """
 from __future__ import annotations
 
+import contextlib
 import datetime
 import hmac
 import json
@@ -77,6 +78,9 @@ class Config:
     invoice_delay_ms: int = 0
     mdn: bool = True
     deliver_timeout: float = 10.0
+    # Post nothing until asked: released documents and asynchronous MDNs
+    # wait, and `POST /_mock/deliver` sends them one at a time (#271).
+    hold_delivery: bool = False
     # Hosts the courier may POST to. Empty means anywhere, which is what a
     # laptop wants. A mock reachable from a network is a different matter: it
     # posts released documents to whatever `as2_url` a partner carries, and
@@ -121,7 +125,8 @@ class Mock:
         self.conn = db.connect(config.db_path)
         db.seed(self.conn, config.seed_value, config.as2_id)
         self.pipeline = pipeline.Pipeline(self.conn, config)
-        self.courier = delivery.Courier(self.pipeline, config.deliver_timeout)
+        self.courier = delivery.Courier(self.pipeline, config.deliver_timeout,
+                                        held=config.hold_delivery)
         self.dropbox = drop.DropBox(
             self.pipeline, config.drop_dir, config.pickup_dir,
             config.drop_settle_ms, config.drop_interval_ms)
@@ -211,6 +216,21 @@ class Mock:
         with self.lock:
             self.conn.close()
         return stuck
+
+    @contextlib.contextmanager
+    def unlocked(self):
+        """Let go of the lock a request handler is answered under, for a wait.
+
+        A route runs with the lock held, which is right for everything that
+        reads and writes the database and wrong for the one that waits on the
+        courier: the courier needs the lock to record what it delivered. The
+        handler holds it exactly once, so one release is a release.
+        """
+        self.lock.release()
+        try:
+            yield
+        finally:
+            self.lock.acquire()
 
     def reset(self) -> None:
         """Back to a freshly seeded system, without restarting the process."""

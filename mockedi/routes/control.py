@@ -20,6 +20,7 @@ def health(h) -> Tuple[int, int]:
         "started": db.stamp(h.mock.started),
         "partners": _count(conn, "partner"),
         "queued": _count(conn, "outbound", "status = 'ready'"),
+        "deliveryHeld": h.config.hold_delivery,
     })
 
 
