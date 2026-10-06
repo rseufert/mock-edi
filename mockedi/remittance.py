@@ -133,7 +133,14 @@ def read(message: Message, dialect: str) -> Advice:
             if within == "DOC" and advice.invoices:
                 advice.invoices[-1].currency = (
                     advice.invoices[-1].currency or item.comp(1, 2) or None)
-            elif within not in ("DOC", "AJT"):
+            elif not within:
+                # The header's own: before any DOC, AJT or UNS. Not `within
+                # not in ("DOC", "AJT")`, which counted a CUX *after* UNS as
+                # the header's and so could report a disagreement about a
+                # segment that is not a header CUX at all. The dictionary
+                # declares none in the summary section, but the validator
+                # checks which segments a set may hold and not where they
+                # sit, so the reader cannot lean on that.
                 header.append((item.comp(1, 1), item.comp(1, 2) or None))
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:

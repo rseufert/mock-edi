@@ -140,6 +140,75 @@ class ADocumentStatingItsOwnCurrency(MockServerCase):
         self.assertIsNone(row["invoices"][0]["currency"])
 
 
+class WhichLoopACUXBelongsTo(unittest.TestCase):
+    """Both loops begin on `CUX`, and the validator does not check sequence.
+
+    So which loop a `CUX` falls into is decided by the reader's position in
+    the message, and that wants testing rather than reasoning about — the
+    senior's question on the pull request. Position is the right basis: an
+    EDIFACT segment group *is* positional, and a `CUX` after the first `DOC`
+    is inside that `DOC`'s group by definition.
+
+    The last case is the one the question found. A stray `CUX` after `UNS`
+    was being counted as the header's, which would report a disagreement
+    about a segment that is not a header `CUX` at all. The dictionary
+    declares none in the summary section, but the validator checks which
+    segments a set may hold and not where they sit, so it accepts the
+    document and the reader cannot lean on it.
+    """
+
+    def read(self, *body):
+        payload = edifact.render(edifact.wrap(
+            [edifact.message("REMADV", "1", list(body), version="D:96A:UN")],
+            EURODIS, "MOCKEDI", _next_control(4)))
+        _group, message = list(edifact.parse(payload).messages())[0]
+        return remittance.read(message, "EDIFACT")
+
+    HEAD = (seg("BGM", ["481"], ["RA-WHICH"], "9"),
+            seg("DTM", ["137", "20260928", "102"]),
+            seg("NAD", "PR", ["EURODIS", "", "92"]),
+            seg("NAD", "PE", ["MOCKEDI", "", "92"]))
+    DOC = (seg("DOC", ["380"], ["INV1"]), seg("MOA", ["12", "1.00"]))
+    TAIL = (seg("UNS", "S"), seg("MOA", ["12", "1.00"]))
+
+    def test_before_the_first_doc_it_is_the_headers(self):
+        advice = self.read(*self.HEAD, seg("CUX", ["2", "EUR", "11"]),
+                           *self.DOC, *self.TAIL)
+        self.assertEqual(advice.header_currencies, ["EUR"])
+        self.assertIsNone(advice.invoices[0].currency)
+
+    def test_after_the_first_doc_it_is_that_documents(self):
+        advice = self.read(*self.HEAD, *self.DOC,
+                           seg("CUX", ["2", "GBP", "11"]), *self.TAIL)
+        self.assertEqual(advice.header_currencies, [])
+        self.assertEqual(advice.invoices[0].currency, "GBP")
+
+    def test_both_at_once_are_not_conflated(self):
+        advice = self.read(*self.HEAD, seg("CUX", ["2", "EUR", "11"]),
+                           *self.DOC, seg("CUX", ["2", "GBP", "11"]),
+                           *self.TAIL)
+        self.assertEqual(advice.header_currencies, ["EUR"])
+        self.assertEqual(advice.invoices[0].currency, "GBP")
+
+    def test_each_document_gets_its_own(self):
+        advice = self.read(
+            *self.HEAD, seg("CUX", ["2", "EUR", "11"]),
+            seg("DOC", ["380"], ["INV1"]), seg("MOA", ["12", "1.00"]),
+            seg("CUX", ["2", "GBP", "11"]),
+            seg("DOC", ["380"], ["INV2"]), seg("MOA", ["12", "1.00"]),
+            seg("CUX", ["2", "USD", "11"]), *self.TAIL)
+        self.assertEqual([(item.invoice, item.currency)
+                          for item in advice.invoices],
+                         [("INV1", "GBP"), ("INV2", "USD")])
+
+    def test_a_stray_cux_after_uns_is_nobodys(self):
+        advice = self.read(*self.HEAD, seg("CUX", ["2", "EUR", "11"]),
+                           *self.DOC, *self.TAIL,
+                           seg("CUX", ["2", "GBP", "11"]))
+        self.assertEqual(advice.header_currencies, ["EUR"])
+        self.assertIsNone(advice.invoices[0].currency)
+
+
 class TheComparisonIsPerDocument(MockServerCase):
     """An advice can now be right about one invoice and wrong about another."""
 
