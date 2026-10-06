@@ -166,6 +166,20 @@ until a whole pass changes nothing, and raises with what each side still holds
 rather than hanging. Pass `advance=False` for a test about *when* something
 arrives rather than about what.
 
+When the test is about the state *between* two hops of that conversation,
+start the mocks held and send one document at a time:
+
+```python
+seller = Mock.start(as2_id="SELLCO", hold_delivery=True)
+buyer = Mock.start(as2_id="BUYCO", hold_delivery=True)
+...
+buyer.step()                    # the 850 goes; {"code": "850", "status": "delivered", ...}
+seller.timeline("4500000042")   # the seller has promised, and nobody has answered it
+seller.step()                   # its 997
+```
+
+See [One document at a time](#one-document-at-a-time).
+
 `Mock("http://host:9000")` talks to one that is already running, wherever it
 is. `Mock.start(**config)` starts one on a port the OS picks and stops it
 again, and takes the same keywords as the command line.
@@ -202,6 +216,7 @@ Both are walked through, test by test, in
 | Validate only | `POST /_mock/validate` — findings, and nothing changed |
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet; `POST /_mock/outbox/<id>/retry` for a failed delivery, `POST /_mock/outbox/<id>/resend` to send one again unchanged |
+| Deliver one | `POST /_mock/deliver` — with `--hold-delivery`, send the next held document or asynchronous MDN and say what it was; `?all` sends everything held |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
@@ -363,7 +378,9 @@ GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
 them. So is every date and time inside a document - `BAK09`, `BSN03/04`,
 `BIG01`, an ORDRSP's `DTM+137` - which is the mock's clock read in the host's
-zone, so a document and its envelope always name the same day. A date a
+zone, so a document and its envelope always name the same day. (A mock
+started with `--start-at` reads them in the zone its start time is written
+in instead, so that they do not depend on the machine.) A date a
 partner sends without a zone is read the same way: `BPR16` is compared with
 the day the mock would write today.
 
@@ -461,6 +478,7 @@ what the mock did.
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
 | `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
+| `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
 | `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
 | `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
@@ -531,6 +549,61 @@ leaves the clock where it was. A parameter the endpoint does not take is a
 `partner` with `failed` - so `?days=30` is refused and told what it is in
 seconds, where it used to answer 200 and move nothing.
 
+### Starting the clock at a chosen time
+
+Left alone, the clock is the host's, so no two runs of a script carry the
+same dates. Give the mock a start time and it does not follow the host at
+all:
+
+```bash
+mock-edi --start-at 2026-11-02T09:00:00Z
+```
+
+```python
+with Mock.start(start_at="2026-11-02T09:00:00Z") as mock: ...
+```
+
+The clock reads that time until it is advanced, and after an advance it
+stands at the new time. **Two runs of the same script from a fresh start
+write the same documents, byte for byte, and the same timeline**, on any day
+and on any machine.
+
+- **The time is ISO 8601 with a `Z` or an offset.** One with neither is
+  refused at start: read as UTC or as the host's zone it would be a guess.
+- **The zone it is written in is the zone documents are dated in.**
+  `...T09:00:00Z` dates them in UTC; `...T09:00:00+01:00` in +01:00, with no
+  daylight saving. The host's zone has no say, which is what makes a capture
+  the same on a laptop and in CI. (Without `--start-at`, document dates are
+  in the host's zone, as [Timestamps](#timestamps) says.) So the same
+  instant written two ways can date documents a day apart:
+  `2026-11-02T00:30:00+01:00` dates them 2 November and
+  `2026-11-01T23:30:00Z` dates them 1 November.
+- **Many events share one time.** Everything between two advances carries the
+  same `at`. The timeline's order is still the order things happened in: it
+  is decided by a sequence the mock keeps, not by the time.
+- **`/_mock/advance` is unchanged.** `?seconds=N` and `?all` move the clock
+  from where it stands. `/_mock/reset` puts it back to the start time.
+  `/_mock/state` says where it is under `clock`: `now`, `startAt` (`null`
+  when there is none) and `advancedSeconds`.
+- **A `--db` file keeps the clock it was started on.** Started again with the
+  same `--start-at`, it comes back as far on as it was left. A different
+  start time, or none, is refused and names the one the file has; so is a
+  start time for a file that has already traded by the host's clock.
+
+**What follows the start time:** every `at` and `due_at`; `ISA09`/`10`,
+`GS04`/`05` and the `UNB` date and time; every date inside a document the
+mock writes, the orders it places with `/_mock/purchase` included; the dates
+of the seeded demo orders; and the date an MDN states.
+
+**What does not**, and so differs between two runs:
+
+| | Why |
+| --- | --- |
+| The request log's `at` (`/_mock/requests`), and `started` in `/_mock/health` | About the process, not the conversation. |
+| The HTTP `Date` header on the mock's responses | Written by the HTTP server. |
+| The AS2 `Date` header on a document or an asynchronous MDN the mock posts | When it was posted, which is the host's business. |
+| An MDN's `Message-ID` and MIME boundary | Random. A document's own AS2 `Message-ID` is a counter and does repeat. |
+
 ## AS2
 
 ```bash
@@ -589,6 +662,59 @@ curl -X PATCH -H 'Content-Type: application/json' \
 Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
+
+## One document at a time
+
+The courier posts each document as soon as it is released. Wire two mocks to
+each other and one `settle()` runs the whole rally: the seller makes its
+promises on receipt of the 850, the buyer answers the 855 with a 997, and
+both have happened before anything outside can look. The two events sit in
+different mocks with the same time on them, so nothing orders them afterwards.
+
+Start a mock with `--hold-delivery` (`Mock.start(hold_delivery=True)`) and it
+posts nothing until it is asked. What it releases stays `ready`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/deliver          # the next one
+curl -X POST "http://127.0.0.1:8080/_mock/deliver?all"    # everything held, in order
+```
+
+```json
+{"sent": {"type": "document", "id": 2, "partner": "ACME", "code": "855",
+          "kind": "response", "reference": "4500000042", "control": "2",
+          "messageId": "<...>", "to": "http://localhost:9000/as2",
+          "status": "delivered", "note": "MDN: ...; processed"},
+ "waiting": 2}
+```
+
+One step is one POST of the mock's own, and the answer comes once that one
+has finished, `delivered` or `failed`. With nothing to send the answer is
+`{"sent": null, "waiting": 0}`, at once, so a loop over it ends:
+`while mock.step(): ...`.
+
+- **"Next" is what an unheld mock would have posted next.** The courier has
+  one queue, first in, first out, and a held one keeps the same queue: the
+  order of release, which for documents released together is their order in
+  the outbox. After a restart on a `--db` file it is documents by id, then
+  asynchronous MDNs by id.
+- **An asynchronous MDN is its own step.** It is its own POST, queued behind
+  what was already waiting, and its `sent` has `"type": "mdn"`. A read
+  between the two steps shows the document delivered and the receipt still
+  `pending`. A synchronous MDN is the HTTP response to the document it
+  answers and travels with it.
+- **A retry is held too, and so is a resend.** `/_mock/outbox/<id>/retry`,
+  `/_mock/outbox/<id>/resend` and `/_mock/advance?failed` put the document
+  back on the end of the queue and answer as they always did; it goes when
+  it is stepped. So does anything `/_mock/advance` releases.
+- **`settle()` and `exchange()` raise on a held mock**, at once, naming the
+  hold. They wait for deliveries, and a held mock makes none on its own.
+- **What is not held:** receiving (the mock answers what it is sent, MDN
+  included), the mailbox (a partner with no `as2_url` collects as before, and
+  a step passes its documents over), and `--pickup-dir`, where a released
+  document is written at once.
+- **Only at start.** A running mock cannot be switched between held and not;
+  `?all` lets the rest go. `POST /_mock/deliver` on a mock that is not held is
+  a `409`, and `/_mock/health` says `"deliveryHeld"`.
 
 ## A delivery that failed can be tried again
 
@@ -1122,8 +1248,10 @@ everything in memory.
 | --- | --- |
 | `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. The password may hold any characters; a client may send it as UTF-8 or as Latin-1. |
 | `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed: a partner `as2_url` outside the list is refused by the control plane with a `400`, a document already bound for one fails without being posted, and a `Receipt-Delivery-Option` outside it is refused with a failure MDN. |
+| `--hold-delivery` | Post nothing until asked. Released documents and asynchronous MDNs wait, in order, and `POST /_mock/deliver` sends the next one and says what it was. For reading the state between two hops of a conversation between two mocks. See [One document at a time](#one-document-at-a-time). |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
+| `--start-at TIME` | Start the mock's clock at this time and hold it there until it is advanced: `2026-11-02T09:00:00Z`, or with an offset. Two runs of one script then write the same documents and the same timeline. Documents are dated in the zone written here, not the host's. See [Starting the clock at a chosen time](#starting-the-clock-at-a-chosen-time). |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
 | `--no-request-log` | Keep requests out of the `request_log` table, and out of `/_mock/requests`. |
 

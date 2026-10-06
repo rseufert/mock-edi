@@ -10,6 +10,7 @@ a purchase order is.
 """
 from __future__ import annotations
 
+import datetime
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
@@ -432,6 +433,37 @@ def seg(tag: str, *elements: Value) -> Seg:
 
 # -- date and time, in the shapes both dialects use
 
+class DocumentZone(datetime.tzinfo):
+    """The zone a pinned mock dates its documents in: a fixed offset from UTC.
+
+    A mock started at a chosen time (`--start-at`) has to write the same
+    dates on any machine, so it cannot read them off the host's zone. It
+    reads them in the zone its start time was written in instead, and its
+    clock hands out moments carrying this, which `local` leaves as they are
+    (#280). No daylight saving: an offset is an offset.
+    """
+
+    def __init__(self, offset: datetime.timedelta):
+        self.offset = offset
+
+    def utcoffset(self, moment):
+        return self.offset
+
+    def dst(self, moment):
+        return datetime.timedelta(0)
+
+    def tzname(self, moment):
+        return datetime.timezone(self.offset).tzname(None)
+
+    def __reduce__(self):
+        # tzinfo's own would call __init__ with no offset, so a moment from a
+        # pinned clock could not be copied or pickled.
+        return (DocumentZone, (self.offset,))
+
+    def __repr__(self) -> str:
+        return "DocumentZone(%s)" % self.tzname(None)
+
+
 def local(moment):
     """The same moment as the host's wall clock reads it.
 
@@ -441,9 +473,12 @@ def local(moment):
     sender's local time by the standards' long convention, so they are
     written as the host reads them, whatever the clock underneath is in.
 
-    A naive moment is already local and is left alone.
+    A naive moment is already local and is left alone. So is one from a
+    pinned mock's clock, which says its own zone: the host's has no say in a
+    date that has to be the same on every machine.
     """
-    if getattr(moment, "tzinfo", None) is None:
+    zone = getattr(moment, "tzinfo", None)
+    if zone is None or isinstance(zone, DocumentZone):
         return moment
     return moment.astimezone()
 
