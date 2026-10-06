@@ -32,10 +32,10 @@ from __future__ import annotations
 
 import sqlite3
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from . import db, edifact, schema, x12
-from .envelope import EdiSyntaxError, Message
+from .envelope import EdiSyntaxError, Message, Seg
 
 # What we record against the document that was acknowledged.
 # Kinds that answer a document rather than await an answer.
@@ -90,7 +90,8 @@ def apply(conn: sqlite3.Connection, partner: str, dialect: str,
     if dialect == "X12":
         results = _read_997(message)
     else:
-        results = _read_contrl(message, interchange_control)
+        results = _read_contrl(message, interchange_control,
+                               sent_by(conn, partner))
     out: List[Matched] = []
     for result in results:
         for item in _expand(conn, partner, dialect, result) if result.covers \
@@ -113,6 +114,7 @@ def _read_997(message: Message) -> List[Matched]:
 
     functional_id = ""
     loops = 0
+    segment = ""             # the AK3 an AK4 belongs to
 
     for item in message.segments:
         if item.tag == "AK1":
@@ -130,8 +132,9 @@ def _read_997(message: Message) -> List[Matched]:
             loops += 1
             current = Matched(code=item.get(1), control=item.get(2),
                               group_control=group_control)
-            notes = []
+            notes, segment = [], ""
         elif item.tag == "AK3" and current is not None:
+            segment = item.get(1)
             notes.append("%s at segment %s: %s"
                          % (item.get(1), item.get(2) or "?",
                             _segment_error(item.get(4))))
@@ -139,8 +142,15 @@ def _read_997(message: Message) -> List[Matched]:
             # No leading indent: these are joined inline with "; ", so the
             # two spaces that would indent a nested line just doubled up the
             # separator in the note a user reads.
-            notes.append("element %s: %s%s"
-                         % (item.get(1), _element_error(item.get(3)),
+            #
+            # Named the way a partner's guide writes it - PO103 - from the
+            # AK3 above, with the number the 997 gave beside it for whoever
+            # is looking for it in the bytes (#294).
+            position, component = item.comp(1, 1), item.comp(1, 2)
+            numbers = position + (":" + component if component else "")
+            notes.append("%s: %s%s"
+                         % (_named(segment, position, component, numbers),
+                            _element_error(item.get(3)),
                             " (%r)" % item.get(4) if item.has(4) else ""))
         elif item.tag == "AK5" and current is not None:
             current.verdict = item.get(1)
@@ -151,23 +161,43 @@ def _read_997(message: Message) -> List[Matched]:
     return out
 
 
-def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
+def _read_contrl(message: Message, interchange_control: str,
+                 sent: Optional[Callable[[str, str, str], Optional[Message]]] = None
+                 ) -> List[Matched]:
     """Walk UCI / UCM / UCS / UCD.
 
     The interchange being acknowledged is named in UCI01, not by the envelope
     this CONTRL arrived in - so a CONTRL is matched against the interchange it
     *quotes*, which is the one the mock sent.
+
+    A CONTRL says *where* a fault is by number and never by name: `UCS`
+    carries the segment's position in the message, not its tag, where a 997's
+    `AK3` carries the tag. So naming the element needs the message the CONTRL
+    is about, and `sent` fetches it - by set code, message reference and the
+    interchange quoted. Without it, or for a message the mock never sent,
+    the note keeps the numbers (#294).
     """
     out: List[Matched] = []
     acknowledged_interchange = interchange_control
     current: Optional[Matched] = None
     notes: List[str] = []
+    about: Optional[Message] = None      # the message a UCM is about
+    segment: Optional[Seg] = None        # the segment a UCS points at
+    where = ""                           # and the number it gave
+    envelope = ""                        # what a UCI said was wrong with it
 
     verdict = ""
     for item in message.segments:
         if item.tag == "UCI":
             acknowledged_interchange = item.get(1)
             verdict = item.get(4)
+            if item.get(6) and item.comp(7, 1):
+                # A refused envelope: UCI06 is the service segment's tag, so
+                # this one is named with nothing looked up.
+                envelope = "%s: %s" % (
+                    _named_edifact(None, item.get(6), item.comp(7, 1),
+                                   item.comp(7, 2), ""),
+                    _edifact_error(item.get(5)))
         elif item.tag == "UCM":
             if current is not None:
                 current.note = "; ".join(notes)
@@ -176,13 +206,20 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
                               group_control=acknowledged_interchange,
                               verdict=item.get(3),
                               status=EDIFACT_VERDICTS.get(item.get(3), ACCEPTED))
-            notes = []
+            notes, segment, where = [], None, ""
+            about = sent(current.code, current.control,
+                         acknowledged_interchange) if sent else None
         elif item.tag == "UCS" and current is not None:
-            notes.append("segment %s: %s"
-                         % (item.get(1), _edifact_error(item.get(2))))
+            where = item.get(1)
+            segment = _segment_at(about, where)
+            notes.append("%ssegment %s: %s"
+                         % ("%s at " % segment.tag if segment is not None else "",
+                            where, _edifact_error(item.get(2))))
         elif item.tag == "UCD" and current is not None:
-            notes.append("element %s: %s"
-                         % (item.comp(2, 1), _edifact_error(item.get(1))))
+            notes.append("%s: %s" % (
+                _named_edifact(about, segment.tag if segment is not None else "",
+                               item.comp(2, 1), item.comp(2, 2), where),
+                _edifact_error(item.get(1))))
     if current is not None:
         current.note = "; ".join(notes)
         out.append(current)
@@ -191,13 +228,97 @@ def _read_contrl(message: Message, interchange_control: str) -> List[Matched]:
         out.append(Matched(
             code="", control="", group_control=acknowledged_interchange,
             verdict=verdict, status=EDIFACT_VERDICTS.get(verdict, ACCEPTED),
-            note="acknowledged for the whole interchange by UCI, with no UCM",
+            note="acknowledged for the whole interchange by UCI, with no UCM"
+                 + ("; %s" % envelope if envelope else ""),
             covers=INTERCHANGE))
     return out
 
 
+def sent_by(conn: sqlite3.Connection, partner: str, direction: str = "out"
+            ) -> Callable[[str, str, str], Optional[Message]]:
+    """A way to fetch the message a CONTRL is about, for `_read_contrl`.
+
+    By set code and message reference within the interchange the CONTRL
+    quotes - the same three things `_find` matches a CONTRL to a document by,
+    so the message that is named from is the one the verdict is recorded
+    against. `direction` is which way that message went: `out` for a
+    partner's CONTRL about something the mock sent, `in` for the mock's own
+    CONTRL about something it received.
+    """
+    def fetch(code: str, control: str, interchange_control: str
+              ) -> Optional[Message]:
+        row = db.one(
+            conn,
+            "SELECT i.payload FROM transaction_set t JOIN interchange i"
+            " ON i.id = t.interchange_id"
+            " WHERE t.direction = ? AND t.partner = ? AND t.code = ?"
+            " AND t.control = ? AND i.control = ? ORDER BY t.id DESC LIMIT 1",
+            (direction, partner, code, control, interchange_control))
+        if row is None or not row["payload"]:
+            return None
+        try:
+            interchange = edifact.parse(row["payload"])
+        except EdiSyntaxError:
+            return None
+        return next((item for _group, item in interchange.messages()
+                     if item.code == code and item.control == control), None)
+    return fetch
+
+
+def _segment_at(about: Optional[Message], where: str) -> Optional[Seg]:
+    """The segment 0096 points at: the UNH is 1."""
+    if about is None or not where.isdigit():
+        return None
+    index = int(where) - 1
+    return about.segments[index] if 0 <= index < len(about.segments) else None
+
+
+def _named(tag: str, position: str, component: str, numbers: str) -> str:
+    """`PO103 (element 3)`, or the number alone where there is no tag to name."""
+    if not tag or not position.isdigit() or int(position) < 1:
+        return "element %s" % numbers
+    label = "%s%02d" % (tag, int(position))
+    if component:
+        # Said as a position, in words: `/1` would read as an element's
+        # number, which is how a component is named where its number is known.
+        label += " component %s" % component
+    return "%s (element %s)" % (label, numbers)
+
+
+def _named_edifact(about: Optional[Message], tag: str, position: str,
+                   component: str, where: str) -> str:
+    """`QTY01/6060 (segment 4, element 2:2)`: the name, and what the CONTRL said.
+
+    0098 counts the segment tag as position 1 and the dictionary's labels do
+    not, so the label is one less. A component is named by its own number in
+    the directory - 6060 - which is how the mock's own findings write it,
+    and by its position where the dictionary does not know the segment.
+    """
+    numbers = position + (":" + component if component else "")
+    said = ("segment %s, " % where if where else "") + "element %s" % numbers
+    if not tag or not position.isdigit() or int(position) < 2:
+        return said
+    place = int(position) - 1
+    label = "%s%02d" % (tag, place)
+    if component:
+        ref = ""
+        definition = (schema.lookup("EDIFACT", about.code)
+                      if about is not None else None)
+        declared = definition.segment_for(tag) if definition is not None else None
+        element = declared.element(place) if declared is not None else None
+        if (element is not None and component.isdigit()
+                and 1 <= int(component) <= len(element.components)):
+            ref = element.components[int(component) - 1].ref
+        # By its own number where the dictionary has it; otherwise by its
+        # position, in words, so that `9` is not read as a directory number.
+        label += "/%s" % ref if ref else " component %s" % component
+    return "%s (%s)" % (label, said)
+
+
 def answers(dialect: str, kind: str, control: str, reference: str,
-            payload: str) -> Dict[str, Any]:
+            payload: str,
+            sent: Optional[Callable[[str, str, str], Optional[Message]]] = None
+            ) -> Dict[str, Any]:
     """What an acknowledgment answers, read from the acknowledgment itself.
 
     For the timeline (#197): the envelope, the acknowledgment's own verdict
@@ -239,7 +360,7 @@ def answers(dialect: str, kind: str, control: str, reference: str,
         verdict = trailer.get(1) if trailer is not None else ""
         out["status"] = X12_VERDICTS.get(verdict, "")
     else:
-        found = _read_contrl(message, reference)
+        found = _read_contrl(message, reference, sent)
         head = message.find("UCI")
         verdict = head.get(4) if head is not None else ""
         out["status"] = EDIFACT_VERDICTS.get(verdict, "")
