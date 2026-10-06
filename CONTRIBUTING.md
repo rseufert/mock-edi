@@ -253,6 +253,13 @@ is no API token anywhere. Running the `Publish` workflow by hand publishes to
 TestPyPI instead. Add the release to [`CHANGELOG.md`](CHANGELOG.md) in the same
 commit as the version bump.
 
+**A version can be rehearsed once.** The rehearsal uploads whatever version
+`pyproject.toml` says, and TestPyPI, like PyPI, refuses a second upload of a
+version it already has. The `testpypi` job sets `skip-existing`, so a second
+rehearsal of the same version does not fail: it goes green and uploads
+nothing. That is not a fault, and it is not a rehearsal either - a green run
+proves the upload only the first time for each version.
+
 **The upload waits for an approval.** When the `pypi` environment has the
 maintainer as a required reviewer, the Publish workflow builds, then stops at
 the `publish to PyPI` job until the maintainer approves the deployment in the
