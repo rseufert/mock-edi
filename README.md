@@ -345,6 +345,29 @@ is the failure to test for. Both read the 820 only: which REMADV date is the
 value date, and how one REMADV reverses another, vary too much between guides
 to guess.
 
+`GET /_mock/remittances` answers the **currency** the advice states beside its
+`total`, because an amount on its own cannot be tied to a bank payment or a
+cleared item. An 820 states it in `CUR02` — `BPR` carries no currency at all,
+and `CUR` is one per message, outside the loop that holds the invoices, so an
+820 names exactly one. A REMADV states it in the summary `MOA`'s own currency
+component, falling back to the header `CUX`.
+
+An advice that states none is answered `null`, not `USD`. An absent currency
+and a guessed one are different claims, and a default would put a guess beside
+the facts the orders and invoices of this mock state for themselves.
+
+Two findings come with it. `remittance-currency-not-the-invoice` is an advice
+in one currency paying an invoice the mock issued in another — the amounts can
+agree to the penny and still be two different sums of money. And
+`remittance-currency-disagrees` is a REMADV that contradicts itself: a header
+`CUX` and a summary `MOA` naming different currencies, or several header `CUX`
+segments naming different ones — the group repeats up to nine times. D.96A
+permits all of it and gives no rule for which wins, so the mock takes the
+**reference** currency (`6347` code 2, "the currency applicable to amounts
+stated") and reports the rest rather than keeping one quietly. An advice naming
+an invoice the mock never issued draws neither finding: it can only say two
+currencies differ about an invoice it wrote.
+
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
 dozen; the mock implements the dozen, validates them properly, and reports an
