@@ -902,14 +902,28 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
             if element.ref == "C507":
                 findings.extend(_check_edifact_date(components, position,
                                                     definition))
-            # A component past the definition is *not* reported, and that is
-            # deliberate rather than an oversight to match up with the rule
-            # above. A segment's element list is complete here unless it
-            # declares a full_width; a composite's component list is not known
-            # to be - the same composite is declared at two different widths
-            # in two places in this file, which is how the short ones below
-            # were found. Reporting against a definition that may itself be
-            # short is the bug this change exists to remove.
+            # A component past the definition is reported only by a composite
+            # that says how wide the standard makes it, the way a segment
+            # does. Without that the list is not known to be complete - most
+            # composites here are deliberately short, and the same composite
+            # is declared at two different widths in two places in this file -
+            # so reporting against it would be the false positive #54 removed
+            # for segments. A composite that declares its width is claiming to
+            # be complete, and there code 3 is the truth (#186).
+            if element.full_width:
+                for index in range(element.component_width + 1,
+                                   len(components) + 1):
+                    value = components[index - 1]
+                    # A trailing separator is how a sender writes "nothing
+                    # here", not a claim about the component past the end.
+                    if not value:
+                        continue
+                    findings.append(ElementFinding(
+                        position=position, component=index, ref=element.ref,
+                        code="3", value=value, severity=ERROR,
+                        note="%s (%s) has no component at position %d"
+                             % (definition.label(position), element.ref,
+                                index)))
         else:
             value = raw[0] if isinstance(raw, list) and raw else (
                 "" if isinstance(raw, list) else raw)
