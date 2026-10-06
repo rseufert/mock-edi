@@ -365,8 +365,17 @@ segments naming different ones — the group repeats up to nine times. D.96A
 permits all of it and gives no rule for which wins, so the mock takes the
 **reference** currency (`6347` code 2, "the currency applicable to amounts
 stated") and reports the rest rather than keeping one quietly. An advice naming
-an invoice the mock never issued draws neither finding: it can only say two
-currencies differ about an invoice it wrote.
+an invoice the mock never issued to that partner draws neither finding: it
+can only say two currencies differ about an invoice it wrote.
+
+A REMADV may state a currency **per document**, in a `CUX` inside the `DOC`
+group, which is how one advice pays invoices in two currencies. Each entry of
+`invoices` answers its own `currency`, falling back to the advice's where the
+document states none, and the comparison is made per document — so an advice
+can be right about one invoice and wrong about another, and where the header
+and a document disagree the document is what that entry is judged on. D.96A
+has a third `CUX`, inside the line group; this message declares no line group,
+so a `CUX` inside a line is still an unexpected segment.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a

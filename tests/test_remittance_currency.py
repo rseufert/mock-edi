@@ -15,10 +15,12 @@ Where each dialect states it, sourced on the issue:
   heading level, outside the `ENT` loop that holds the invoices. So an 820
   cannot state two, and `total` is unambiguous once `CUR02` is read.
 - **D.96A REMADV**: the summary `MOA`'s own 6345 (`C516`'s third component),
-  falling back to the header `CUX`. `CUX` recurs in SG3, SG5 and SG9 and every
-  `MOA` may carry its own, so a REMADV *can* state several - and the directory
-  gives **no rule for which wins** when the header and the summary disagree.
-  The mock reports that disagreement rather than picking a side.
+  falling back to the header `CUX`. `CUX` recurs in SG3, SG5 and SG9, five of
+  each, and every `MOA` may carry its own, so a REMADV *can* state several -
+  and the directory gives **no rule for which wins** when the header and the
+  summary disagree. The mock reports that disagreement rather than picking a
+  side. Since #298 a `CUX` inside a `DOC` group is read as that document's,
+  and `tests/test_remadv_document_currency.py` is that half.
 
 An advice that states no currency is answered `null`, not `"USD"`. An absent
 currency and a guessed one are different claims, and the orders and invoices
@@ -70,7 +72,7 @@ def a_remadv(header=None, summary_currency=None, total="100.00",
     """A REMADV with a header CUX, a summary MOA currency, either or neither.
 
     `headers` writes several header CUX segments as `(qualifier, currency)`
-    pairs, which the group's repeat of nine allows.
+    pairs, which D.96A's SG3 allows five of.
     """
     body = [seg("BGM", ["481"], ["RA-CUR"], "9"),
             seg("DTM", ["137", "20260928", "102"]),
@@ -172,7 +174,11 @@ class WhenItDisagreesWithTheInvoice(MockServerCase):
 
 
 class WhenTheHeaderNamesSeveral(MockServerCase):
-    """The CUX group repeats up to nine times, so a REMADV can name several.
+    """D.96A's SG3 admits five CUX at the head, so a REMADV can name several.
+
+    This said "nine" until #298, which was this dictionary's own repeat and
+    not the standard's - I had read the declaration and written it down as
+    the directory.
 
     Keeping the last one quietly would be the same silence this change
     removes a level up, so the reference currency - 6347 code 2, defined as
