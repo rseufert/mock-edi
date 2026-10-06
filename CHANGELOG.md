@@ -13,6 +13,379 @@ Entries waiting for a release are one file each in
 cannot conflict. `tools/check_changelog.py --release X.Y.Z` assembles them
 into a dated section here.
 
+## [0.7.0] - 2026-10-01
+
+This release is mostly corrections to what the mock puts on the wire, found
+by a review of the whole trading loop and by an audit of every X12 position
+against the standard's own notes. A cancellation is no longer fulfilled as a
+new order, an order restated before it ships is advised once, a consignment
+added by a change is advised before it is billed, an EDIFACT document keeps
+its structure when a name holds a character its character set cannot carry,
+and a 997 for a rejected group no longer acknowledges the sets inside it as
+accepted.
+
+The mock now has one clock. Every timestamp it reports is read from the clock
+`/_mock/advance` moves, `advance?all` moves that clock to each due time in
+turn, and the advance survives a restart on a `--db` file. The order timeline
+reads in the order things happened inside a second, and says which document a
+sent acknowledgment answers. The dictionary describes the envelope segments.
+
+Several things change behaviour, so check them against what you expect. A
+request must use the right method and the exact path: a wrong method is a 405
+and a stray trailing slash or extra segment on a `/_mock` path is a 404.
+`POST /_mock/partners` for an id that exists is a 409, and `/_mock/purchase`
+refuses an order its own dictionary would reject. Dates inside documents are
+local time, like the envelope, which changes bytes on a host that is not on
+UTC. Money rounds half up, so an amount that lands on a half cent can be one
+cent higher, and a unit price keeps the decimals it was given. An 850 marked
+as a change or replacement for an order the mock does not hold is refused,
+where it used to be taken as a new order. A file database is upgraded in
+place to schema version 12.
+
+### Added
+
+- **An acknowledgment the mock sent says in the timeline what it answers**
+  ([#197]). A sent 997, CONTRL or TA1 carried only its own envelope, so a
+  reader had to ask for `?raw` and pick `AK1` and `AK2` out of the payload.
+  Its event now has `answers`: the envelope it answers, the
+  acknowledgment's own verdict (`AK901`, the `UCI` action or `TA104`) and
+  each set it names with that set's code, control number, verdict and note.
+  The summary line says it too: "sent 997 0001 (acknowledgment) accepting
+  your 850 0001". A new key and more words in one summary; nothing else in
+  the timeline changes.
+
+- **`/_mock/send` takes a `"shipment"`** ([#201]), so either consignment of
+  an order that shipped twice can be replayed:
+  `{"partner": "ACME", "kind": "invoice", "order": "PO-1", "shipment": "SHP8000002"}`.
+  Without it the latest is meant, as before. A shipment that is not that
+  order's is a 400 that lists the ones it has.
+
+- **The dictionary serves the envelope** ([#210]). `GET
+  /_mock/dictionary/X12/envelope` describes `ISA`, `GS`, `GE` and `IEA`, and
+  `/_mock/dictionary/EDIFACT/envelope` describes `UNA`, `UNB`, `UNG`, `UNE`
+  and `UNZ`: the same fields as any other segment, in wire order, with a
+  `level` and a `role` so the nesting can be drawn. It is one entry for each
+  dialect, shared by every set, and the listing, each dialect and each set
+  now name its path in a new `envelope` key. `UNG` and `UNE` are declared
+  for the purpose; the mock still reads them and never writes them.
+- **Every segment the dictionary serves says what it is for** ([#210]).
+  Twenty segments, `N3` and `N4` among them, and three envelope trailers had
+  a name and an empty `purpose`.
+
+  Nothing already served changes shape: the additions are new keys and new
+  entries.
+
+### Changed
+
+- **A request is matched on its method and its path exactly** ([#188]). The
+  control plane used to answer any method on a read endpoint, ignore whatever
+  followed the path segments it knew, and treat any path beginning with
+  `/_mock` as its own. A script that relied on any of that now gets an answer
+  that says what to send. What changed:
+  - **A read sent with another method is a `405`.** `POST /_mock/catalog`,
+    `DELETE /_mock/state` and the like answered `200` as the `GET` would.
+    This covers `health`, `state`, `behaviours`, `requests`, `dictionary`,
+    `catalog`, `orders`, `documents`, `interchanges`, `mdns`, `disagreements`,
+    `remittances`, `mailbox`, `outbox`, `drop`, `scheduled` and
+    `unacknowledged`. `POST /_mock/mailbox` used to collect the mailbox; it
+    no longer does.
+  - **A segment too many is a `404`.** `/_mock/health/anything`,
+    `/_mock/orders/<po>/other`, `/_mock/dictionary/x12/850/extra` and
+    `/_mock/outbox/1` answered as if the extra segment were not there.
+  - **A trailing or doubled slash on a `/_mock` path is a `404`.**
+    `/_mock/health/` was the health check.
+  - **A path that only begins with `/_mock` is a `404`.** `/_mockery/health`
+    was the health check too.
+  - **The index page is a `GET`.** `POST /` answered with the page; it is a
+    `405`.
+  - **Every `405` carries an `Allow` header**, and the body names the method
+    to use. The endpoints that already refused a method say what they said.
+  - **The `404` for an unknown `/_mock` endpoint lists every endpoint**, built
+    from the route table; the list was written by hand and had lost `purchase`
+    and `disagreements`. A known endpoint asked with a path it does not have
+    answers with that endpoint's routes.
+  Unchanged: `/edi/`, `/as2/`, `/as2/receive` and `/as2/mdn/` are still the
+  doors, and `HEAD` is answered as its `GET`. A partner still takes `GET`,
+  `PATCH` or `PUT`, and `DELETE`; its profile `GET`, `PUT` or `POST`, and
+  `DELETE`.
+
+- **The mock has one clock, and every timestamp is read from it** ([#196]).
+  `dueAt` came from the mock's clock, which `/_mock/advance` moves, and almost
+  every `at` came from the host's, so a despatch released by an advance was
+  stamped an hour before it was due. Every stamp about the conversation -
+  orders, documents, shipments, invoices, promises, acknowledgments, MDNs - is
+  now the mock's clock. The request log and `started` in `/_mock/health` stay
+  on the host's clock. Rows already in a `--db` file keep the stamps they have.
+- **`POST /_mock/advance?all` moves the clock** ([#196]). It used to release
+  everything and leave the clock where it was. It now steps the clock to each
+  due time in turn, does the work due then, and leaves the clock at the last
+  of them; `clock` and `advancedSeconds` in its answer say where. With no
+  delays configured nothing changes.
+  **For a caller of `Mock.exchange(advance=True)`, or `mock.advance(everything=True)`,
+  with delays set:** the documents and events a run produces now carry the
+  moments they came due, not the moment of the call, and each mock's clock is
+  left ahead by its longest delay. A capture made with a one-day invoice delay
+  shows the invoice dated tomorrow, and anything sent afterwards is dated from
+  there. Pass `advance=False`, or use `advance(seconds=...)`, to place the
+  clock yourself.
+- **`/_mock/unacknowledged?older-than=` follows the clock** ([#196]). After an
+  advance of two hours, a document sent before it is two hours old; it used to
+  be measured against the host's clock and was never old.
+- **Dates inside documents are local time, like the envelope around them**
+  ([#196]). `BAK09` and the 855's `DTM*137`, `BSN03` and `BSN04`, the 865's
+  dates, and `DTM+137` on an ORDRSP and a DESADV were written in UTC, while
+  `ISA`, `GS`, `UNB` and the ship and invoice dates (so `BIG01`, and an
+  INVOIC's `DTM+137`) were the host's local time: from 17:00 to
+  midnight on a Pacific host one 856 carried two dates. All are now the
+  mock's clock read in the host's zone. **On a host running in UTC, which
+  includes the container image, no byte changes.** `remitted-before-settlement`
+  compares `BPR16` with the same local date.
+
+- **`/_mock/purchase` refuses an order its own dictionary would reject**
+  ([#206]). A 33-character PO number, currency `DOLLARS` or unit `BOXES`
+  used to be stored and sent, and `/_mock/validate` then found the errors in
+  the 850 the mock had just written. The document is now validated before
+  anything is stored or sent, in the supplier's dialect, and the answer is a
+  400 whose `problems` name the request's field for each one. A change
+  (`/_mock/purchase/<po>/change`) is held to the same. An order that was
+  sendable before is unaffected.
+
+- **A dictionary miss is a 404** ([#207]). `GET /_mock/dictionary/X12/999`,
+  a version the mock does not speak (`?version=003050`) and an unknown
+  dialect answered 200 with a body of `{"error": ...}`, which a client
+  checking only the status took for the dictionary. The body is the same;
+  the status is now 404. `/_mock/dictionary/KLINGON` used to answer 200
+  with an empty list of sets, and is a 404 naming the dialects there are.
+
+### Fixed
+
+- **`tools/release.py` stopped right after opening the release pull
+  request** ([#190]). It looked for the pull request by title through
+  GitHub's search, which lags a new one by seconds to minutes, so the ask
+  straight after the create missed it. It is now found by its branch. The
+  check for an open pull request labelled for the release went through the
+  same index, and could have missed one labelled a moment before; it now
+  lists the open pull requests and reads their labels itself.
+
+- `GET /_mock/orders/<po>/timeline` now puts events inside one second in the
+  order they happened, instead of ranking them by kind of event — which said
+  the mock packed and invoiced before it acknowledged the order, because every
+  document it sent was ranked after every piece of work it did. Timestamps are
+  second-precision, so this is nearly every order. **The order of events within
+  a second changes**; between seconds nothing does. The sequence is recorded as
+  it happens, in a new `seq` column on the tables the timeline reads (schema
+  version 12); a database written by an earlier mock has no sequence and keeps
+  the order it had.
+
+- **`--retention-days` no longer depends on the host's time zone** ([#196]).
+  The cutoff was a local time compared with UTC stamps: east of Greenwich it
+  deleted records younger than the limit, and west of it kept them longer.
+
+- **A cancellation is no longer fulfilled as a new order** ([#198]). An 850 or
+  ORDERS that says it cancels, changes or replaces an order (`BEG01` of `01`,
+  `03`, `04` or `05`; BGM 1225 of `1`, `3`, `4` or `5`) is now always read as
+  that. Against an order the sender does not hold it is refused beside the
+  acknowledgment with *no such purchase order*, as an 860 for an unknown order
+  is, where before it was recorded, acknowledged, shipped and invoiced. This
+  includes a first 850 sent with `BEG01 = 04`, which used to be taken as an
+  order.
+- **An ORDERS that cancels or changes an order does so** ([#198]). BGM's
+  message function code was compared with X12's values, so `1`, `4` and `5`
+  were all read as an original: a cancellation of a held order answered with an
+  ORDRSP and the order went on to ship. It is now compared in 1225's own codes
+  and takes the path an 850 does.
+
+- **A character the declared character set cannot carry no longer breaks the
+  segment it is in** ([#199]). An EDIFACT document is written in the character
+  set its `UNB` declares - `UNOC` is ISO 8859-1 - and anything outside that set
+  was replaced with `?` on the way to bytes, after the segment had been
+  rendered. `?` is EDIFACT's release character, so the substitute escaped the
+  separator that followed it: a partner in `Łódź` had its `NAD` read as eight
+  elements where nine were written, with the region swallowed into the city,
+  the postcode in the region's place and the country lost. The substitution now
+  happens before the release character is applied, so such a value reads as a
+  literal `?ód?` and every element after it is still itself. The character is
+  still lost, which is what a character set downgrade is; the structure is not.
+
+- **An order restated before it is packed is advised once** ([#200]). An 850
+  or ORDERS sent again while the order was still only *received* replaced the
+  order and was promised a despatch and an invoice, and the pair the first one
+  was promised stayed waiting: the partner got the same 856, with the same
+  shipment number, twice. The first pair are now withdrawn, and
+  `/_mock/scheduled?all` shows them closed with the note `order restated`. The
+  despatch and invoice are due from when the restatement arrived.
+
+- **A despatch advice or invoice sent with `/_mock/send` carries its own
+  consignment's lines** ([#201]). On an order that shipped more than once, a
+  replayed 810 billed the whole order's quantity against one shipment's
+  total, and a replayed 856 advised the whole order's quantity for one box:
+  both were written from the order's running totals, where the original was
+  written from the consignment. A replayed invoice also now names the
+  consignment that invoice bills, where it could name the latest shipment
+  beside an earlier one's invoice.
+
+- **One oversized `/_mock/advance?seconds=` broke the mock until a reset**
+  ([#203]). `seconds=300000000000` or `1e300` was a 500, and the first of
+  them had already moved the clock past what a date can hold, so every
+  request after it - an order included - was a 500 too. The clock can now be
+  at most 100 years ahead in total. An advance that would take it further is
+  a 400 naming the limit and how much room is left, and it moves nothing.
+- **`/_mock/advance?days=30` answered 200 and advanced nothing** ([#203]).
+  A parameter the endpoint does not take was ignored without a word. It is
+  now a 400 naming the ones it does take, and `days` is told what it would
+  be in seconds. Nothing is moved or released by a refused request.
+
+- **`POST /_mock/partners` over an existing partner replaced it** ([#204]).
+  That went round every refusal `PATCH` makes - a supplier holding a live
+  order became a customer - and put every field the body did not mention
+  back to its default, name and address included. A POST for an id that is
+  already there is now a 409 that changes nothing and points at
+  `PATCH /_mock/partners/<id>`. Creating a partner that was deleted still
+  works.
+
+- **A set inside a rejected group was acknowledged as accepted** ([#205]).
+  A group whose `GE` miscounts, or names the wrong control number, is
+  rejected whole and nothing in it is acted on - but its 997 said `AK5*A`
+  for each clean set beside `AK9*R`, and a translator that takes its verdict
+  from `AK5` recorded an accepted order. Every set in a rejected group is
+  now `AK5*R`. A set with a fault of its own keeps its `AK3`/`AK4` and its
+  `AK502`, and is `R` rather than `E`.
+
+- **A `short-ship` partner confirmed, shipped and billed a whole unit against
+  an order for part of one** ([#206]). The rule's floor of one unit was
+  applied after its ceiling, so an 850 for 0.5 was answered `ACK*IA*1` and
+  invoiced for 1. Nothing is confirmed above what was ordered now: an order
+  for one unit or less is confirmed in full, and anything larger is shorted
+  as before.
+- **Money is rounded half up, where it used to round half to even**
+  ([#206]). 12.50 at 5% was written `TXI*ST*0.62`; 0.625 is 0.63. **This
+  changes bytes on the wire** wherever an amount lands exactly on a half
+  cent: a line's extended amount, tax, an order or invoice total, `TDS`, and
+  the EDIFACT `MOA` amounts can each be one cent higher than before, and a
+  stored total with them. Nothing else moves. There is now one rule, in
+  `mockedi/money.py`, and the README states it.
+- **A unit price was rounded to two decimals** ([#206]).
+  `POST /_mock/purchase` at 0.125 each stored and sent 0.12, so a thousand
+  of them was written as `PO1*1*1000*EA*0.12` beside a total of 125.00, and
+  a supplier confirming at the real price was reported as disagreeing
+  between 0.12 and 0.12. A unit price is now stored, written and compared
+  exactly as given, with at least two decimals, in `PO104`, `POC06`,
+  `IT104` and `PRI`; the amounts it produces are still rounded to the cent.
+  A price with two decimals or fewer is written as it always was.
+
+- **A JSON value of the wrong type was a 500, or was stored as text**
+  ([#207]). `PATCH /_mock/partners/ACME {"as2_url": null}`, a list for a
+  behaviour, a number for a partner's id, a changed line that was `1` or
+  `null`: each reached the first code that used it as a string and came
+  back as a 500 naming a Python exception. A list or an object for a
+  purchase's `po_number` was stored as its `repr`. Each is now a 400 that
+  names the field and what it was given, and stores nothing.
+- **A body that is not a JSON object is refused** ([#207]). A list, or text
+  that is not JSON, used to be read as an empty object, so the answer was
+  about fields the caller had not left out: "no partner ''". It is now a
+  400 saying the body must be a JSON object. No body at all is still an
+  empty object.
+- **A number is no longer taken where a string is wanted** ([#207]). Two
+  requests that used to work are refused by the same rule, and this is the
+  part of the change that can break a caller: `POST /_mock/purchase` with
+  `"po_number": 4500001001` was a 201, stored as the string, and a partner
+  patched with a numeric `duns` was a 200. Both are now a 400 naming the
+  field; send `"4500001001"`. A quantity or a price may still be a number.
+- **`{"cancel": "no"}` cancelled the order** ([#207]): any non-empty value
+  did. `cancel` must now be `true` or `false`.
+- **`--auth` with a password outside ASCII made every request a 500**
+  ([#207]), with the right credentials or the wrong ones, and so did a
+  wrong attempt outside ASCII against an ASCII password, where a 401
+  belongs. Credentials are now compared as bytes. A client may send the
+  password as UTF-8 or as Latin-1.
+- **`--tax-rate abc` was accepted, and the first invoice was a 500**
+  ([#207]). The rate is checked at startup: it must be a number from 0 to
+  1, and the mock does not start otherwise. That refuses `8.25` as well,
+  which is 825% and was billed as such; give `0.0825`.
+
+- **An EDIFACT date with a time was dropped without a finding** ([#209]).
+  An ORDERS dated `DTM+137:202609241030:203` was accepted clean and stored
+  with no dates, and the ORDRSP promised delivery as though none had been
+  asked for. `DTM` formats 203 and 204 are now read for the date they carry,
+  as 102 and 101 are, in every EDIFACT document the mock reads.
+- **A `DTM` value that does not fit the format it states is now a finding**
+  ([#209]): `2026-10-10` or `20261340` called `102`, or eight digits called
+  `203`. It is reported on 2380 as an invalid date, which a CONTRL carries
+  as `UCD+12`, and is not read as a date; eight digits called `203` used to
+  be read by the luck of their length. **A CONTRL can carry this finding
+  where it used to carry none.** A `DTM` that states no format is read by
+  its length and not reported: six and eight digits as before, and now
+  twelve and fourteen as a date and a time, which were not read at all.
+
+- **The test client keeps its connection** ([#220]). `mockedi.testing.Mock`
+  opened a new socket for every request, and each one sat in `TIME_WAIT` for
+  the best part of a minute. A test suite built on it could use every
+  ephemeral port the host had, after which everything failed with `Can't
+  assign requested address` and nothing pointing at the cause. It now keeps
+  one connection for each thread that uses it, and reopens one the mock has
+  closed. Two things a caller could notice: a mock that cannot be reached
+  raises the `OSError` itself (`ConnectionRefusedError`, a timeout) where it
+  was wrapped in `urllib.error.URLError`, which is also an `OSError`; and the
+  client no longer goes through `http_proxy`.
+- **A stopped mock answers nobody** ([#220]). A client that held a connection
+  open went on being answered after the mock was stopped, by a thread the
+  server had left serving it, with a 500 from the closed database. Stopping
+  now closes every connection a client has kept; one in the middle of an
+  answer finishes it first.
+
+- **The 997's `AK902` repeated the number of sets received** ([#221]). It is
+  the count the sender's own trailer gave, `GE01`, and `AK903` is what
+  arrived. Written as the same number, they agreed in the one 997 that
+  exists to say they do not: a group of one sent with `GE*9*` was answered
+  `AK9*R*1*1*0*5`, and is now `AK9*R*9*1*0*5`. Where there is no count to
+  quote - no `GE`, or a `GE01` that is not a number - `AK902` is still the
+  number received.
+
+- **A consignment a change adds is advised before it is billed** ([#222]).
+  When an 860 or ORDCHG raised a line that had shipped while the first
+  invoice was still waiting, and that invoice came due before the new
+  despatch, the invoice packed and billed the new goods itself: the 810 went
+  out before the 856 that advised them. The second consignment is now
+  promised an invoice of its own, one invoice delay after the change, and the
+  first invoice goes out when it was due and bills what had shipped. With no
+  delays, or with the waiting invoice due after the new despatch, nothing
+  changes.
+
+- **The clock's advance survives a restart** ([#228]). How far
+  `/_mock/advance` had moved the clock was held only in the running process,
+  so a mock on a `--db` file that was advanced and restarted came back at real
+  time: its next event was stamped before its last one, and work due tomorrow
+  by the mock's clock was a day away again. The advance is now kept in the
+  file and read back at start, and `/_mock/reset` still puts the clock back.
+  A file that was advanced and restarted before this release keeps the stamps
+  it has; the advance it lost was never written down.
+
+- **The 856 reader took the date the notice was written as the ship date**
+  ([#230]). `BSN03` is the date the ship notice was created, by the
+  standard's own note, and it was read into `shipped_on` whenever no
+  `DTM*011` followed; `DTM*017`, an estimated delivery, was read as the ship
+  date too, and the DESADV reader did the same with `DTM+137` and `DTM+17`.
+  A despatch now has three dates in three fields - `shipped_on`,
+  `written_on` and `estimated_delivery` - and one the document does not give
+  is left empty. Nothing the mock writes changes.
+
+- **A 997 quoted an invalid character back in `AK404`** ([#231]). The copy
+  of the bad data was made whatever it held, so an 850 whose `PO102`
+  contained a control character was answered `AK4*2*330*6*1<0x01>2`: a 997
+  carrying the fault it reported, which the segment's own semantic note
+  forbids. A copy containing a control character is now left out, and the
+  `AK4` ends at the error code. Any other value, `eight` or `1é2`, is
+  quoted as before.
+
+- **The 865 and 860 did not carry the seller's order number where the
+  standard puts it** ([#232]). It is `BCA09` in an 865 and `BCH09` in an
+  860, as it is `BAK08` in an 855, and the mock used only `REF*VN`. An 865
+  the mock writes now has it in `BCA09` as well, and one it receives is read
+  from there first, so a supplier that sends no `REF*VN` is no longer read
+  as giving no number. An 860 the mock sends quotes the supplier's number in
+  `BCH09` once the supplier's 855 has given one, and `BCH09` on an 860
+  received is read.
+
 ## [0.6.0] - 2026-09-29
 
 The mock can now be the buyer (#116). Until this release it could only sell,
@@ -1345,7 +1718,30 @@ documents a real one sends.
 [#171]: https://github.com/rseufert/mock-edi/issues/171
 [#178]: https://github.com/rseufert/mock-edi/issues/178
 [#181]: https://github.com/rseufert/mock-edi/issues/181
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.6.0...HEAD
+[#188]: https://github.com/rseufert/mock-edi/issues/188
+[#190]: https://github.com/rseufert/mock-edi/issues/190
+[#196]: https://github.com/rseufert/mock-edi/issues/196
+[#197]: https://github.com/rseufert/mock-edi/issues/197
+[#198]: https://github.com/rseufert/mock-edi/issues/198
+[#199]: https://github.com/rseufert/mock-edi/issues/199
+[#200]: https://github.com/rseufert/mock-edi/issues/200
+[#201]: https://github.com/rseufert/mock-edi/issues/201
+[#203]: https://github.com/rseufert/mock-edi/issues/203
+[#204]: https://github.com/rseufert/mock-edi/issues/204
+[#205]: https://github.com/rseufert/mock-edi/issues/205
+[#206]: https://github.com/rseufert/mock-edi/issues/206
+[#207]: https://github.com/rseufert/mock-edi/issues/207
+[#209]: https://github.com/rseufert/mock-edi/issues/209
+[#210]: https://github.com/rseufert/mock-edi/issues/210
+[#220]: https://github.com/rseufert/mock-edi/issues/220
+[#221]: https://github.com/rseufert/mock-edi/issues/221
+[#222]: https://github.com/rseufert/mock-edi/issues/222
+[#228]: https://github.com/rseufert/mock-edi/issues/228
+[#230]: https://github.com/rseufert/mock-edi/issues/230
+[#231]: https://github.com/rseufert/mock-edi/issues/231
+[#232]: https://github.com/rseufert/mock-edi/issues/232
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.7.0...HEAD
+[0.7.0]: https://github.com/rseufert/mock-edi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/rseufert/mock-edi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/rseufert/mock-edi/compare/v0.3.1...v0.4.0

@@ -178,12 +178,13 @@ that is *about* the refusal.
 Still no dependencies. `tests/support.py` in this repository is written on top
 of it, which is the only test of such a thing that means anything.
 
-And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
-sends SAP purchase orders as 850s and posts the 855s back into SAP, and
-[`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
-this mock and [mock-sap](https://github.com/rseufert/mock-sap).
-The other half of the same integration lives in mock-sap:
-[`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
+The code it exists to test lives in [mock-acme](https://github.com/rseufert/mock-acme), the integration between
+the mocks. [`mockacme/po_bridge.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/po_bridge.py), which
+was `examples/po_bridge.py` here, sends SAP purchase orders as 850s and posts
+the 855s back into SAP, tested against this mock and
+[mock-sap](https://github.com/rseufert/mock-sap).
+The other half of the same integration is beside it:
+[`mockacme/invoice_check.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/invoice_check.py)
 checks this mock's 810 invoices against the purchase order and the 856 ship
 notice before posting them into SAP, and its tests cover a short shipment, a
 price disagreement and the `duplicate-invoice` behaviour.
@@ -1190,9 +1191,9 @@ a good pull request carries.
 OData V2 and V4, BAPI/RFC and IDoc shapes over SQLite, also with zero
 dependencies. An IDoc `ORDERS05` and an X12 850 are the same business
 document, so the two mocks make a reasonable pair of ends for testing a
-middleware layer. [`examples/po_bridge.py`](examples/po_bridge.py) is one, and
-mock-sap's [`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
-is another.
+middleware layer. [mock-acme](https://github.com/rseufert/mock-acme) is that layer:
+[`po_bridge.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/po_bridge.py) is one piece of it and
+[`invoice_check.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/invoice_check.py) is another.
 
 [Testing an SAP-to-EDI Integration Without SAP or a Trading Partner](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration)
 uses the two mocks together: purchase orders out and confirmations in, then
