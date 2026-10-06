@@ -443,7 +443,8 @@ numbers were recorded when the mock wrote the document, or read a supplier's:
 they are not parsed back out of the payload. A document from a `--db` file
 written before 0.8.0 has the fields and nothing in them. `/_mock/documents`
 serves the same two numbers on each row, as `shipment_id` and
-`invoice_number`.
+`invoice_number`, and so does a row collected from `/_mock/mailbox`: whoever
+collects an 810 is told which invoice it is, without parsing it.
 
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they

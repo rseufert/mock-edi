@@ -103,6 +103,34 @@ class ASentDocumentSaysWhatItCarries(TimelineCase):
                           for row in rows], [("", "")])
 
 
+class ADocumentCollectedFromTheMailbox(TimelineCase):
+    """The mailbox serves the queue's rows whole, so it has the numbers too.
+
+    Kept on purpose, and held here so it stays a decision: the collector of
+    an 810 learns which invoice it is without parsing it.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.send(x12_order("PO-BOX"))
+        (self.invoiced,) = events(self.timeline("PO-BOX"), "invoiced")
+
+    def numbers(self, kind):
+        (row,) = self.mailbox(ACME, kind)
+        return row["shipment_id"], row["invoice_number"]
+
+    def test_an_invoice_says_which_invoice_and_shipment(self):
+        self.assertEqual(self.numbers("invoice"), (self.invoiced["shipment"],
+                                                   self.invoiced["invoice"]))
+
+    def test_a_despatch_advice_says_which_shipment(self):
+        self.assertEqual(self.numbers("despatch"),
+                         (self.invoiced["shipment"], ""))
+
+    def test_a_response_has_the_fields_empty(self):
+        self.assertEqual(self.numbers("response"), ("", ""))
+
+
 class AnOrderInTwoConsignments(TimelineCase):
     """The case position cannot settle: two 856s and two 810s for one order."""
     config_kwargs = WINDOW
