@@ -1932,20 +1932,45 @@ def _edifact_ids(block: Sequence[Seg]) -> Dict[str, str]:
     return ids
 
 
+# The 7077 codes whose 7008s hold free text, best first. F is what this mock
+# writes and the plainest thing a sender can say; A is D.96A's "Free-form
+# long description" and E its "Free-form short description", so A loses less
+# where a sender offers both; D is "Free-form price look up", a description
+# for a till display, and is only better than nothing. B and X pair a code
+# with a gloss and C and S are codes alone, so none of those is a
+# description - they keep the older fallback below (#317).
+#
+# Nothing published says which to prefer where a sender offers two, so this
+# order is a choice. It shows in /_mock/orders and in every document the mock
+# answers with.
+# An absent code sits with F: a sender that omits 7077 on a continuation
+# segment is saying nothing, not saying something else, and joining the two
+# is what this did before (#291).
+FREE_FORM_EDIFACT = (("F", ""), ("A",), ("E",), ("D",))
+
+
 def _edifact_description(block: Sequence[Seg]) -> str:
-    """A line's description: both `7008`s of every free-form `IMD` of it.
+    """A line's description: the `7008`s of its `IMD`s, by 7077 code.
 
     C273 has two `7008` components of 35 characters and a line may carry
     several `IMD`s, which is how D.96A says a long description (#291).
-    Reading only the first component of the first segment, as this did,
-    returned the mock's own long description cut short.
+    Reading only the first component of the first segment returned the
+    mock's own long description cut short.
+
+    **Repetition continues a description; a different 7077 code starts a
+    different one.** So the `IMD`s sharing one code are joined - which is
+    what the mock itself writes, several `IMD+F` - and where a line carries
+    two codes the better one is taken whole rather than both being run
+    together (#317). A long description with a short one appended is worse
+    than the cut-short string this replaced.
     """
     described = [item for item in block[1:]
                  if item.tag == "IMD" and (item.comp(3, 4) or item.comp(3, 5))]
-    free = [part for item in described if item.get(1) in ("F", "")
-            for part in (item.comp(3, 4), item.comp(3, 5)) if part]
-    if free:
-        return joined(free)
+    for codes in FREE_FORM_EDIFACT:
+        parts = [part for item in described if item.get(1) in codes
+                 for part in (item.comp(3, 4), item.comp(3, 5)) if part]
+        if parts:
+            return joined(parts)
     return described[0].comp(3, 4) if described else ""
 
 

@@ -282,13 +282,17 @@ the partner's dialect. `PID05` holds 80 characters and D.96A's `7008` holds
 35, so the mock writes a longer one the way each standard does: as several
 free-form `PID` segments, or in both `7008`s of an `IMD` and then a further
 `IMD`. It is cut at spaces and reads back as the one text it was; so do two
-free-form `PID`s, or several `IMD`s, that a partner sends for one line. A
-description that fits is written exactly as before. One that *arrives* in a
-single element over length is still reported as over length; the mock then
-answers it in pieces that fit. A single word longer than the element has
-nowhere to be cut, and reads back with a space where the cut fell. And the
-pieces have an end: a line takes 200 `PID` segments or 99 `IMD`s, so a
-description past 16,000 characters in X12 or 6,930 in EDIFACT is cut there.
+free-form `PID`s, or several `IMD`s **of one type code**, that a partner
+sends for one line. Where a partner offers two renderings instead - D.96A's
+`IMD+A` is a long description and `IMD+E` a short one - the mock takes one
+whole rather than running both together, preferring `F`, then `A`, then `E`,
+then `D`. A description that fits is written exactly as before. One that
+*arrives* in a single element over length is still reported as over length;
+the mock then answers it in pieces that fit. A single word longer than the
+element has nowhere to be cut, and reads back with a space where the cut
+fell. And the pieces have an end: a line takes 200 `PID` segments or 99
+`IMD`s, so a description past 16,000 characters in X12 or 6,930 in EDIFACT
+is cut there.
 
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
