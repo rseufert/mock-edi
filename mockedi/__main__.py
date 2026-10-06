@@ -85,6 +85,10 @@ def build_parser() -> argparse.ArgumentParser:
                          help="require HTTP basic authentication")
     testing.add_argument("--deliver-to", metavar="HOST[,HOST]", default="",
                          help="hosts the courier may POST to; anywhere by default")
+    testing.add_argument("--start-at", metavar="TIME", default="",
+                         help="start the clock at this time and hold it there "
+                              "until it is advanced, e.g. 2026-11-02T09:00:00Z; "
+                              "documents are dated in the zone written here")
     testing.add_argument("--hold-delivery", action="store_true",
                          help="post nothing until asked: POST /_mock/deliver "
                               "sends the next document, one at a time")

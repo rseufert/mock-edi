@@ -378,7 +378,9 @@ GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
 them. So is every date and time inside a document - `BAK09`, `BSN03/04`,
 `BIG01`, an ORDRSP's `DTM+137` - which is the mock's clock read in the host's
-zone, so a document and its envelope always name the same day. A date a
+zone, so a document and its envelope always name the same day. (A mock
+started with `--start-at` reads them in the zone its start time is written
+in instead, so that they do not depend on the machine.) A date a
 partner sends without a zone is read the same way: `BPR16` is compared with
 the day the mock would write today.
 
@@ -546,6 +548,61 @@ leaves the clock where it was. A parameter the endpoint does not take is a
 400 as well, naming the ones it does - `seconds`, `all`, `failed`, and
 `partner` with `failed` - so `?days=30` is refused and told what it is in
 seconds, where it used to answer 200 and move nothing.
+
+### Starting the clock at a chosen time
+
+Left alone, the clock is the host's, so no two runs of a script carry the
+same dates. Give the mock a start time and it does not follow the host at
+all:
+
+```bash
+mock-edi --start-at 2026-11-02T09:00:00Z
+```
+
+```python
+with Mock.start(start_at="2026-11-02T09:00:00Z") as mock: ...
+```
+
+The clock reads that time until it is advanced, and after an advance it
+stands at the new time. **Two runs of the same script from a fresh start
+write the same documents, byte for byte, and the same timeline**, on any day
+and on any machine.
+
+- **The time is ISO 8601 with a `Z` or an offset.** One with neither is
+  refused at start: read as UTC or as the host's zone it would be a guess.
+- **The zone it is written in is the zone documents are dated in.**
+  `...T09:00:00Z` dates them in UTC; `...T09:00:00+01:00` in +01:00, with no
+  daylight saving. The host's zone has no say, which is what makes a capture
+  the same on a laptop and in CI. (Without `--start-at`, document dates are
+  in the host's zone, as [Timestamps](#timestamps) says.) So the same
+  instant written two ways can date documents a day apart:
+  `2026-11-02T00:30:00+01:00` dates them 2 November and
+  `2026-11-01T23:30:00Z` dates them 1 November.
+- **Many events share one time.** Everything between two advances carries the
+  same `at`. The timeline's order is still the order things happened in: it
+  is decided by a sequence the mock keeps, not by the time.
+- **`/_mock/advance` is unchanged.** `?seconds=N` and `?all` move the clock
+  from where it stands. `/_mock/reset` puts it back to the start time.
+  `/_mock/state` says where it is under `clock`: `now`, `startAt` (`null`
+  when there is none) and `advancedSeconds`.
+- **A `--db` file keeps the clock it was started on.** Started again with the
+  same `--start-at`, it comes back as far on as it was left. A different
+  start time, or none, is refused and names the one the file has; so is a
+  start time for a file that has already traded by the host's clock.
+
+**What follows the start time:** every `at` and `due_at`; `ISA09`/`10`,
+`GS04`/`05` and the `UNB` date and time; every date inside a document the
+mock writes, the orders it places with `/_mock/purchase` included; the dates
+of the seeded demo orders; and the date an MDN states.
+
+**What does not**, and so differs between two runs:
+
+| | Why |
+| --- | --- |
+| The request log's `at` (`/_mock/requests`), and `started` in `/_mock/health` | About the process, not the conversation. |
+| The HTTP `Date` header on the mock's responses | Written by the HTTP server. |
+| The AS2 `Date` header on a document or an asynchronous MDN the mock posts | When it was posted, which is the host's business. |
+| An MDN's `Message-ID` and MIME boundary | Random. A document's own AS2 `Message-ID` is a counter and does repeat. |
 
 ## AS2
 
@@ -1194,6 +1251,7 @@ everything in memory.
 | `--hold-delivery` | Post nothing until asked. Released documents and asynchronous MDNs wait, in order, and `POST /_mock/deliver` sends the next one and says what it was. For reading the state between two hops of a conversation between two mocks. See [One document at a time](#one-document-at-a-time). |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
+| `--start-at TIME` | Start the mock's clock at this time and hold it there until it is advanced: `2026-11-02T09:00:00Z`, or with an offset. Two runs of one script then write the same documents and the same timeline. Documents are dated in the zone written here, not the host's. See [Starting the clock at a chosen time](#starting-the-clock-at-a-chosen-time). |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
 | `--no-request-log` | Keep requests out of the `request_log` table, and out of `/_mock/requests`. |
 
