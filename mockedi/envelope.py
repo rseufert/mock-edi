@@ -388,7 +388,14 @@ def escape(value: str, delims: Delimiters) -> str:
     return "".join(out)
 
 
-def fit(value: str, charset: str, outside: str = "") -> str:
+# a-z to A-Z, for a syntax whose repertoire has no lower case (#263). Built
+# here rather than imported from `charsets` so that the syntax layer goes on
+# depending on nothing above it.
+_FOLD = str.maketrans("abcdefghijklmnopqrstuvwxyz",
+                      "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+def fit(value: str, charset: str, outside: str = "", fold: bool = False) -> str:
     """`value` with every character the set cannot carry replaced by `?`.
 
     `outside` is the repertoire's own exclusion, for a syntax whose codec
@@ -410,6 +417,10 @@ def fit(value: str, charset: str, outside: str = "") -> str:
     An empty `charset` fits nothing, for the callers that do not know one.
     """
     text = "" if value is None else str(value)
+    if fold:
+        # Before everything else: a folded character is then inside the
+        # repertoire and the codec both, which is the point of folding.
+        text = text.translate(_FOLD)
     if outside:
         text = "".join("?" if char in outside else char for char in text)
     if not charset:
@@ -418,18 +429,19 @@ def fit(value: str, charset: str, outside: str = "") -> str:
 
 
 def render_segment(seg: Seg, delims: Delimiters, charset: str = "",
-                   outside: str = "") -> str:
+                   outside: str = "", fold: bool = False) -> str:
     """One segment, trailing empty elements trimmed as every real sender does."""
     parts: List[str] = []
     for value in seg.elements:
         if isinstance(value, list):
-            components = [escape(fit(v, charset, outside), delims)
+            components = [escape(fit(v, charset, outside, fold), delims)
                           for v in value]
             while components and components[-1] == "":
                 components.pop()
             parts.append(delims.component.join(components))
         else:
-            parts.append(escape(fit(value, charset, outside), delims))
+            parts.append(escape(fit(value, charset, outside, fold),
+                            delims))
     while parts and parts[-1] == "":
         parts.pop()
     return delims.element.join([seg.tag] + parts)

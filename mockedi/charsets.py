@@ -62,14 +62,34 @@ EDIFACT_SYNTAX = {
 LOWER_CASE = "abcdefghijklmnopqrstuvwxyz"
 REPERTOIRE = {"UNOA": LOWER_CASE}
 
+# What a real level A sender does with lower case: fold it, so `Widget Co`
+# goes out as `WIDGET CO` rather than `W????? C?`. Zack's answer on #263.
+#
+# `a` to `z` only, and not `str.upper()`. Level A's alphabet *is* A-Z, so
+# that is the whole of the mapping - and `upper()` would also turn `ß` into
+# `SS`, which is two characters where there was one: a value at an element's
+# maximum would grow past it and the mock would write a document its own
+# dictionary reports. Everything outside ISO 646 is substituted by the codec
+# whether it is folded or not, so folding it buys nothing and risks that.
+FOLD = str.maketrans(LOWER_CASE, LOWER_CASE.upper())
+FOLDS = {"UNOA"}
+
 
 def outside(syntax: str) -> str:
     """The characters `syntax` does not permit, beyond what its codec refuses.
 
     Empty for every identifier but `UNOA`, whose codec admits more than its
-    repertoire does.
+    repertoire does. With folding on there is nothing left for this to
+    catch in text, and it is kept because it is the statement of the
+    repertoire: the repertoire is what is true of level A, and folding is
+    what the mock does about it.
     """
     return REPERTOIRE.get(syntax, "")
+
+
+def folds(syntax: str) -> bool:
+    """Whether `syntax` wants lower case folded rather than substituted."""
+    return syntax in FOLDS
 
 
 _SYNTAX = re.compile(r"UNB\s*.(UNO[A-Z])")
