@@ -42,6 +42,13 @@ Older.
 SEARCHED = ("--search", "--label", "--author", "--assignee")
 
 
+# What `gh pr checks` answers before a pull request has any, word for word.
+NO_CHECKS_YET = "no checks reported on the 'release/%s' branch\n" % VERSION
+
+CHECK_NAMES = ["tests (py3.12 on ubuntu-latest)", "container image",
+               "documentation covers every file"]
+
+
 class World:
     """The repository, GitHub and PyPI, as far as the tool can see them."""
 
@@ -63,6 +70,12 @@ class World:
         self.search_lag = 0
         self.label_lag = 0
         self.lag_after_create = 0
+        # How many asks for a new pull request's checks find none registered.
+        self.checks_lag = 0
+        # How many asks, once every other check has passed, still do not
+        # list the required one.
+        self.required_lag = 0
+        self.required_passed = False
         self.intro_written = True
         self.checks = [["pending"], ["pass", "pass", "skipping"]]
         self.publish = [[], ["in_progress "], ["completed success"]]
@@ -152,10 +165,34 @@ class World:
             self.search_lag = max(self.search_lag, self.lag_after_create)
             return ok
         if a[:2] == ["pr", "checks"]:
+            # New to GitHub, and so with no checks registered yet: `gh`
+            # says so in a sentence and exits 1 (#270).
+            if self.checks_lag > 0:
+                self.checks_lag -= 1
+                return tool.Result(1, NO_CHECKS_YET)
             now = self.checks.pop(0) if len(self.checks) > 1 else self.checks[0]
-            return tool.Result(0, "\n".join(now))
+            listed = [(bucket, CHECK_NAMES[n]) for n, bucket in enumerate(now)]
+            # The required check is a job that needs the others: it is not
+            # there while one is pending, nor for a moment after the last.
+            if "pending" not in now:
+                if not set(now) <= {"pass", "skipping"}:
+                    listed.append(("fail", tool.REQUIRED_CHECK))
+                elif self.required_lag > 0:
+                    self.required_lag -= 1
+                else:
+                    listed.append(("pass", tool.REQUIRED_CHECK))
+                    self.required_passed = True
+            # As `gh` does, it answers with the fields it was asked for.
+            named = "bucket,name" in a
+            return tool.Result(0 if set(now) <= {"pass", "skipping"} else 1,
+                               "\n".join("%s\t%s" % check if named else check[0]
+                                         for check in listed))
         if a[:2] == ["pr", "merge"]:
             assert "--merge" in a, a
+            # The ruleset: no merge until the required check has passed.
+            if not self.required_passed:
+                return tool.Result(1, "Required status check \"%s\" is expected."
+                                      % tool.REQUIRED_CHECK)
             self.main_version, self.open_pr, self.branch = VERSION, 0, False
             return ok
         if a[:2] == ["release", "create"]:
@@ -307,6 +344,69 @@ class GitHubsSearchIsBehind(ReleaseCase):
                          and "--head release/%s" % VERSION in call])
 
 
+class TheChecksHaveNotRegisteredYet(ReleaseCase):
+    """A new pull request has no checks for its first seconds (#270).
+
+    `gh pr checks` then answers "no checks reported on the 'release/0.7.0'
+    branch" and exits 1. The tool read the sentence as a list of failed
+    checks and stopped, so the release of 0.7.0 took a second command 45
+    seconds after the first.
+    """
+
+    def test_the_release_runs_through_it_in_one_command(self):
+        world = World(checks_lag=3)
+        self.assertEqual(self.release(world), 0)
+        self.assertTrue(world.tag and world.gh_release)
+        self.assertEqual(world.checks_lag, 0)
+
+    def test_checks_that_never_register_stop_at_the_limit_and_say_so(self):
+        stop = self.assertStops(World(checks_lag=10 ** 6),
+                                "'all checks passed' was never reported")
+        self.assertIn("45 minutes", str(stop))
+        self.assertIn("no checks reported on the", str(stop))
+        self.assertIn("--resume", str(stop))
+
+    def test_a_failed_check_is_named_by_its_name(self):
+        stop = self.assertStops(
+            World(checks_lag=1, checks=[["fail", "pass", "cancel"]]),
+            "did not pass (tests (py3.12 on ubuntu-latest), "
+            "documentation covers every file, all checks passed)")
+        self.assertNotIn("reported", str(stop))
+
+    def test_checks_that_registered_and_never_finish_are_not_called_missing(self):
+        stop = self.assertStops(World(checks_lag=1, checks=[["pending"]]),
+                                "#42's checks to pass")
+        self.assertNotIn("never reported", str(stop))
+
+
+class TheRequiredCheckComesLast(ReleaseCase):
+    """`main` requires one check, a job that needs every other job (#277).
+
+    So it does not exist until the others have finished, and for a moment
+    after the last of them nothing is pending and nothing has failed. A
+    merge in that moment is refused by the ruleset.
+    """
+
+    def test_the_merge_waits_for_it(self):
+        world = World(required_lag=3)
+        self.assertEqual(self.release(world), 0)
+        self.assertEqual(len(world.ran("gh pr merge")), 1)
+        self.assertTrue(world.tag and world.gh_release)
+
+    def test_it_never_appearing_stops_at_the_limit_and_names_it(self):
+        world = World(required_lag=10 ** 6)
+        stop = self.assertStops(world, "'all checks passed' was never reported")
+        self.assertIn("45 minutes", str(stop))
+        self.assertEqual(world.ran("gh pr merge"), [])
+
+    def test_the_name_is_the_job_in_ci_yml(self):
+        """Three places must agree; this holds two of them together."""
+        path = os.path.join(os.path.dirname(os.path.dirname(
+            os.path.abspath(__file__))), ".github", "workflows", "ci.yml")
+        with open(path, encoding="utf-8") as handle:
+            self.assertIn("    name: %s\n" % tool.REQUIRED_CHECK, handle.read())
+
+
 class TheOneDeliberateStop(ReleaseCase):
     def test_it_stops_for_the_paragraph_and_resume_finishes(self):
         world = World(intro_written=False)
@@ -358,7 +458,8 @@ class EveryWaitHasALimit(ReleaseCase):
         self.assertIn("45 minutes", str(stop))
 
     def test_checks_that_fail(self):
-        self.assertStops(World(checks=[["pass", "fail"]]), "did not pass (fail)")
+        self.assertStops(World(checks=[["pass", "fail"]]),
+                         "did not pass (container image, all checks passed)")
 
     def test_a_publish_that_fails(self):
         self.assertStops(World(publish=[["completed failure"]]),
