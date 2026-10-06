@@ -1557,9 +1557,16 @@ PIA = Segment("PIA", "Additional Product ID", (
    full_width=6)
 
 IMD = Segment("IMD", "Item Description", (
+    # D.96A has eight codes here. The mock listed five, and had A and E the
+    # wrong way round: A is the LONG description and E the short one (#317).
+    # A, D, E and F each carry free text in 7008; B and X pair a code with a
+    # gloss; C and S are codes alone.
     _e("7077", "Item description type, coded", "ID", 1, 3, OPTIONAL,
-       {"A": "Free-form short description", "B": "Code and text", "C": "Code (from industry list)",
-        "E": "Free-form", "F": "Free-form"}),
+       {"A": "Free-form long description", "B": "Code and text",
+        "C": "Code (from industry code list)", "D": "Free-form price look up",
+        "E": "Free-form short description", "F": "Free-form",
+        "S": "Structured (from industry code list)",
+        "X": "Semi-structured (code + text)"}),
     _e("7081", "Item characteristic, coded", "ID", 1, 3),
     _c("C273", "Item Description", (
         _e("7009", "Item description identification", "AN", 1, 17),
