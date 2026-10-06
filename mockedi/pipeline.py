@@ -1404,15 +1404,22 @@ class Pipeline:
             self.on_release(released)
         return released
 
-    def redeliver(self, outbound_id: int = 0, partner_id: str = "") -> List[int]:
-        """Hand failed deliveries back to the courier, unchanged.
+    def redeliver(self, outbound_id: int = 0, partner_id: str = "",
+                  again: bool = False) -> List[int]:
+        """Hand deliveries back to the courier, unchanged.
 
-        Not a resend: `/_mock/send` builds a *new* document with a *new*
-        control number, which is a different event on the wire. This is the
-        same bytes and the same control numbers going out a second time,
-        which is what happens when a partner's listener was down and their
-        AS2 software retried - and the only way to test that a listener is
-        idempotent about a control number it has already seen.
+        Not `/_mock/send`, which writes a *new* document with a *new* control
+        number, a different event on the wire. This is the same bytes and the
+        same control numbers going out a second time, which is what happens
+        when a partner's listener was down and their AS2 software retried -
+        and the only way to test that a listener is idempotent about a
+        control number it has already seen.
+
+        Failed deliveries only, unless `again`: then one that was delivered,
+        or collected from the mailbox, goes out a second time too (#262).
+        That is the idempotency case itself - a listener that got the
+        document and is given it again - which retrying a failure never
+        reaches, because a delivery that failed may not have arrived at all.
 
         The document is not released again: it was released once, and its
         interchange and transaction set are already recorded. Only its
@@ -1420,7 +1427,9 @@ class Pipeline:
 
         Nothing here runs on a timer. A test that wants a retry asks for one.
         """
-        clauses, params = ["status = ?"], [FAILED]
+        wanted = (FAILED, DELIVERED, COLLECTED) if again else (FAILED,)
+        clauses = ["status IN (%s)" % ",".join("?" * len(wanted))]
+        params: List[Any] = list(wanted)
         if outbound_id:
             clauses.append("id = ?")
             params.append(outbound_id)
@@ -1436,7 +1445,7 @@ class Pipeline:
         self.conn.execute(
             "UPDATE outbound SET status = ?, note = ? WHERE id IN (%s)"
             % ",".join("?" * len(ids)),
-            tuple([READY, "redelivering"] + ids))
+            tuple([READY, "sending again" if again else "redelivering"] + ids))
         self.conn.commit()
         if self.on_release is not None:
             self.on_release(ids)
