@@ -58,7 +58,6 @@ jobs:
 
   docs:
     name: documentation covers every file
-    if: false   # THROWAWAY (#277): shows a skipped job turns the required job red
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -171,8 +170,6 @@ jobs:
     timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
-      - name: THROWAWAY (#277) - shows a failed job turns the required job red
-        run: exit 1
       - run: docker build -t mock-edi:ci .
       - name: Run it and send it an order
         run: |
