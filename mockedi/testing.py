@@ -438,6 +438,37 @@ class Mock:
             return self.expect("POST", "/_mock/advance?all")
         return self.expect("POST", "/_mock/advance" + _query(seconds=seconds))
 
+    @property
+    def held(self) -> bool:
+        """Whether this mock posts nothing until `step` asks (`--hold-delivery`)."""
+        if self._httpd is not None:
+            return bool(self._httpd.mock.config.hold_delivery)
+        return bool(self.expect("GET", "/_mock/health").get("deliveryHeld"))
+
+    def step(self, everything: bool = False) -> Any:
+        """Send the next thing a held mock is holding, and say what it was.
+
+        One step is one POST of the mock's own - a document, or an
+        asynchronous MDN - and returns once that send has finished, delivered
+        or failed. The answer names it: `type`, `id`, `partner`, `code`,
+        `control`, `status`. None when there was nothing to send, so
+        `while mock.step(): ...` ends. With `everything`, all of it goes, in
+        order, and the list of what went is returned.
+
+        Two mocks wired to each other are stepped in turn, and each can be
+        read between steps: nothing moves until the next one is asked for.
+        """
+        answer = self.expect("POST", "/_mock/deliver" + ("?all" if everything else ""))
+        return answer["sent"]
+
+    def _refuse_if_held(self, what: str) -> None:
+        if self.held:
+            raise MockError("POST", "/_mock/deliver", 409, {
+                "error": "%s would wait for deliveries that a held mock (%s) "
+                         "never makes on its own. It was started with "
+                         "hold_delivery: send them with step(), one at a "
+                         "time, or step(everything=True)" % (what, self.base)})
+
     def exchange(self, *others: "Mock", timeout: float = 15.0,
                  passes: int = 10, advance: bool = True) -> None:
         """Push a conversation between this mock and others until it stops.
@@ -469,9 +500,12 @@ class Mock:
 
         Raises rather than hanging if `passes` full rounds do not converge: a
         rally with no end is a bug in the test or in the mock, and the useful
-        report is what each side was still holding.
+        report is what each side was still holding. Raises at once if any of
+        the mocks is held: its deliveries are made with `step`.
         """
         mocks = (self,) + others
+        for mock in mocks:
+            mock._refuse_if_held("exchange()")
         for _ in range(passes):
             moved = False
             for mock in mocks:
@@ -512,7 +546,11 @@ class Mock:
         until something collects them, and waiting for that to change would
         wait forever. Those are not undelivered - nobody undertook to deliver
         them - so they are not waited for.
+
+        A held mock delivers nothing on its own, so this raises at once
+        rather than waiting out the timeout for it: use `step`.
         """
+        self._refuse_if_held("settle()")
         if self._httpd is not None:
             self._httpd.mock.courier.drain(timeout)
         delivered_to = {partner["id"] for partner in self.partners()

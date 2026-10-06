@@ -14,9 +14,16 @@ Delivery happens on one background thread.  Not a thread per document: a mock
 that answers an 850 by opening four sockets at once is a good way to discover
 that your listener is not thread safe, but a bad way to discover anything else,
 so documents go out in the order they were queued.
+
+A courier can be *held* (`--hold-delivery`). It then posts nothing of its own
+accord: what it is handed waits, in the same order, until `step` sends the
+head of the queue and says what became of it. Two mocks wired to each other
+finish a whole rally inside one `settle()` otherwise, and nothing outside can
+read the state between two hops of it (#271).
 """
 from __future__ import annotations
 
+import collections
 import datetime
 import email.utils
 import http.client
@@ -36,8 +43,14 @@ class Courier:
     """Delivers released documents and asynchronous MDNs, in the background."""
 
     def __init__(self, pipeline, timeout: float = DEFAULT_TIMEOUT,
-                 opener=None):
+                 opener=None, held: bool = False):
         self.pipeline = pipeline
+        # Held, nothing is posted until `step` asks for it. What would have
+        # gone on the queue waits here instead, in the order it would have
+        # gone, so a step sends what an unheld courier would have sent next.
+        self.held = held
+        self._held: "collections.deque[tuple]" = collections.deque()
+        self._held_guard = threading.Lock()
         self.config = pipeline.config
         self.timeout = timeout
         # Injected in tests so that delivery can be exercised without a
@@ -57,6 +70,8 @@ class Courier:
         """Drop what the courier remembers of past deliveries, for a reset."""
         with self.lock:
             self.failures.clear()
+        with self._held_guard:
+            self._held.clear()
 
     # -- lifecycle
 
@@ -95,13 +110,90 @@ class Courier:
     # -- work
 
     def enqueue_many(self, outbound_ids: List[int]) -> None:
+        if self.held:
+            with self._held_guard:
+                self._held.extend(("document", int(item)) for item in outbound_ids)
+            return
         for item in outbound_ids:
             self._queue.put(("document", int(item)))
         self.start()
 
     def enqueue_mdn(self, mdn_id: int) -> None:
+        if self.held:
+            with self._held_guard:
+                self._held.append(("mdn", int(mdn_id)))
+            return
         self._queue.put(("mdn", int(mdn_id)))
         self.start()
+
+    # -- one at a time, when held
+
+    def step(self) -> Optional[Dict[str, Any]]:
+        """Send the next thing a held courier is holding, and say what it was.
+
+        None when there is nothing to send. The send itself happens where
+        every send does, on the courier's thread, and this waits for that one
+        to finish - so the caller must not be holding the mock's lock, which
+        the courier needs for its database work. A mock that posts to itself
+        would otherwise wait for an answer only it can give.
+
+        What the courier would not send is passed over, not counted: a
+        document for a partner that collects from the mailbox, and one that
+        is no longer waiting because it was collected or cancelled meanwhile.
+        """
+        while True:
+            with self._held_guard:
+                if not self._held:
+                    return None
+                kind, identifier = self._held.popleft()
+            with self.lock:
+                if not self._would_send(kind, identifier):
+                    continue
+            done = threading.Event()
+            self._queue.put((kind, identifier))
+            self._queue.put(("flush", done))
+            self.start()
+            # The send is bounded by the courier's own timeout; the margin is
+            # for the thread to come round to it.
+            done.wait(self.timeout + 5.0)
+            with self.lock:
+                return self._moved(kind, identifier)
+
+    def waiting(self) -> int:
+        """How many held things a step would still send."""
+        with self._held_guard:
+            held = list(self._held)
+        with self.lock:
+            return sum(1 for kind, identifier in held
+                       if self._would_send(kind, identifier))
+
+    def _would_send(self, kind: str, identifier: int) -> bool:
+        conn = self.pipeline.conn
+        if kind == "mdn":
+            row = db.one(conn, "SELECT status, url FROM mdn WHERE id = ?",
+                         (identifier,))
+            return bool(row and row["status"] == "pending" and row["url"])
+        row = db.one(conn,
+                     "SELECT outbound.status, partner.as2_url FROM outbound"
+                     " JOIN partner ON partner.id = outbound.partner"
+                     " WHERE outbound.id = ?", (identifier,))
+        return bool(row and row["status"] == "ready" and row["as2_url"])
+
+    def _moved(self, kind: str, identifier: int) -> Dict[str, Any]:
+        """What a step sent and how it ended, as the outbox or `/_mock/mdns` has it."""
+        conn = self.pipeline.conn
+        if kind == "mdn":
+            row = db.one(conn, "SELECT * FROM mdn WHERE id = ?", (identifier,))
+            return {"type": "mdn", "id": identifier, "partner": row["partner"],
+                    "originalId": row["original_id"],
+                    "messageId": row["message_id"], "to": row["url"],
+                    "status": row["status"]}
+        row = db.one(conn, "SELECT * FROM outbound WHERE id = ?", (identifier,))
+        return {"type": "document", "id": identifier, "partner": row["partner"],
+                "code": row["code"], "kind": row["kind"],
+                "reference": row["reference"], "control": row["control"],
+                "messageId": row["message_id"], "to": row["delivery"],
+                "status": row["status"], "note": row["note"]}
 
     def _work(self) -> None:
         while not self._stop.is_set():
