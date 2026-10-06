@@ -134,7 +134,10 @@ class EveryWrittenSegmentAgainstTheStandard(unittest.TestCase):
         "ACK": ("668", "380", "355", "374", "373", "326", "235", "234"),
         "PO1": ("350", "330", "355", "212", "639", "235", "234"),
         "IT1": ("350", "358", "355", "212", "639", "235", "234"),
-        "POC": ("350", "670", "330", "671", "355", "212", "639", "235", "234"),
+        # POC05 is the composite C001, not element 355 on its own as PO103
+        # is. This said "355" until #288, written from the same reading the
+        # dictionary had; both published copies have C001 there.
+        "POC": ("350", "670", "330", "671", "C001", "212", "639", "235", "234"),
         "SN1": ("350", "382", "355", "646", "330", "355", "728", "668"),
         "LIN": ("350", "235", "234"),
         "HL": ("628", "734", "735", "736"),
