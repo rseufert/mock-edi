@@ -138,7 +138,11 @@ def _documents(conn, po_number: str, partner_id: str,
             # was then left out of the event (#197).
             event["answers"] = reconcile.answers(
                 row["dialect"], row["kind"], row["control"], row["reference"],
-                row["payload"] or "")
+                row["payload"] or "",
+                # So the note names an element as the reconciliation did.
+                # An acknowledgment answers what went the other way.
+                reconcile.sent_by(conn, row["partner"],
+                                  "in" if row["direction"] == "out" else "out"))
         if row["direction"] == "in":
             # What this document said that the order does not (#126), on the
             # event that said it rather than in a list of its own.
