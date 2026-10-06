@@ -68,6 +68,12 @@ class TheJobThatMainRequires(unittest.TestCase):
 
 
 class ActionsFromOutsideGitHub(unittest.TestCase):
+    """`actions/` stands for GitHub's own here, which is all the workflows use.
+
+    GitHub has others, `github/codeql-action` among them, and the repository's
+    setting allows them. One of those would fail the last test below with a
+    message about the publish action: widen what counts as GitHub's then.
+    """
 
     def uses(self):
         for name in sorted(os.listdir(WORKFLOWS)):
