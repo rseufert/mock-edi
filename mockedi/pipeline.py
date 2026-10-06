@@ -878,7 +878,8 @@ class Pipeline:
         order = documents.order_row(self.conn, po_number, partner["id"])
         body = transactions.write_change(partner["dialect"], self.us, partner,
                                          order, change, moment)
-        self._send(partner, schema.CHANGE, body, po_number, receipt, moment)
+        self._send(partner, schema.CHANGE, body, po_number, receipt, moment,
+                   promise=int(row["id"]))
 
     def _fulfil(self, row, moment, receipt: Optional[Receipt] = None) -> None:
         """Keep one promise: pack the goods, or bill for them.
@@ -891,6 +892,9 @@ class Pipeline:
         if partner is None:
             return
         po_number = row["po_number"]
+        # What is packed, billed and sent below is done in keeping this
+        # promise, and says so (#211).
+        promise = int(row["id"])
 
         if row["kind"] in (CHANGE_LINE, CANCEL_ORDER):
             self._send_buyer_change(row, moment, receipt)
@@ -898,7 +902,7 @@ class Pipeline:
 
         if row["kind"] == schema.DESPATCH:
             shipment = documents.create_shipment(self.conn, po_number,
-                                                 partner["id"], moment)
+                                                 partner["id"], moment, promise)
             if shipment is None:
                 return
             order = documents.order_row(self.conn, po_number, partner["id"])
@@ -907,7 +911,7 @@ class Pipeline:
                 partner["dialect"], self.us, partner, order, lines, shipment,
                 moment)
             self._send(partner, schema.DESPATCH, body, po_number, receipt, moment,
-                       shipment=shipment["shipment_id"])
+                       shipment=shipment["shipment_id"], promise=promise)
             if partner["behaviour"] == "out-of-order" and not self._sent(
                     partner["id"], schema.RESPONSE, po_number):
                 self._queue_response(partner, order, receipt, moment)
@@ -924,12 +928,12 @@ class Pipeline:
         # to come, and this invoice bills what has shipped and no more (#222).
         if not self._packing_is_promised(partner, po_number):
             documents.create_shipment(self.conn, po_number, partner["id"],
-                                      moment)
+                                      moment, promise)
         for shipment in documents.uninvoiced_shipments(self.conn, po_number,
                                                        partner["id"]):
             invoice = documents.create_invoice(
                 self.conn, po_number, partner["id"], shipment["shipment_id"],
-                moment, self.config.tax_rate)
+                moment, self.config.tax_rate, promise)
             if invoice is None:
                 continue
             order = documents.order_row(self.conn, po_number, partner["id"])
@@ -938,7 +942,7 @@ class Pipeline:
                 partner["dialect"], self.us, partner, order, lines, invoice,
                 shipment, moment)
             numbers = {"invoice": invoice["invoice_number"],
-                       "shipment": invoice["shipment_id"]}
+                       "shipment": invoice["shipment_id"], "promise": promise}
             self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
                        **numbers)
             if partner["behaviour"] == "duplicate-invoice":
@@ -1006,11 +1010,12 @@ class Pipeline:
               reference: str, receipt: Optional[Receipt],
               moment: datetime.datetime, delay_ms: int = 0,
               dialect: str = "", note: str = "", shipment: str = "",
-              invoice: str = "") -> Queued:
+              invoice: str = "", promise: int = 0) -> Queued:
         """Envelope a document, number it, and put it in the queue.
 
         `shipment` and `invoice` are the consignment and the invoice the
-        document was written from, for the timeline to name (#273).
+        document was written from, for the timeline to name (#273), and
+        `promise` the promise it is sent in keeping, if any (#211).
         """
         delay_ms += self._lateness(partner)
         dialect = dialect or partner["dialect"]
@@ -1058,7 +1063,8 @@ class Pipeline:
 
         return self._enqueue(partner_id, dialect, code, kind, reference, payload,
                              interchange_control, group_control, set_control,
-                             receipt, moment, delay_ms, note, shipment, invoice)
+                             receipt, moment, delay_ms, note, shipment, invoice,
+                             promise)
 
     @staticmethod
     def _lateness(partner) -> int:
@@ -1124,18 +1130,18 @@ class Pipeline:
                  group_control: str, set_control: str,
                  receipt: Optional[Receipt], moment: datetime.datetime,
                  delay_ms: int = 0, note: str = "", shipment: str = "",
-                 invoice: str = "") -> Queued:
+                 invoice: str = "", promise: int = 0) -> Queued:
         message_id = "<%s.%s@%s>" % (
             db.next_number(self.conn, "message"), code, self.config.as2_id)
         due = moment + datetime.timedelta(milliseconds=delay_ms)
         cursor = self.conn.execute(
             "INSERT INTO outbound (partner, dialect, code, kind, reference,"
             " payload, message_id, control, group_control, set_control,"
-            " shipment_id, invoice_number, status, due_at, note, at, seq)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " shipment_id, invoice_number, promise_id, status, due_at, note,"
+            " at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
              interchange_control, group_control, set_control, shipment, invoice,
-             PENDING, db.stamp(due), note, db.now(self.conn),
+             promise, PENDING, db.stamp(due), note, db.now(self.conn),
              db.next_seq(self.conn)))
         self.conn.commit()
 
@@ -1425,12 +1431,12 @@ class Pipeline:
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
-                " shipment_id, invoice_number, accepted, findings, at, seq)"
-                " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " shipment_id, invoice_number, promise_id, accepted, findings,"
+                " at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
                  row["reference"], row["shipment_id"], row["invoice_number"],
-                 1, "", sent_at, sent_seq))
+                 row["promise_id"], 1, "", sent_at, sent_seq))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(self.conn), row["id"]))

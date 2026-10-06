@@ -329,7 +329,7 @@ class TheVersionMovesWithTheSchema(unittest.TestCase):
     # changed: bump db.SCHEMA_VERSION, then record the new pair here. A file
     # written by the new schema must not look, to an older mock, like one it
     # understands.
-    FINGERPRINT = (13, "254be7c074a1f8dd")
+    FINGERPRINT = (14, "e990af45da9f851b")
 
     def test_a_changed_schema_has_a_new_version(self):
         text = " ".join((db.SCHEMA + db.INDEXES).split())
