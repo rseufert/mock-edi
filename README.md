@@ -536,21 +536,40 @@ to has nothing to mirror, and an answer that depended on which document
 arrived first would undo what `--start-at` is for. X12 declares no character
 set at all, so the field is ignored for an X12 partner.
 
-`UNOA` is refused, and the refusal says why:
+`UNOA` is level A: ISO 646 *without lower case*. That is a **repertoire**
+rather than an encoding — a set of permitted characters, not a way of turning
+them into bytes — so the mock holds a document to it rather than relying on a
+codec, which would admit lower case. And it does what a real level A sender
+does with the lower case it cannot send: **folds it**.
 
 ```
-the mock will not answer in UNOA: level A has no lower case, and the mock
-cannot yet hold a document to that - see #295. UNOB is the same repertoire
-with lower case, and is written the same way on the wire.
+level B   NAD+BY+ACME::91++Widget Co++Lodz
+level A   NAD+BY+ACME::91++WIDGET CO++LODZ
 ```
 
-Level A is ISO 646 *without lower case*, which is a repertoire rather than an
-encoding — a set of permitted characters, not a way of turning them into
-bytes — and the mock has nothing to check a document against one with yet.
-Declaring `UNB+UNOA:3` above a description level A cannot carry is the kind of
-thing a partner discovers in production, so the mock declines instead. An
-unknown identifier is refused too, and the refusal lists the ones it answers
-in.
+Folding is `a`–`z` to `A`–`Z` and not a general upper-casing: level A's
+alphabet *is* A–Z, and `ß` upper-cased would become `SS`, a character longer,
+so a value at an element's maximum would grow past it. Anything outside ISO
+646 is substituted as it always was — `Łódź` becomes `??D?` — and each `?`
+appears doubled on the wire because the release character is escaped after
+the substitution, which is what stops a substituted character from swallowing
+the separator after it.
+
+**A level A partner's id may not have lower case.** Folding a description
+loses nothing that matters; folding an *identifier* does, because this mock
+holds partner ids case-distinctly, so `acme` and `ACME` can both be partners
+and a folded `UNB` would address a document to a party the mock itself cannot
+tell from another. In real EDI the question does not arise — a level A
+partner's id is upper case, because the syntax demands it — so a lower-case
+one is refused with `UNOA` rather than folded. Any other syntax carries it
+unchanged.
+
+The twelve ISO 646 positions open to national substitution — `#`, `$`, `@`,
+`[`, `\`, `]`, `^`, `` ` ``, `{`, `|`, `}`, `~` — are excluded by level A's
+definition too, and the mock does **not** enforce them: only one published
+source for which twelve they are could be found, and refusing a character
+level A permits is the worse mistake to make. An unknown identifier is
+refused, and the refusal lists the ones the mock answers in.
 
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
