@@ -1426,17 +1426,12 @@ BGM = Segment("BGM", "Beginning of Message", (
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("1000", "Document/message name", "AN", 1, 35),
     )),
-    # C106 is a later directory's: D.96A has the number as element 1004 on
-    # its own. It stays until #186 settles where an ORDCHG's change sequence
-    # lives, because the mock writes that sequence in C106's 1060 and reads
-    # it back from there - so declaring this simple would leave the dictionary
-    # and the writer disagreeing, and #288 would then refuse the mock's own
-    # ORDCHG. Where the sequence goes changes bytes, so it is not decided here.
-    _c("C106", "Document/Message Identification", (
-        _e("1004", "Document/message number", "AN", 1, 35),
-        _e("1056", "Version identifier", "AN", 1, 9),
-        _e("1060", "Revision identifier", "AN", 1, 6),
-    )),
+    # Not a composite in D.96A: the number stands on its own as element 1004,
+    # and C106 - a number, a version in 1056 and a revision in 1060 - belongs
+    # to a later directory. The mock wrote an ORDCHG's change sequence in that
+    # 1060 until #186; it now writes the change request's own number here and
+    # names the order in RFF+ON, which is where D.96A puts it.
+    _e("1004", "Document/message number", "AN", 1, 35),
     _e("1225", "Message function, coded", "ID", 1, 3, OPTIONAL, MESSAGE_FUNCTION_CODES),
     _e("4343", "Response type, coded", "ID", 1, 3, OPTIONAL, RESPONSE_TYPE_CODES),
 ), "What kind of document this is, its number, and - in a response - the verdict.")
