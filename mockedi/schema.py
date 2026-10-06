@@ -1177,7 +1177,12 @@ EDIFACT_DATE_QUALIFIERS = {  # 2005
     "137": "Document/message date/time", "2": "Delivery date/time, requested",
     "4": "Order date/time",
     "11": "Despatch date and/or time", "17": "Delivery date/time, estimated",
-    "35": "Delivery date/time, actual", "132": "Arrival date/time, estimated",
+    "35": "Delivery date/time, actual",
+    # What a seller's response dates a confirmed line with: the delivery
+    # date its own schedule gives, not the one the buyer asked for, which is
+    # 2 (#305). X12's counterpart is 374's 067.
+    "67": "Delivery date/time, current schedule",
+    "132": "Arrival date/time, estimated",
     "200": "Pick-up/collection date/time of cargo",
 }
 EDIFACT_DATE_FORMATS = {   # 2379
