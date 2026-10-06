@@ -388,8 +388,21 @@ def escape(value: str, delims: Delimiters) -> str:
     return "".join(out)
 
 
-def fit(value: str, charset: str) -> str:
-    """`value` with every character `charset` cannot carry replaced by `?`.
+# a-z to A-Z, for a syntax whose repertoire has no lower case (#263). Built
+# here rather than imported from `charsets` so that the syntax layer goes on
+# depending on nothing above it.
+_FOLD = str.maketrans("abcdefghijklmnopqrstuvwxyz",
+                      "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+def fit(value: str, charset: str, outside: str = "", fold: bool = False) -> str:
+    """`value` with every character the set cannot carry replaced by `?`.
+
+    `outside` is the repertoire's own exclusion, for a syntax whose codec
+    admits more than the syntax does: `UNOA`'s codec is `ascii` and level A
+    has no lower case, so the codec alone would pass `Widget` (#295). A
+    character excluded here is substituted exactly as one the codec cannot
+    encode is, in the same place and for the same reason.
 
     This belongs *before* `escape` and that is the whole point (#199). The
     substitution used to happen on the way to bytes, after the segment had
@@ -404,22 +417,31 @@ def fit(value: str, charset: str) -> str:
     An empty `charset` fits nothing, for the callers that do not know one.
     """
     text = "" if value is None else str(value)
+    if fold:
+        # Before everything else: a folded character is then inside the
+        # repertoire and the codec both, which is the point of folding.
+        text = text.translate(_FOLD)
+    if outside:
+        text = "".join("?" if char in outside else char for char in text)
     if not charset:
         return text
     return text.encode(charset, "replace").decode(charset)
 
 
-def render_segment(seg: Seg, delims: Delimiters, charset: str = "") -> str:
+def render_segment(seg: Seg, delims: Delimiters, charset: str = "",
+                   outside: str = "", fold: bool = False) -> str:
     """One segment, trailing empty elements trimmed as every real sender does."""
     parts: List[str] = []
     for value in seg.elements:
         if isinstance(value, list):
-            components = [escape(fit(v, charset), delims) for v in value]
+            components = [escape(fit(v, charset, outside, fold), delims)
+                          for v in value]
             while components and components[-1] == "":
                 components.pop()
             parts.append(delims.component.join(components))
         else:
-            parts.append(escape(fit(value, charset), delims))
+            parts.append(escape(fit(value, charset, outside, fold),
+                            delims))
     while parts and parts[-1] == "":
         parts.pop()
     return delims.element.join([seg.tag] + parts)

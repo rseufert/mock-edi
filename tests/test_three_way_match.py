@@ -139,8 +139,67 @@ class TheRules(MatchCase):
         self.shipped()
         self.billed([item("1", "WIDGET-001", 70)], number="INV-1")
         summary = self.billed([item("1", "WIDGET-001", 40)], number="INV-2")
+        # 110 billed, against 100 shipped and against 100 ordered: two
+        # facts, and both are said (#309).
         self.assertEqual(self.rules(summary),
-                         [("billed-more-than-shipped", "1", "100", "110")])
+                         [("billed-more-than-shipped", "1", "100", "110"),
+                          ("billed-more-than-ordered", "1", "100", "110")])
+
+    def test_billed_more_than_ordered_when_the_despatch_covered_it(self):
+        """The gap in #309: 130 shipped, 130 billed, 100 ordered. The bill is
+        no more than shipped, and used to draw nothing."""
+        self.confirmed()
+        self.shipped([item("1", "WIDGET-001", 130)])
+        summary = self.billed([item("1", "WIDGET-001", 130)])
+        self.assertEqual(self.rules(summary),
+                         [("billed-more-than-ordered", "1", "100", "130")])
+        self.assertIn("ordered 100, 130 billed",
+                      summary["disagreements"][0]["note"])
+        self.assertIn("INV-1", summary["disagreements"][0]["note"])
+
+    def test_billed_more_than_ordered_with_no_despatch_at_all(self):
+        """It does not wait for an 856: what was ordered is known already."""
+        self.confirmed()
+        summary = self.billed([item("1", "WIDGET-001", 130)])
+        self.assertEqual(self.rules(summary),
+                         [("billed-before-shipped", "", "an 856", "none"),
+                          ("billed-more-than-ordered", "1", "100", "130")])
+
+    def test_a_confirmation_of_more_does_not_raise_what_was_ordered(self):
+        self.deliver(answer("PO-B", [line("1", "WIDGET-001", 130),
+                                     line("2", "BRKT-050", 40, price="4.15")],
+                            sender=self.partner, dialect=self.dialect))
+        self.shipped([item("1", "WIDGET-001", 130)])
+        summary = self.billed([item("1", "WIDGET-001", 130)])
+        self.assertEqual(self.rules(summary),
+                         [("billed-more-than-ordered", "1", "100", "130")])
+
+    def test_but_a_quantity_the_buyer_raised_is_what_was_ordered(self):
+        status, _h, data = self.post("/_mock/purchase/PO-B/change",
+                                     {"lines": [{"line": "1", "quantity": "130"}]})
+        self.assertEqual(status, 200, data)
+        self.confirmed()
+        self.shipped([item("1", "WIDGET-001", 130)])
+        summary = self.billed([item("1", "WIDGET-001", 130)])
+        self.assertNotIn("billed-more-than-ordered",
+                         [rule[0] for rule in self.rules(summary)])
+
+    def test_a_second_bill_within_what_shipped_can_still_pass_what_was_ordered(self):
+        self.confirmed()
+        self.shipped([item("1", "WIDGET-001", 130)])
+        first = self.billed([item("1", "WIDGET-001", 70)], number="INV-1")
+        self.assertEqual(first["disagreements"], [])
+        second = self.billed([item("1", "WIDGET-001", 60)], number="INV-2")
+        self.assertEqual(self.rules(second),
+                         [("billed-more-than-ordered", "1", "100", "130")])
+
+    def test_a_repeated_invoice_is_not_more_billed(self):
+        self.confirmed()
+        self.shipped([item("1", "WIDGET-001", 130)])
+        self.billed([item("1", "WIDGET-001", 130)], number="INV-1")
+        again = self.billed([item("1", "WIDGET-001", 130)], number="INV-1")
+        self.assertEqual([rule[0] for rule in self.rules(again)],
+                         ["invoice-repeated"])
 
     def test_an_invoice_number_repeated(self):
         self.confirmed()

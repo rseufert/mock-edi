@@ -27,6 +27,8 @@ from typing import List, Optional, Sequence
 
 from . import schema
 from .charsets import EDIFACT_SYNTAX
+from .charsets import folds as charsets_folds
+from .charsets import outside as charsets_outside
 from .envelope import (Delimiters, EDIFACT_DEFAULTS, EdiSyntaxError, Group,
                        cut_interchanges,
                        Interchange, Message, Seg, ccyymmdd, hhmm,
@@ -242,6 +244,10 @@ def render(interchange: Interchange, newline: bool = False,
         syntax.append("3")
     if charset is None:
         charset = EDIFACT_SYNTAX.get(syntax[0], "iso-8859-1")
+    # What the syntax excludes beyond what its codec refuses: level A's
+    # codec is `ascii` and level A has no lower case (#295).
+    outside = charsets_outside(syntax[0])
+    fold = charsets_folds(syntax[0])
 
     out: List[str] = []
     out.append(render_segment(seg(
@@ -257,16 +263,17 @@ def render(interchange: Interchange, newline: bool = False,
         "1" if interchange.ack_requested else "",
         "",
         "1" if interchange.test else "",
-    ), delims, charset))
+    ), delims, charset, outside, fold))
     for group in interchange.groups:
         for item in group.messages:
             segments = (item.segments if delims.decimal in (".", "")
                         else _decimals(item, ".", delims.decimal))
             for element in segments:
-                out.append(render_segment(element, delims, charset))
+                out.append(render_segment(element, delims, charset,
+                                          outside, fold))
     out.append(render_segment(
         seg("UNZ", str(interchange.message_count), interchange.control),
-        delims, charset))
+        delims, charset, outside, fold))
 
     joiner = delims.segment + ("\n" if newline else "")
     body = joiner.join(out) + delims.segment + ("\n" if newline else "")

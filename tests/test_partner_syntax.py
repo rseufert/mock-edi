@@ -19,11 +19,12 @@ last inbound interchange:** a partner the mock has only ever sent to has
 nothing to mirror, and an answer that depends on which document arrived first
 is the opposite of what #280 bought.
 
-`UNOA` is refused, with a refusal that says why. Level A is "the basic code
-table of ISO 646 with the exceptions of lower case letters" - a repertoire,
-not an encoding - and `charsets` maps it to `ascii`, which admits lower case.
-Offering it would put `UNB+UNOA:3` above a description level A cannot carry.
-That is #295.
+`UNOA` is offered. It was excluded twice before, for two different reasons,
+and both are gone: the mock could not hold a document to level A (#295), and
+then what it would have written was a row of question marks rather than
+words (#263, answered: level A folds case). A level A partner whose *id* has
+lower case is still refused, because an id is a key and not prose. All of
+that is in `tests/test_unoa_repertoire.py`.
 
 Sources for the identifiers: GEFEG's JWG1 service code lists and
 edifactory.de's data element 0001, which agree word for word.
@@ -157,17 +158,29 @@ class AFileFromBeforeTheColumn(unittest.TestCase):
 
 class WhatAPartnerMayBeSetTo(MockServerCase):
 
-    def test_every_syntax_charsets_has_a_codec_for_but_one(self):
-        self.assertEqual(set(partners.SYNTAXES),
-                         set(charsets.EDIFACT_SYNTAX) - {"UNOA"})
+    def test_every_syntax_charsets_has_a_codec_for(self):
+        # UNOA joined them once #263 settled that level A folds case. It was
+        # excluded twice before that, for two different reasons, and both are
+        # gone: the mock can hold a document to level A (#295) and what it
+        # writes is now legible rather than a row of question marks.
+        self.assertEqual(set(partners.SYNTAXES), set(charsets.EDIFACT_SYNTAX))
+        self.assertEqual(partners.UNFAITHFUL, {})
 
-    def test_unoa_is_refused_and_the_refusal_says_why(self):
+    def test_unoa_is_offered_and_folds(self):
         status, _headers, body = self.patch(
             "/_mock/partners/" + EURODIS, {"syntax": "UNOA"})
+        self.assertEqual(status, 200, body)
+        self.assertEqual(body["syntax"], "UNOA")
+
+    def test_but_not_for_a_partner_whose_id_has_lower_case(self):
+        # An id is a key, not prose: see tests/test_unoa_repertoire.py.
+        self.post("/_mock/partners", {
+            "id": "lowdis", "name": "Lowdis", "dialect": "EDIFACT",
+            "version": "D:96A:UN", "role": "customer"})
+        status, _headers, body = self.patch("/_mock/partners/lowdis",
+                                            {"syntax": "UNOA"})
         self.assertEqual(status, 400, body)
-        self.assertIn("will not answer in UNOA", body["error"])
-        self.assertIn("no lower case", body["error"])
-        self.assertIn("UNOB", body["error"])
+        self.assertIn("wrong for an id", body["error"])
 
     def test_an_unknown_identifier_is_refused_with_the_list(self):
         status, _headers, body = self.patch(
