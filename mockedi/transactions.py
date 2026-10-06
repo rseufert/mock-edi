@@ -503,9 +503,7 @@ def _line_x12(block: Sequence[Seg], fallback: int) -> Line:
         uom=head.get(3) or "EA",
         price=number(head.get(4), "0.00"),
     )
-    for item in block[1:]:
-        if item.tag == "PID" and item.get(5):
-            line.description = line.description or item.get(5)
+    line.description = _description_x12(block)
     if not line.sku:
         # Some buyers identify items by a qualifier the mock does not list.
         # Take whatever is there rather than refuse the line - but never the
@@ -582,9 +580,84 @@ def _line_edifact(block: Sequence[Seg], fallback: int) -> Line:
         elif item.tag == "PRI":
             if item.comp(1, 1) in ("AAA", "AAB", "AAE"):
                 line.price = number(item.comp(1, 2), "0.00")
-        elif item.tag == "IMD":
-            line.description = line.description or item.comp(3, 4)
+    line.description = _edifact_description(block)
     return line
+
+
+# ---------------------------------------------------------------------------
+# A description longer than one element holds
+#
+# An order line's description is whatever the buyer sent, and it is written
+# back into every document that answers the order - in the partner's dialect,
+# which need not be the one it arrived in. `PID05` holds 80 characters and
+# D.96A's `7008` holds 35, so a description can be one the mock accepted and
+# cannot write in one element (#291). Both standards have an answer, and it
+# is the same one: say it in pieces. X12 repeats `PID`; EDIFACT has two
+# `7008`s in an `IMD` and repeats that.
+# ---------------------------------------------------------------------------
+
+PID_WIDTH = 80          # PID05, element 352
+IMD_WIDTH = 35          # C273's 7008, twice in one IMD
+# How many of each a line may carry, in every set the mock writes a
+# description into. Pieces have an end too: a description past 200 PIDs
+# (16,000 characters) or 99 IMDs (6,930) is cut there, because the segment
+# after that is one the dictionary reports. Nothing real is that long; it
+# was reached by reading every free-form PID of a line as one text and
+# answering in the other dialect (#291).
+PID_MOST = 200
+IMD_MOST = 99
+
+
+def pieces(text: str, width: int) -> List[str]:
+    """`text` in parts of at most `width` characters, cut at spaces.
+
+    Cut at the last space that fits, so that joining the parts with a space
+    gives the text back. A run of more than `width` characters with no space
+    in it has nowhere to be cut and is cut where it must be; it then reads
+    back with a space where the cut fell, which is the one thing this loses.
+
+    A text that fits is returned as it is, to the byte: nothing about a
+    description that needed no help is changed.
+    """
+    if len(text or "") <= width:
+        return [text] if text else []
+    words = " ".join(text.split())
+    out: List[str] = []
+    while len(words) > width:
+        cut = words.rfind(" ", 0, width + 1)
+        if cut <= 0:
+            out.append(words[:width])
+            words = words[width:]
+        else:
+            out.append(words[:cut])
+            words = words[cut + 1:]
+    if words:
+        out.append(words)
+    return out
+
+
+def joined(parts: Sequence[str]) -> str:
+    """The parts of a description as one text: `pieces`, the other way."""
+    return " ".join(part.strip() for part in parts if part and part.strip())
+
+
+def description_x12(text: str) -> List[Seg]:
+    """A description as free-form `PID` segments, as many as it takes.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    return [seg("PID", "F", "", "", "", part)
+            for part in pieces(text, PID_WIDTH)[:PID_MOST]]
+
+
+def description_edifact(text: str) -> List[Seg]:
+    """A description as free-form `IMD` segments, two `7008`s to each.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    parts = pieces(text, IMD_WIDTH)[:2 * IMD_MOST]
+    return [seg("IMD", "F", "", ["", "", ""] + parts[index:index + 2])
+            for index in range(0, len(parts), 2)]
 
 
 # ---------------------------------------------------------------------------
@@ -693,7 +766,7 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
             out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
         if row.get("reason"):
             out.append(seg("REF", "ZZ", "", row["reason"]))
     out.append(seg("CTT", str(len(lines))))
@@ -774,7 +847,7 @@ def _x12_810(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
                        unit_price(number(row["price"], "0.00")), "",
                        "VP", row["sku"], *(("UP", row["upc"]) if row.get("upc") else ())))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
 
     out.append(seg("TDS", implied_decimal(number(invoice["total"], "0.00"))))
     tax = number(str(invoice.get("tax") or "0"), "0.00")
@@ -845,7 +918,7 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if row.get("upc"):
             out.append(seg("PIA", "1", [row["upc"], "UP"]))
         if row.get("description"):
-            out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+            out.extend(description_edifact(row["description"]))
         ordered = number(row["quantity"])
         confirmed = number(str(row.get("confirmed") or "0"))
         out.append(seg("QTY", ["21", quantity_text(ordered), unit]))
@@ -916,7 +989,7 @@ def _edifact_invoic(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if row.get("upc"):
             out.append(seg("PIA", "1", [row["upc"], "UP"]))
         if row.get("description"):
-            out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+            out.extend(description_edifact(row["description"]))
         out.append(seg("QTY", ["47", quantity_text(invoiced), unit]))
         out.append(seg("MOA", ["203", price_text(invoiced * price)]))
         out.append(seg("PRI", ["AAA", unit_price(price)]))
@@ -971,9 +1044,7 @@ def _read_change_x12(message: Message) -> Change:
             uom=head.get(5) or "EA",
             price=number(head.get(6), "0.00"),
         )
-        for item in block[1:]:
-            if item.tag == "PID" and item.get(5):
-                line.description = line.description or item.get(5)
+        line.description = _description_x12(block)
         change.lines.append(line)
     return change
 
@@ -1125,7 +1196,7 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
             out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
         if row.get("reason"):
             out.append(seg("REF", "ZZ", "", row["reason"]))
     out.append(seg("CTT", str(len(lines))))
@@ -1276,7 +1347,7 @@ def _order_line_x12(row: Dict) -> List[Seg]:
                "VP", row["sku"],
                *(("UP", row["upc"]) if row.get("upc") else ()))]
     if row.get("description"):
-        out.append(seg("PID", "F", "", "", "", row["description"]))
+        out.extend(description_x12(row["description"]))
     # A real 850 often dates each line too. Not written here: `Line` has no
     # field for a line-level date, so nothing would read it back and no
     # round-trip could check it. Give `Line` the field first.
@@ -1321,7 +1392,7 @@ def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
                        "VP", line.sku,
                        *(("UP", line.upc) if line.upc else ())))
         if line.description:
-            out.append(seg("PID", "F", "", "", "", line.description))
+            out.extend(description_x12(line.description))
     out.append(seg("CTT", str(len(change.lines))))
     return out
 
@@ -1350,7 +1421,7 @@ def _edifact_order_line(row: Dict) -> List[Seg]:
     if row.get("upc"):
         out.append(seg("PIA", "1", [row["upc"], "UP"]))
     if row.get("description"):
-        out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+        out.extend(description_edifact(row["description"]))
     out.append(seg("QTY", ["21", quantity_text(number(row["quantity"])), unit]))
     out.append(seg("PRI", ["AAA", unit_price(number(row.get("price"), "0.00"))]))
     return out
@@ -1412,7 +1483,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
         if line.upc:
             out.append(seg("PIA", "1", [line.upc, "UP"]))
         if line.description:
-            out.append(seg("IMD", "F", "", ["", "", "", line.description]))
+            out.extend(description_edifact(line.description))
         out.append(seg("QTY", ["21", quantity_text(line.quantity), unit]))
         out.append(seg("PRI", ["AAA", unit_price(line.price)]))
     out.append(seg("UNS", "S"))
@@ -1507,10 +1578,20 @@ def _reason_x12(block: Sequence[Seg]) -> str:
 
 
 def _description_x12(block: Sequence[Seg]) -> str:
-    for item in block[1:]:
-        if item.tag == "PID" and item.get(5):
-            return item.get(5)
-    return ""
+    """A line's description: every free-form `PID` of it, as one text.
+
+    A description longer than `PID05` holds is sent as several `PID*F`
+    segments, by this mock (#291) and by anyone else, so they are read as the
+    one description they are. A structured `PID` is something else - a
+    colour code, a size - and is not folded in; where a line has no
+    free-form one at all, the first `PID` with any text is taken, as it
+    always was.
+    """
+    described = [item for item in block[1:] if item.tag == "PID" and item.get(5)]
+    free = [item.get(5) for item in described if item.get(1) in ("F", "")]
+    if free:
+        return joined(free)
+    return described[0].get(5) if described else ""
 
 
 def _response_line_x12(block: Sequence[Seg], fallback: int,
@@ -1852,10 +1933,20 @@ def _edifact_ids(block: Sequence[Seg]) -> Dict[str, str]:
 
 
 def _edifact_description(block: Sequence[Seg]) -> str:
-    for item in block[1:]:
-        if item.tag == "IMD" and item.comp(3, 4):
-            return item.comp(3, 4)
-    return ""
+    """A line's description: both `7008`s of every free-form `IMD` of it.
+
+    C273 has two `7008` components of 35 characters and a line may carry
+    several `IMD`s, which is how D.96A says a long description (#291).
+    Reading only the first component of the first segment, as this did,
+    returned the mock's own long description cut short.
+    """
+    described = [item for item in block[1:]
+                 if item.tag == "IMD" and (item.comp(3, 4) or item.comp(3, 5))]
+    free = [part for item in described if item.get(1) in ("F", "")
+            for part in (item.comp(3, 4), item.comp(3, 5)) if part]
+    if free:
+        return joined(free)
+    return described[0].comp(3, 4) if described else ""
 
 
 def _edifact_unit_back(code: str) -> str:
