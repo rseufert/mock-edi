@@ -56,13 +56,28 @@ CREDIT, DEBIT = "C", "D"
 
 
 @dataclass
+class Paid:
+    """One invoice an advice pays: its number, the amount, and its currency.
+
+    The currency is the document's own, from a CUX inside its DOC group
+    (D.96A's SG5), and None where the document does not state one - which is
+    the ordinary case and means "the advice's". X12 has no per-invoice
+    currency to read: `CUR` is one per message, outside the loop that holds
+    the invoices (#298).
+    """
+    invoice: str = ""
+    paid: Optional[Decimal] = None
+    currency: Optional[str] = None
+
+
+@dataclass
 class Advice:
     """What a remittance advice says, as far as the rules and the listing need."""
     trace: str = ""
     total: Optional[Decimal] = None
     credit_debit: str = CREDIT
     settles: Optional[datetime.date] = None
-    invoices: List[Tuple[str, Optional[Decimal]]] = field(default_factory=list)
+    invoices: List["Paid"] = field(default_factory=list)
     # The currency the total is in: CUR02 for an 820, the summary MOA's 6345
     # for a REMADV, falling back to the header CUX. None when the advice
     # states none, which is not the same as "USD" and is not guessed: the
@@ -91,7 +106,7 @@ def read(message: Message, dialect: str) -> Advice:
         advice.trace = trn.get(2) if trn is not None else ""
         cur = message.find("CUR")
         advice.currency = (cur.get(2) or None) if cur is not None else None
-        advice.invoices = [(item.get(2), _amount(item.get(4)))
+        advice.invoices = [Paid(item.get(2), _amount(item.get(4)))
                            for item in message.segments if item.tag == "RMR"]
         return advice
     bgm = message.find("BGM")
@@ -102,25 +117,27 @@ def read(message: Message, dialect: str) -> Advice:
         if item.tag in ("DOC", "AJT", "UNS"):
             within = item.tag
             if item.tag == "DOC":
-                advice.invoices.append((item.comp(2, 1), None))
-        elif item.tag == "CUX" and within not in ("DOC", "AJT"):
-            # C504's qualifier and its currency. The header CUX group repeats
-            # up to nine times, so there may be several, each qualified: the
-            # advice's amounts are in the *reference* currency, 6347 code 2,
-            # whose own definition is "the currency applicable to amounts
-            # stated". Collected rather than overwritten, because keeping the
-            # last one silently is the same silence this change removes a
-            # level up (#281).
+                advice.invoices.append(Paid(item.comp(2, 1)))
+        elif item.tag == "CUX":
+            # C504's qualifier and its currency. D.96A's SG3 admits five at
+            # the head, each qualified, so there may be several: the advice's
+            # amounts are in the *reference* currency, 6347 code 2, whose own
+            # definition is "the currency applicable to amounts stated".
+            # Collected rather than overwritten, because keeping the last one
+            # silently is the same silence #281 removed a level up.
             #
-            # A CUX inside a DOC or an AJT group is not read: D.96A has one in
-            # SG5 and SG9, and this dictionary declares CUX at header level
-            # only, so the validator calls it an unexpected segment. Reading
-            # it here would be answering a document the mock refuses (#298).
-            header.append((item.comp(1, 1), item.comp(1, 2) or None))
+            # Inside a DOC group it is SG5's, and it is that document's own -
+            # which is how an advice paying invoices in two currencies says
+            # so. Declared since #298; before that the segment was reported
+            # as unexpected and this read nothing.
+            if within == "DOC" and advice.invoices:
+                advice.invoices[-1].currency = (
+                    advice.invoices[-1].currency or item.comp(1, 2) or None)
+            elif within not in ("DOC", "AJT"):
+                header.append((item.comp(1, 1), item.comp(1, 2) or None))
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
-                advice.invoices[-1] = (advice.invoices[-1][0],
-                                       _amount(item.comp(1, 2)))
+                advice.invoices[-1].paid = _amount(item.comp(1, 2))
             elif within == "UNS":
                 advice.total = _amount(item.comp(1, 2))
                 # C516's third component, which the summary MOA may state
@@ -296,23 +313,31 @@ def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
                  "lets both state one and does not say which wins"
                  % (advice.header_currency, advice.currency),
             interchange=interchange))
-    if not advice.currency:
+    if not advice.currency and not any(item.currency
+                                       for item in advice.invoices):
         return out
-    for number, _paid in advice.invoices:
-        if not number:
+    for item in advice.invoices:
+        if not item.invoice:
             continue
         row = db.one(conn, "SELECT currency FROM invoice WHERE invoice_number = ?"
-                           " AND partner = ?", (number, partner["id"]))
+                           " AND partner = ?", (item.invoice, partner["id"]))
         if row is None or not row["currency"]:
             continue
-        if row["currency"] != advice.currency:
+        # The document's own currency where it states one (D.96A's SG5),
+        # the advice's otherwise. An advice in EUR paying one invoice in EUR
+        # and saying USD over another is now two different comparisons, which
+        # is the point of reading SG5 at all (#298).
+        stated = item.currency or advice.currency
+        if stated and row["currency"] != stated:
             out.append(BusinessFinding(
                 rule=CURRENCY_NOT_THE_INVOICE, kind=kind, code=message.code,
                 control=message.control, po_number="",
-                expected=row["currency"], found=advice.currency,
-                note="the advice is in %s and invoice %s is in %s, so the "
-                     "amounts are not comparable"
-                     % (advice.currency, number, row["currency"]),
+                expected=row["currency"], found=stated,
+                note="%s is in %s and invoice %s is in %s, so the amounts "
+                     "are not comparable"
+                     % ("the advice" if item.currency is None
+                        else "the entry for invoice %s" % item.invoice,
+                        stated, item.invoice, row["currency"]),
                 interchange=interchange))
     return out
 
@@ -344,9 +369,10 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
             "settles": advice.settles.isoformat() if advice.settles else "",
             "settledOnArrival": (None if advice.settles is None
                                  else not _was_early(conn, row)),
-            "invoices": [{"invoice": invoice,
-                          "paid": None if paid is None else str(paid)}
-                         for invoice, paid in advice.invoices],
+            "invoices": [{"invoice": item.invoice,
+                          "paid": None if item.paid is None else str(item.paid),
+                          "currency": item.currency or advice.currency}
+                         for item in advice.invoices],
             "at": row["at"], "status": "reversal" if advice.credit_debit == DEBIT
                                         else "advised", "reversedBy": None,
         })
