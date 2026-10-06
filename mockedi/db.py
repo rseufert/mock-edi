@@ -115,6 +115,8 @@ CREATE TABLE IF NOT EXISTS transaction_set (
     -- payload. Empty for other sets, and for rows from before 0.8.0 (#273).
     shipment_id    TEXT NOT NULL DEFAULT '',
     invoice_number TEXT NOT NULL DEFAULT '',
+    -- The promise the mock sent this in keeping, or 0 for none (#211).
+    promise_id     INTEGER NOT NULL DEFAULT 0,
     accepted       INTEGER NOT NULL DEFAULT 1,
     findings       TEXT NOT NULL DEFAULT '',
     -- Filled in when the other side acknowledges a document we sent.
@@ -222,6 +224,9 @@ CREATE TABLE IF NOT EXISTS shipment (
     bol          TEXT NOT NULL DEFAULT '',
     cartons      INTEGER NOT NULL DEFAULT 0,
     weight       TEXT NOT NULL DEFAULT '0',
+    -- The promise (`scheduled.id`) this was done in keeping, or 0 for none:
+    -- sent on demand, or written before promises were recorded (#211).
+    promise_id   INTEGER NOT NULL DEFAULT 0,
     at           TEXT NOT NULL,
     seq          INTEGER NOT NULL DEFAULT 0
 );
@@ -248,6 +253,9 @@ CREATE TABLE IF NOT EXISTS invoice (
     terms_days     INTEGER NOT NULL DEFAULT 30,
     discount_pct   TEXT NOT NULL DEFAULT '0',
     discount_days  INTEGER NOT NULL DEFAULT 0,
+    -- The promise (`scheduled.id`) this was done in keeping, or 0 for none:
+    -- sent on demand, or written before promises were recorded (#211).
+    promise_id     INTEGER NOT NULL DEFAULT 0,
     at             TEXT NOT NULL,
     seq            INTEGER NOT NULL DEFAULT 0
 );
@@ -270,6 +278,7 @@ CREATE TABLE IF NOT EXISTS outbound (
     -- Carried to the transaction set when the document is released (#273).
     shipment_id  TEXT NOT NULL DEFAULT '',
     invoice_number TEXT NOT NULL DEFAULT '',
+    promise_id   INTEGER NOT NULL DEFAULT 0,
     status       TEXT NOT NULL DEFAULT 'pending',
     due_at       TEXT NOT NULL,
     released_at  TEXT NOT NULL DEFAULT '',
@@ -430,7 +439,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 
 class DatabaseError(Exception):
