@@ -27,6 +27,7 @@ import sqlite3
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .envelope import DocumentZone
 from .money import cents
 
 SCHEMA = """
@@ -668,6 +669,35 @@ def keep_clock_offset(conn: sqlite3.Connection,
     conn.commit()
 
 
+def clock_pin(conn: sqlite3.Connection) -> Optional[Tuple[int, int]]:
+    """Where the file's clock was pinned: `(microseconds since 1970, zone in seconds)`.
+
+    None for a file whose clock follows the host's. Kept beside the advance,
+    for the same reason: a mock restarted on its file has to come back on the
+    clock its stamps were written by (#280).
+    """
+    rows = {row["scope"]: int(row["value"]) for row in conn.execute(
+        "SELECT scope, value FROM control_number WHERE partner = '*'"
+        " AND scope IN ('pin', 'pin-zone')")}
+    if "pin" not in rows:
+        return None
+    return rows["pin"], rows.get("pin-zone", 0)
+
+
+def keep_clock_pin(conn: sqlite3.Connection, pin: Tuple[int, int]) -> None:
+    for scope, value in zip(("pin", "pin-zone"), pin):
+        conn.execute(
+            "INSERT OR REPLACE INTO control_number (partner, scope, value)"
+            " VALUES ('*', ?, ?)", (scope, value))
+    conn.commit()
+
+
+def has_traded(conn: sqlite3.Connection) -> bool:
+    """Whether the file holds anything stamped by a clock."""
+    return any(conn.execute("SELECT 1 FROM %s LIMIT 1" % table).fetchone()
+               for table in ("interchange", "outbound", "scheduled"))
+
+
 def next_seq(conn: sqlite3.Connection) -> int:
     """The next step in the one sequence the timeline is ordered by (#195).
 
@@ -703,6 +733,19 @@ def next_seq(conn: sqlite3.Connection) -> int:
 #
 # The dates on the wire - ISA09/10, GS04/05, UNB S004 - are a different
 # matter and stay local, as the standards' long convention has them.
+
+def today(conn: sqlite3.Connection) -> datetime.date:
+    """The date the mock would write on a document now.
+
+    The host's date, unless the clock is pinned: then the pinned clock's
+    date in its own zone, so that what is seeded on a pinned mock is dated
+    the same on every run (#280).
+    """
+    moment = conn.clock()
+    if isinstance(moment.tzinfo, DocumentZone):
+        return moment.date()
+    return datetime.date.today()
+
 
 def utcnow() -> datetime.datetime:
     """The current moment, aware and in UTC."""
@@ -810,6 +853,9 @@ BEHAVIOURS = {
     "accept": "Acknowledge everything in full and ship what was ordered.",
     "short-ship": "Confirm less than was ordered on some lines (855 IQ), and "
                   "ship and invoice the confirmed quantity.",
+    "over-ship": "Confirm every line as ordered (855 IA), then ship three in "
+                 "ten more than was confirmed on every line, and invoice "
+                 "what shipped.",
     "reject-line": "Reject one line outright (855 IR) and leave it out of the "
                    "shipment and the invoice.",
     "reject-all": "Acknowledge the syntax, then refuse the order (855 RD).",
@@ -858,6 +904,7 @@ SUPPLIER_ONLY = ("supplier",)
 BEHAVIOUR_ROLES = {
     "accept": BOTH,
     "short-ship": CUSTOMER_ONLY,
+    "over-ship": CUSTOMER_ONLY,
     "reject-line": CUSTOMER_ONLY,
     "reject-all": CUSTOMER_ONLY,
     "no-ack": BOTH,
@@ -959,11 +1006,11 @@ def seed(conn: sqlite3.Connection, seed_value: int = 42, us_id: str = "MOCKEDI")
 
 def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
     """Two finished orders, so the document endpoints are not empty on a cold start."""
-    today = datetime.date.today()
+    seeded_on = today(conn)
     finished = [
-        ("ACME", "4500000871", today - datetime.timedelta(days=14),
+        ("ACME", "4500000871", seeded_on - datetime.timedelta(days=14),
          [("WIDGET-001", 240), ("BRKT-050", 500)]),
-        ("EURODIS", "PO-2026-00412", today - datetime.timedelta(days=9),
+        ("EURODIS", "PO-2026-00412", seeded_on - datetime.timedelta(days=9),
          [("PANEL-A4", 12), ("CABLE-5M", 80)]),
     ]
     prices = {sku: price for sku, _desc, price, _uom, _stock in CATALOG}

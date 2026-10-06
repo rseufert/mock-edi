@@ -67,10 +67,27 @@ class Element:
     # it: IEA02 repeats ISA13. Declared on the trailer's element, so that the
     # validator's check and the dictionary read one statement of it (#210).
     repeats: str = ""
+    # How many components the standard gives this composite, declared or not -
+    # the component-level `Segment.full_width`, and for the same reason. Most
+    # composites here are deliberately short: D.96A's `C058` holds five
+    # `3124`s and one carries almost every real address, so reporting the
+    # other four as "no component at position" would be the false positive
+    # #54 removed at the segment level. A composite that says its width is
+    # saying it is *complete*, and a component past it then gets code 3.
+    #
+    # Left at 0, a composite's component list is not claimed to be complete
+    # and nothing past it is reported, which is where every composite but
+    # `C506` stands (#186).
+    full_width: int = 0
 
     @property
     def composite(self) -> bool:
         return bool(self.components)
+
+    @property
+    def component_width(self) -> int:
+        """How many components the standard allows, declared here or not."""
+        return max(self.full_width, len(self.components))
 
     def code_meaning(self, value: str) -> str:
         """What a code means, for the human-readable side of an error."""
@@ -384,7 +401,7 @@ BEG = Segment("BEG", "Beginning Segment for Purchase Order", (
     _e("373", "Date", "DT", 8, 8, MANDATORY),
     _e("367", "Contract Number", "AN", 1, 30),
     _e("587", "Acknowledgment Type", "ID", 2, 2, OPTIONAL, ACK_TYPE_CODES),
-), "Identifies the purchase order and why it was sent.")
+), "Identifies the purchase order and why it was sent.", full_width=12)
 
 BAK = Segment("BAK", "Beginning Segment for Purchase Order Acknowledgment", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -402,7 +419,7 @@ BAK = Segment("BAK", "Beginning Segment for Purchase Order Acknowledgment", (
 ), "Identifies the order being acknowledged and the overall verdict on it. "
    "BAK04 is the date the purchaser gave the order and BAK09 the date the "
    "seller acknowledged it: 373 is Date wherever it appears, and the position "
-   "says which date it is.")
+   "says which date it is.", full_width=10)
 
 BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -419,7 +436,7 @@ BCH = Segment("BCH", "Beginning Segment for Purchase Order Change", (
 ), "Identifies the order being changed, and which change this is. The three "
    "dates are the standard's, and they read the same way as BCA's: BCH06 the "
    "date the purchaser gave the order, BCH10 the date the sender gave the "
-   "acknowledgment, BCH11 the date of the change request.")
+   "acknowledgment, BCH11 the date of the change request.", full_width=16)
 
 BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -436,7 +453,7 @@ BCA = Segment("BCA", "Beginning Segment for Purchase Order Change Acknowledgment
 ), "The seller's verdict on a change request, and which request it answers. "
    "The three dates are the standard's: BCA06 the date the purchaser gave "
    "the order, BCA10 the date the sender gave the acknowledgment, BCA11 the "
-   "date of the change request.")
+   "date of the change request.", full_width=15)
 
 POC = Segment("POC", "Line Item Change", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -448,7 +465,7 @@ POC = Segment("POC", "Line Item Change", (
     _e("212", "Unit Price", "R", 1, 17),
     _e("639", "Basis of Unit Price Code", "ID", 2, 2),
 ) + _product_ids(5), "One line of the change: which line, what to do to it, "
-                     "and the quantity and price it should end up with.")
+                     "and the quantity and price it should end up with.", full_width=27)
 
 BSN = Segment("BSN", "Beginning Segment for Ship Notice", (
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, MANDATORY, PURPOSE_CODES),
@@ -456,7 +473,7 @@ BSN = Segment("BSN", "Beginning Segment for Ship Notice", (
     _e("373", "Date", "DT", 8, 8, MANDATORY),
     _e("337", "Time", "TM", 4, 8, MANDATORY),
     _e("1005", "Hierarchical Structure Code", "ID", 4, 4, OPTIONAL, HIERARCHY_CODES),
-), "Identifies the shipment and declares which HL levels the notice uses.")
+), "Identifies the shipment and declares which HL levels the notice uses.", full_width=7)
 
 BIG = Segment("BIG", "Beginning Segment for Invoice", (
     _e("373", "Date", "DT", 8, 8, MANDATORY),
@@ -470,20 +487,20 @@ BIG = Segment("BIG", "Beginning Segment for Invoice", (
         "FD": "Freight Invoice"}),
     _e("353", "Transaction Set Purpose Code", "ID", 2, 2, OPTIONAL, PURPOSE_CODES),
 ), "Identifies the invoice and the order it bills. BIG01 is the invoice's "
-   "own date and BIG03 the date of the order it bills.")
+   "own date and BIG03 the date of the order it bills.", full_width=10)
 
 CUR = Segment("CUR", "Currency", (
     _e("98", "Entity Identifier Code", "ID", 2, 3, MANDATORY, ENTITY_CODES),
     _e("100", "Currency Code", "ID", 3, 3, MANDATORY, CURRENCY_CODES),
     _e("280", "Exchange Rate", "R", 4, 10),
-), "The currency every monetary amount in the document is expressed in.")
+), "The currency every monetary amount in the document is expressed in.", full_width=21)
 
 REF = Segment("REF", "Reference Identification", (
     _e("128", "Reference Identification Qualifier", "ID", 2, 3, MANDATORY,
        REFERENCE_QUALIFIER_CODES),
     _e("127", "Reference Identification", "AN", 1, 30),
     _e("352", "Description", "AN", 1, 80),
-), "A secondary identifier, named by its qualifier.")
+), "A secondary identifier, named by its qualifier.", full_width=4)
 
 PER = Segment("PER", "Administrative Communications Contact", (
     _e("366", "Contact Function Code", "ID", 2, 2, MANDATORY,
@@ -494,7 +511,7 @@ PER = Segment("PER", "Administrative Communications Contact", (
        {"TE": "Telephone", "EM": "Electronic Mail", "FX": "Facsimile",
         "UR": "Uniform Resource Locator"}),
     _e("364", "Communication Number", "AN", 1, 80),
-), "Who to call about this document.")
+), "Who to call about this document.", full_width=9)
 
 FOB = Segment("FOB", "F.O.B. Related Instructions", (
     _e("146", "Shipment Method of Payment", "ID", 2, 2, MANDATORY,
@@ -502,14 +519,15 @@ FOB = Segment("FOB", "F.O.B. Related Instructions", (
         "PC": "Prepaid and Charged", "DF": "Defined by Buyer and Seller"}),
     _e("309", "Location Qualifier", "ID", 1, 2),
     _e("352", "Description", "AN", 1, 80),
-), "Who pays the freight, and where title passes.")
+), "Who pays the freight, and the place that responsibility for it is "
+   "counted from.", full_width=9)
 
 DTM = Segment("DTM", "Date/Time Reference", (
     _e("374", "Date/Time Qualifier", "ID", 3, 3, MANDATORY, DATE_QUALIFIER_CODES),
     _e("373", "Date", "DT", 8, 8),
     _e("337", "Time", "TM", 4, 8),
     _e("623", "Time Code", "ID", 2, 2),
-), "A date, named by what kind of date it is.")
+), "A date, named by what kind of date it is.", full_width=6)
 
 N1 = Segment("N1", "Party Identification", (
     _e("98", "Entity Identifier Code", "ID", 2, 3, MANDATORY, ENTITY_CODES),
@@ -533,7 +551,7 @@ N4 = Segment("N4", "Geographic Location", (
     _e("156", "State or Province Code", "ID", 2, 2),
     _e("116", "Postal Code", "ID", 3, 15),
     _e("26", "Country Code", "ID", 2, 3),
-), "A party's city, state or province, postal code and country.")
+), "A party's city, state or province, postal code and country.", full_width=6)
 
 PO1 = Segment("PO1", "Baseline Item Data", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -550,7 +568,7 @@ PID = Segment("PID", "Product/Item Description", (
     _e("559", "Agency Qualifier Code", "ID", 2, 2),
     _e("751", "Product Description Code", "AN", 1, 12),
     _e("352", "Description", "AN", 1, 80),
-), "A description of the item in words: free form in PID05 when PID01 is F.")
+), "A description of the item in words: free form in PID05 when PID01 is F.", full_width=9)
 
 PO4 = Segment("PO4", "Item Physical Details", (
     _e("356", "Pack", "N0", 1, 6),
@@ -565,7 +583,7 @@ ACK = Segment("ACK", "Line Item Acknowledgment", (
     _e("374", "Date/Time Qualifier", "ID", 3, 3, OPTIONAL, DATE_QUALIFIER_CODES),
     _e("373", "Date", "DT", 8, 8),
     _e("326", "Request Reference Number", "AN", 1, 45),
-) + _product_ids(5), "What the seller will actually do with the line above it.")
+) + _product_ids(5), "What the seller will actually do with the line above it.", full_width=29)
 
 CTT = Segment("CTT", "Transaction Totals", (
     _e("354", "Number of Line Items", "N0", 1, 6, MANDATORY),
@@ -588,7 +606,8 @@ TD1 = Segment("TD1", "Carrier Details - Quantity and Weight", (
     _e("187", "Weight Qualifier", "ID", 1, 2),
     _e("81", "Weight", "R", 1, 10),
     _e("355", "Unit or Basis for Measurement Code", "ID", 2, 2, OPTIONAL, UOM_CODES),
-), "What the shipment is on the dock: its packaging, the number of packages and the weight.")
+), "What the shipment is on the dock: its packaging, the number of packages and the weight.",
+   full_width=10)
 
 TD5 = Segment("TD5", "Carrier Details - Routing", (
     _e("133", "Routing Sequence Code", "ID", 1, 2),
@@ -605,14 +624,15 @@ TD3 = Segment("TD3", "Carrier Details - Equipment", (
     _e("40", "Equipment Description Code", "ID", 2, 2),
     _e("206", "Equipment Initial", "AN", 1, 4),
     _e("207", "Equipment Number", "AN", 1, 10),
-), "The equipment the shipment travels in: the trailer or container's initial and number.")
+), "The equipment the shipment travels in: the trailer or container's initial and number.",
+   full_width=10)
 
 PRF = Segment("PRF", "Purchase Order Reference", (
     _e("324", "Purchase Order Number", "AN", 1, 22, MANDATORY),
     _e("328", "Release Number", "AN", 1, 30),
     _e("327", "Change Order Sequence Number", "AN", 1, 8),
     _e("373", "Date", "DT", 8, 8),
-), "Which purchase order this branch of the shipment tree belongs to.")
+), "Which purchase order this branch of the shipment tree belongs to.", full_width=7)
 
 LIN = Segment("LIN", "Item Identification", (
     _e("350", "Assigned Identification", "AN", 1, 20),
@@ -659,7 +679,7 @@ TXI = Segment("TXI", "Tax Information", (
         "CT": "County Tax", "LS": "State and Local Sales Tax"}),
     _e("782", "Monetary Amount", "R", 1, 18),
     _e("954", "Percent", "R", 1, 10),
-), "A tax on the invoice: which tax, and how much.")
+), "A tax on the invoice: which tax, and how much.", full_width=10)
 
 SAC = Segment("SAC", "Service, Promotion, Allowance, or Charge Information", (
     _e("248", "Allowance or Charge Indicator", "ID", 1, 1, MANDATORY,
@@ -688,7 +708,8 @@ CAD = Segment("CAD", "Carrier Detail", (
     _e("207", "Equipment Number", "AN", 1, 10),
     _e("140", "Standard Carrier Alpha Code", "ID", 2, 4),
     _e("387", "Routing", "AN", 1, 35),
-), "How the goods on this invoice travelled: the method, the carrier's SCAC and the routing.")
+), "How the goods on this invoice travelled: the method, the carrier's SCAC and the routing.",
+   full_width=9)
 
 # The 820's remittance-advice use. BPR01 says which use it is: I (remittance
 # information only) or C (payment accompanies the advice) is a remittance a
@@ -804,7 +825,7 @@ AK5 = Segment("AK5", "Transaction Set Response Trailer", (
     _e("718", "Transaction Set Syntax Error Code", "ID", 1, 3, OPTIONAL, TS_ERROR_CODES),
     _e("718", "Transaction Set Syntax Error Code", "ID", 1, 3, OPTIONAL, TS_ERROR_CODES),
     _e("718", "Transaction Set Syntax Error Code", "ID", 1, 3, OPTIONAL, TS_ERROR_CODES),
-), "The verdict on one transaction set.")
+), "The verdict on one transaction set.", full_width=6)
 
 AK9 = Segment("AK9", "Functional Group Response Trailer", (
     _e("715", "Functional Group Acknowledge Code", "ID", 1, 1, MANDATORY, GROUP_ACK_CODES),
@@ -1242,10 +1263,23 @@ UOM_TO_EDIFACT = {
 UOM_FROM_EDIFACT = {"PCE": "EA", "CT": "CA", "BX": "BX", "DZN": "DZ",
                     "LBR": "LB", "KGM": "KG", "GLL": "GA", "FOT": "FT",
                     "MTR": "M", "PF": "PL"}
+# The 6411 codes the mock knows, which are the ones it can translate: a
+# document carrying a unit from the other side of UOM_FROM_EDIFACT and no
+# further. X12's element 355 is declared with its own subset in all eight
+# places it appears; 6411 had none in any of the three, which is the
+# asymmetry #239 names. Recommendation 20 has hundreds more, so this refuses
+# units D.96A admits - exactly as the X12 side already refuses `LT` - and the
+# finding names what is accepted.
+EDIFACT_UOM_CODES = {     # 6411
+    "PCE": "Piece", "CT": "Carton", "BX": "Box", "DZN": "Dozen",
+    "LBR": "Pound", "KGM": "Kilogram", "GLL": "Gallon", "FOT": "Foot",
+    "MTR": "Metre", "PF": "Pallet",
+}
 
 
-def _c(ref, name, components, req=OPTIONAL):
-    return Element(ref=ref, name=name, type="AN", req=req, components=tuple(components))
+def _c(ref, name, components, req=OPTIONAL, full_width=0):
+    return Element(ref=ref, name=name, type="AN", req=req,
+                   components=tuple(components), full_width=full_width)
 
 
 # -- EDIFACT service segments
@@ -1370,6 +1404,12 @@ BGM = Segment("BGM", "Beginning of Message", (
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
         _e("1000", "Document/message name", "AN", 1, 35),
     )),
+    # C106 is a later directory's: D.96A has the number as element 1004 on
+    # its own. It stays until #186 settles where an ORDCHG's change sequence
+    # lives, because the mock writes that sequence in C106's 1060 and reads
+    # it back from there - so declaring this simple would leave the dictionary
+    # and the writer disagreeing, and #288 would then refuse the mock's own
+    # ORDCHG. Where the sequence goes changes bytes, so it is not decided here.
     _c("C106", "Document/Message Identification", (
         _e("1004", "Document/message number", "AN", 1, 35),
         _e("1056", "Version identifier", "AN", 1, 9),
@@ -1400,8 +1440,9 @@ RFF = Segment("RFF", "Reference", (
         _e("1154", "Reference number", "AN", 1, 35),
         _e("1156", "Line number", "AN", 1, 6),
         _e("4000", "Reference version number", "AN", 1, 35),
-        _e("1060", "Revision identifier", "AN", 1, 6),
-    ), MANDATORY),
+    # Four components, and complete: 1060 is a later directory's, so a fifth
+    # here is a reference the D.96A these messages declare cannot carry.
+    ), MANDATORY, full_width=4),
 ), "A reference to something else, named by its qualifier: the order, the seller's "
    "order, a delivery note.")
 
@@ -1502,8 +1543,8 @@ IMD = Segment("IMD", "Item Description", (
         _e("7009", "Item description identification", "AN", 1, 17),
         _e("1131", "Code list qualifier", "AN", 1, 3),
         _e("3055", "Code list responsible agency, coded", "AN", 1, 3),
-        _e("7008", "Item description", "AN", 1, 256),
-        _e("7008", "Item description", "AN", 1, 256),
+        _e("7008", "Item description", "AN", 1, 35),
+        _e("7008", "Item description", "AN", 1, 35),
         _e("3453", "Language, coded", "ID", 1, 3),
     )),
 ), "A description of the item in words.")
@@ -1512,8 +1553,9 @@ QTY = Segment("QTY", "Quantity", (
     _c("C186", "Quantity Details", (
         _e("6063", "Quantity qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_QUANTITY_QUALIFIERS),
-        _e("6060", "Quantity", "R", 1, 35, MANDATORY),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6060", "Quantity", "R", 1, 15, MANDATORY),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     ), MANDATORY),
 ), "A quantity, named by what kind it is - ordered, confirmed, despatched, invoiced.")
 
@@ -1524,7 +1566,8 @@ PRI = Segment("PRI", "Price Details", (
         _e("5375", "Price type, coded", "ID", 1, 3),
         _e("5387", "Price type qualifier", "ID", 1, 3),
         _e("5284", "Unit price basis", "R", 1, 9),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     )),
 ), "The unit price of the line.")
 
@@ -1532,7 +1575,7 @@ MOA = Segment("MOA", "Monetary Amount", (
     _c("C516", "Monetary Amount", (
         _e("5025", "Monetary amount type qualifier", "ID", 1, 3, MANDATORY,
            EDIFACT_AMOUNT_QUALIFIERS),
-        _e("5004", "Monetary amount", "R", 1, 35),
+        _e("5004", "Monetary amount", "R", 1, 18),
         _e("6345", "Currency, coded", "ID", 3, 3),
         _e("6343", "Currency qualifier", "ID", 1, 3),
         _e("4405", "Status, coded", "ID", 1, 3),
@@ -1546,8 +1589,8 @@ FTX = Segment("FTX", "Free Text", (
         _e("4441", "Free text, coded", "AN", 1, 17, MANDATORY),
     )),
     _c("C108", "Text Literal", (
-        _e("4440", "Free text", "AN", 1, 512, MANDATORY),
-        _e("4440", "Free text", "AN", 1, 512),
+        _e("4440", "Free text", "AN", 1, 70, MANDATORY),
+        _e("4440", "Free text", "AN", 1, 70),
     )),
 ), "Prose. In a response it carries the reason a line was changed or refused.")
 
@@ -1596,7 +1639,8 @@ CNT = Segment("CNT", "Control Total", (
            {"1": "Algebraic total of quantity values", "2": "Number of line items in message",
             "4": "Number of lines in message", "11": "Total quantity"}),
         _e("6066", "Control value", "R", 1, 18, MANDATORY),
-        _e("6411", "Measure unit qualifier", "AN", 1, 8),
+        _e("6411", "Measure unit qualifier", "AN", 1, 3, OPTIONAL,
+           EDIFACT_UOM_CODES),
     ), MANDATORY),
 ), "A control total: what is counted, and the count.")
 
@@ -1962,7 +2006,14 @@ for _dialect, _map in SET_FOR_KIND.items():
 VERSIONS = {"X12": ("004010", "005010"), "EDIFACT": ("D:96A:UN",)}
 
 REVISIONS: Dict[Tuple[str, str], Dict[str, Segment]] = {
-    ("X12", "005010"): {"ST": ST_005010, "AK1": AK1_005010, "AK2": AK2_005010},
+    ("X12", "005010"): {
+        "ST": ST_005010, "AK1": AK1_005010, "AK2": AK2_005010,
+        # The two segments the mock uses that 005010 made one element wider:
+        # BIG11 is a second Action Code and N407 the Country Subdivision
+        # Code (#202).
+        "BIG": dataclasses.replace(BIG, full_width=11),
+        "N4": dataclasses.replace(N4, full_width=7),
+    },
 }
 
 # Where a version changes a data element itself rather than one segment's

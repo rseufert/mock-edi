@@ -85,6 +85,13 @@ def build_parser() -> argparse.ArgumentParser:
                          help="require HTTP basic authentication")
     testing.add_argument("--deliver-to", metavar="HOST[,HOST]", default="",
                          help="hosts the courier may POST to; anywhere by default")
+    testing.add_argument("--start-at", metavar="TIME", default="",
+                         help="start the clock at this time and hold it there "
+                              "until it is advanced, e.g. 2026-11-02T09:00:00Z; "
+                              "documents are dated in the zone written here")
+    testing.add_argument("--hold-delivery", action="store_true",
+                         help="post nothing until asked: POST /_mock/deliver "
+                              "sends the next document, one at a time")
     testing.add_argument("--seed", dest="seed_value", type=int, default=42,
                          help="seed for the generated demo data (default: 42)")
     testing.add_argument("--latency-ms", type=int, default=0,
@@ -212,6 +219,8 @@ def main(argv=None) -> int:
     print("  Index    %s/" % base)
     if config.deliver_to:
         print("  Deliver  only to %s" % ", ".join(config.deliver_to))
+    if config.hold_delivery:
+        print("  Deliver  held: POST %s/_mock/deliver sends the next one" % base)
     if config.drop_dir:
         print("  Drop     %s  (every %dms)" % (config.drop_dir, config.drop_interval_ms))
     if config.pickup_dir:

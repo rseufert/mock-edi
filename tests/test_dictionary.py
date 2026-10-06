@@ -163,6 +163,10 @@ class EveryWrittenSegmentAgainstTheStandard(unittest.TestCase):
     }
     EDIFACT = {
         "UNH": ("0062", "S009"), "UNT": ("0074", "0062"), "UNS": ("0081",),
+        # C106 is not D.96A's - position 2 is 1004 on its own, and
+        # `EdifactNamesAreD96A` below has said so since #172. It is still
+        # what the dictionary declares because the mock writes an ORDCHG's
+        # change sequence in C106's 1060; #186 is where that is settled.
         "BGM": ("C002", "C106", "1225", "4343"),
         "DTM": ("C507",), "RFF": ("C506",), "QTY": ("C186",), "MOA": ("C516",),
         "CNT": ("C270",), "PRI": ("C509", "5213"),

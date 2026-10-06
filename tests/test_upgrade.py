@@ -20,7 +20,7 @@ sys.path.insert(0, HERE)
 from mockedi import db
 from mockedi.server import Config, make_server
 
-from support import REQUEST_TIMEOUT, FileDatabaseCase, x12_order
+from support import REQUEST_TIMEOUT, FileDatabaseCase, frozen, x12_order
 
 OLD_SCHEMA = os.path.join(HERE, "fixtures", "schema-0.1.0.sql")
 
@@ -90,8 +90,13 @@ class From010(FileDatabase):
         httpd, base = self.serve()
         request = urllib.request.Request(
             base + "/edi", data=x12_order("PO-NO-SEQ").encode(), method="POST")
-        with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT):
-            pass
+        # Rank only decides between rows of one second, and the timeline
+        # sorts by the second first. The clock is held still so the order
+        # is taken inside one: left to the runner, an order that straddled
+        # a second put the 997 ahead of the 855 and failed this (#276).
+        with frozen():
+            with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT):
+                pass
         with httpd.mock.lock:
             for table in ("transaction_set", "purchase_order", "shipment",
                           "invoice", "scheduled", "outbound"):
@@ -102,6 +107,7 @@ class From010(FileDatabase):
         request = urllib.request.Request(base + "/_mock/orders/PO-NO-SEQ/timeline")
         with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT) as response:
             found = json.loads(response.read())
+        self.assertEqual(len({event["at"] for event in found["events"]}), 1)
         kinds = [event["event"] for event in found["events"]]
         self.assertEqual(kinds, ["received", "ordered", "promised", "promised",
                                  "packed", "invoiced", "sent", "sent", "sent",
