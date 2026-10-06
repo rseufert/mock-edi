@@ -76,6 +76,11 @@ class Config:
     despatch_delay_ms: int = 0
     invoice_delay_ms: int = 0
     mdn: bool = True
+    # The time the mock's clock starts at, as ISO 8601 with a Z or an offset.
+    # Given, the clock stands there until it is advanced and never follows
+    # the host's, and documents are dated in the zone written here (#280).
+    # Empty, the clock is the host's plus whatever it was advanced.
+    start_at: str = ""
     deliver_timeout: float = 10.0
     # Hosts the courier may POST to. Empty means anywhere, which is what a
     # laptop wants. A mock reachable from a network is a different matter: it
@@ -119,8 +124,17 @@ class Mock:
     def __init__(self, config: Config):
         self.config = config
         self.conn = db.connect(config.db_path)
+        try:
+            # Before the seed, which stamps what it writes: the pipeline is
+            # what tells the connection the time, and a pinned mock's seeded
+            # orders are dated from its start time, not from the host (#280).
+            self.pipeline = pipeline.Pipeline(self.conn, config)
+        except db.DatabaseError:
+            # A file that keeps another clock than the one asked for.
+            # Nothing else has the connection yet, so it is closed here.
+            self.conn.close()
+            raise
         db.seed(self.conn, config.seed_value, config.as2_id)
-        self.pipeline = pipeline.Pipeline(self.conn, config)
         self.courier = delivery.Courier(self.pipeline, config.deliver_timeout)
         self.dropbox = drop.DropBox(
             self.pipeline, config.drop_dir, config.pickup_dir,
@@ -223,8 +237,12 @@ class Mock:
                           "partner", "catalog"):
                 self.conn.execute("DELETE FROM %s" % table)
             self.conn.commit()
-            db.seed(self.conn, self.config.seed_value, self.config.as2_id)
+            # The clock first, since the seed stamps what it writes. The pin
+            # went with the control numbers; a pinned mock is back at its
+            # start time, not on the host's clock.
             self.pipeline.offset = datetime.timedelta(0)
+            self.pipeline.keep_pin()
+            db.seed(self.conn, self.config.seed_value, self.config.as2_id)
             # What the courier and the dropbox hold in memory describes the
             # data just thrown away, so /_mock/state and /_mock/drop would
             # otherwise report failures and files for orders that are gone.
@@ -743,6 +761,11 @@ def make_server(config: Config) -> _Server:
         # Before the port is taken: a mock that starts and then cannot write
         # an invoice is worse than one that does not start.
         raise BadConfig("tax rate %s" % problem)
+    if config.start_at:
+        try:
+            pipeline.parse_start(config.start_at)
+        except ValueError as error:
+            raise BadConfig(str(error)) from None
     httpd = _Server((config.host, config.port), Handler)
     try:
         httpd.mock = Mock(config)

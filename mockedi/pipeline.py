@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import (ack, charsets, claims, db, documents, edifact, partners,
                profiles, reconcile, remittance, schema, transactions, x12)
-from .envelope import EdiSyntaxError, Interchange, Seg, local, sniff
+from .envelope import (DocumentZone, EdiSyntaxError, Interchange, Seg, local,
+                       sniff)
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
                        SegmentFinding, validate, validate_message)
@@ -112,6 +113,46 @@ class Receipt:
         return self.ok and bool(self.report) and self.report.accepted > 0
 
 
+def parse_start(text: str) -> datetime.datetime:
+    """A `--start-at` value as a moment in the zone it was written in.
+
+    ISO 8601 with a `Z` or an offset. One with neither is refused: read as
+    UTC or as the host's zone it would be a guess, and the point of a start
+    time is that it means the same on every machine.
+    """
+    given = (text or "").strip()
+    try:
+        moment = datetime.datetime.fromisoformat(
+            given[:-1] + "+00:00" if given[-1:] in ("Z", "z") else given)
+    except ValueError:
+        raise ValueError(
+            "start time %r is not an ISO 8601 time such as "
+            "2026-11-02T09:00:00Z" % text) from None
+    if moment.tzinfo is None:
+        raise ValueError(
+            "start time %r says no zone; write it with Z or an offset, as "
+            "in %sZ or %s+01:00" % (text, given, given))
+    return moment.replace(tzinfo=DocumentZone(moment.utcoffset()))
+
+
+def start_text(moment: datetime.datetime) -> str:
+    """A start time as `--start-at` takes it."""
+    text = moment.replace(tzinfo=datetime.timezone(moment.utcoffset())).isoformat()
+    return text[:-6] + "Z" if text.endswith("+00:00") else text
+
+
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def _microseconds(moment: datetime.datetime) -> int:
+    return (moment - _EPOCH) // datetime.timedelta(microseconds=1)
+
+
+def _unkept(pin) -> datetime.datetime:
+    zone = DocumentZone(datetime.timedelta(seconds=pin[1]))
+    return (_EPOCH + datetime.timedelta(microseconds=pin[0])).astimezone(zone)
+
+
 class Pipeline:
     """The mock's own behaviour as a trading partner."""
 
@@ -124,6 +165,10 @@ class Pipeline:
         # It is kept in the file as well as here, so a mock restarted on a
         # file database comes back as far ahead as it was stopped (#228).
         self._offset = db.clock_offset(self.conn)
+        # Where the clock was pinned at start, if it was (#280): it then
+        # reads this plus the advance and never the host's clock, so two
+        # runs of one script write the same times.
+        self.pin = self._pinned(config)
         # The connection tells everything that writes a stamp what time it
         # is, and it is this clock (#196): `db.now(conn)` anywhere below the
         # pipeline is `self.now()`, moved by the same advance.
@@ -151,8 +196,56 @@ class Pipeline:
         self._offset = value
         db.keep_clock_offset(self.conn, value)
 
+    def _pinned(self, config) -> Optional[datetime.datetime]:
+        """The start time this mock runs from, checked against its file.
+
+        A file remembers the clock its stamps were written by. Starting it
+        on another one - a different start time, or the host's clock for a
+        file that was pinned, or a pin for a file that has already traded by
+        the host's clock - would put later stamps before earlier ones, so
+        each of those is refused and says what the file wants.
+        """
+        text = getattr(config, "start_at", "") or ""
+        kept = db.clock_pin(self.conn)
+        if not text:
+            if kept is not None:
+                raise db.DatabaseError(
+                    "%s was started at %s and its clock stands where it was "
+                    "left; start it with --start-at %s, or use another file"
+                    % (config.db_path, start_text(_unkept(kept)),
+                       start_text(_unkept(kept))))
+            return None
+        start = parse_start(text)
+        wanted = (_microseconds(start), int(start.utcoffset().total_seconds()))
+        if kept is None:
+            if db.has_traded(self.conn):
+                raise db.DatabaseError(
+                    "%s already holds documents stamped by the host's clock, "
+                    "so it cannot be given a start time; --start-at is for a "
+                    "new file" % config.db_path)
+            db.keep_clock_pin(self.conn, wanted)
+        elif kept != wanted:
+            raise db.DatabaseError(
+                "%s was started at %s, not %s; a file keeps the clock it was "
+                "started on. Start it with --start-at %s, or use another file"
+                % (config.db_path, start_text(_unkept(kept)), start_text(start),
+                   start_text(_unkept(kept))))
+        return start
+
+    def keep_pin(self) -> None:
+        """Write the start time back into the file, after a reset cleared it."""
+        if self.pin is not None:
+            db.keep_clock_pin(self.conn, (
+                _microseconds(self.pin),
+                int(self.pin.utcoffset().total_seconds())))
+
     def now(self) -> datetime.datetime:
         """The mock's clock: the real time in UTC, plus how far it was advanced.
+
+        Pinned (`--start-at`), it is the start time plus how far it was
+        advanced, and it stands still between advances. It then carries the
+        zone the start time was written in, which is the zone its documents
+        are dated in.
 
         Aware, and the only clock anything about the conversation reads:
         every `at` as well as every `due_at`, through `db.now(conn)`.
@@ -160,6 +253,8 @@ class Pipeline:
         string comparisons in `release` and in the `unacknowledged` cutoff
         are between values of the same shape.
         """
+        if self.pin is not None:
+            return self.pin + self.offset
         return db.utcnow() + self.offset
 
     # -- inbound

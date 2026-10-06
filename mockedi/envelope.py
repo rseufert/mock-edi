@@ -13,6 +13,8 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
 
+from .db import DocumentZone
+
 Value = Union[str, List[str]]
 
 
@@ -441,9 +443,12 @@ def local(moment):
     sender's local time by the standards' long convention, so they are
     written as the host reads them, whatever the clock underneath is in.
 
-    A naive moment is already local and is left alone.
+    A naive moment is already local and is left alone. So is one from a
+    pinned mock's clock, which says its own zone: the host's has no say in a
+    date that has to be the same on every machine.
     """
-    if getattr(moment, "tzinfo", None) is None:
+    zone = getattr(moment, "tzinfo", None)
+    if zone is None or isinstance(zone, DocumentZone):
         return moment
     return moment.astimezone()
 
