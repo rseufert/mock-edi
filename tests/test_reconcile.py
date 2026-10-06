@@ -57,7 +57,9 @@ class AcknowledgingAnX12Document(MockServerCase):
         # The parts are joined inline, so the separator appears exactly once
         # between them - a note a person reads should not have a gap in it.
         self.assertNotIn(";  ", row["ack_note"])
-        self.assertIn("; element", row["ack_note"])
+        # The element is named as a partner's guide writes it, with the
+        # number the 997 gave beside it (#294).
+        self.assertIn("; BIG01 (element 1): ", row["ack_note"])
 
     def test_accepted_with_errors_is_neither_accepted_nor_rejected(self):
         self.ack("856", "E", errors=[("HL", 5, "8", 3, "5", "toolong")])
