@@ -73,7 +73,14 @@ class TheWalkerOfA997(unittest.TestCase):
             self.notes(seg("AK3", "POC", "4", "", "8"),
                        seg("AK4", ["5", "1"], "", "7", "ZZ")),
             ["POC at segment 4: Segment has data element errors; "
-             "POC05/1 (element 5:1): Invalid code value ('ZZ')"])
+             "POC05 component 1 (element 5:1): Invalid code value ('ZZ')"])
+
+    def test_position_nought_is_not_an_element_to_name(self):
+        # Found by Rusty: `AK4*0` was named PO100.
+        self.assertEqual(
+            self.notes(seg("AK3", "PO1", "6", "", "8"),
+                       seg("AK4", "0", "", "5"))[0].split("; ")[1],
+            "element 0: Data element too long")
 
     def test_with_no_ak3_there_is_no_tag_and_the_number_stands(self):
         self.assertEqual(self.notes(seg("AK4", "3", "", "5", "BOXES")),
@@ -158,6 +165,21 @@ class TheWalkerOfAContrl(unittest.TestCase):
                        seg("UCS", "4", "12"),
                        seg("UCD", "12", ["2", "2"])),
             ["segment 4: Invalid value; segment 4, element 2:2: Invalid value"])
+
+    def test_a_component_past_the_composite_is_a_position_in_words(self):
+        # Found by Rusty: it read QTY01/9, which looks like a directory number.
+        about = edifact.message("ORDRSP", "1", [
+            seg("BGM", ["231"], "R1", "29"), seg("QTY", ["21", "10", "PCE"])])
+        position = [index for index, item in enumerate(about.segments, start=1)
+                    if item.tag == "QTY"][0]
+        (note,) = self.notes(
+            seg("UCI", "1", ["A"], ["B"], "7"),
+            seg("UCM", "1", ["ORDRSP", "D", "96A", "UN"], "4"),
+            seg("UCS", str(position), "12"),
+            seg("UCD", "16", ["2", "9"]),
+            sent=lambda code, control, interchange: about)
+        self.assertIn("QTY01 component 9 (segment %d, element 2:9): "
+                      "Too many constituents" % position, note)
 
     def test_a_refused_envelope_names_its_service_segment_from_the_uci(self):
         (note,) = self.notes(

@@ -275,11 +275,13 @@ def _segment_at(about: Optional[Message], where: str) -> Optional[Seg]:
 
 def _named(tag: str, position: str, component: str, numbers: str) -> str:
     """`PO103 (element 3)`, or the number alone where there is no tag to name."""
-    if not tag or not position.isdigit():
+    if not tag or not position.isdigit() or int(position) < 1:
         return "element %s" % numbers
     label = "%s%02d" % (tag, int(position))
     if component:
-        label += "/%s" % component
+        # Said as a position, in words: `/1` would read as an element's
+        # number, which is how a component is named where its number is known.
+        label += " component %s" % component
     return "%s (element %s)" % (label, numbers)
 
 
@@ -307,7 +309,9 @@ def _named_edifact(about: Optional[Message], tag: str, position: str,
         if (element is not None and component.isdigit()
                 and 1 <= int(component) <= len(element.components)):
             ref = element.components[int(component) - 1].ref
-        label += "/%s" % (ref or component)
+        # By its own number where the dictionary has it; otherwise by its
+        # position, in words, so that `9` is not read as a directory number.
+        label += "/%s" % ref if ref else " component %s" % component
     return "%s (%s)" % (label, said)
 
 
