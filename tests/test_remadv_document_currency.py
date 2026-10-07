@@ -38,7 +38,7 @@ sys.path.insert(0, HERE)
 from mockedi import edifact, remittance, schema
 from mockedi.envelope import seg
 
-from support import EURODIS, MockServerCase, _next_control
+from support import EURODIS, MockServerCase, _next_control, edifact_order
 
 EDIFACT_TYPE = {"Content-Type": "application/edifact"}
 
@@ -220,6 +220,28 @@ class TheComparisonIsPerDocument(MockServerCase):
         return [row for row in rows
                 if row["rule"] == remittance.CURRENCY_NOT_THE_INVOICE]
 
+    def an_invoice_in(self, currency, po_number):
+        """A second EURODIS invoice, in `currency`, through the door.
+
+        An order states its own currency and the invoice answering it takes
+        that, not the partner's - so a partner can have invoices in two
+        currencies, which is what this class needs and what #316 wrongly
+        said was impossible.
+        """
+        status, _h, data = self.post(
+            "/edi", edifact_order(po_number, lines=[("WIDGET-001", 2, "50.00")],
+                                  currency=currency),
+            headers=EDIFACT_TYPE)
+        self.assertEqual(status, 200, data)
+        self.assertTrue(data["accepted"], data)
+        self.post("/_mock/advance?all")
+        _s, _h, order = self.get(
+            "/_mock/orders/%s?partner=%s" % (po_number, EURODIS))
+        (invoice,) = order["invoices"]
+        self.assertEqual(invoice["currency"], currency,
+                         "the order's currency should reach its invoice")
+        return invoice["invoice_number"]
+
     def test_the_document_currency_is_what_is_compared(self):
         # EURODIS's invoice is in EUR. The advice says EUR at the head and
         # USD over that document, so the document is what is wrong.
@@ -245,23 +267,30 @@ class TheComparisonIsPerDocument(MockServerCase):
         self.assertIn("the advice is in USD", found[0]["note"])
 
     def test_one_right_and_one_wrong_in_the_same_advice(self):
-        """Two entries for one invoice, one in its currency and one not.
+        """Two invoices in two currencies, the advice right about one.
 
-        An odd document - it pays the same invoice twice - and it is the
-        shape that isolates the property with the seeded data, because the
-        mock compares only against invoices *it* issued to that partner. An
-        advice from EURODIS naming ACME's invoice gets no finding at all,
-        which is right and proves nothing here; and a second EURODIS invoice
-        in another currency cannot be made through the business path, since
-        the invoice takes the partner's currency and not the order's.
+        This used to pay the *same* invoice twice, because I thought a
+        second EURODIS invoice in another currency could not be made. It
+        can: an order states its own currency and its invoice takes that
+        (#316, closed as not reproducible, and #332). The test now does the
+        straightforward thing, and the property it is for - that the
+        comparison is per document - is the clearer for it.
         """
+        usd = self.an_invoice_in("USD", "USD-PER-DOC")
+        # The header says USD and both documents say EUR, which is what
+        # makes this distinguish the two readings rather than merely agree
+        # with them. Per document: the EUR invoice is right and the USD one
+        # is wrong. Per header, it would be the other way round - so the
+        # finding naming the USD invoice is the assertion, not the count.
         found = self.findings(a_remadv(
-            header="EUR",
+            header="USD",
             documents=[(EURODIS_INVOICE, "60.00", "EUR"),
-                       (EURODIS_INVOICE, "40.00", "USD")]))
-        self.assertEqual(len(found), 1)
+                       (usd, "40.00", "EUR")]))
+        self.assertEqual(len(found), 1, found)
         self.assertEqual((found[0]["expected"], found[0]["found"]),
-                         ("EUR", "USD"))
+                         ("USD", "EUR"))
+        self.assertIn("invoice %s" % usd, found[0]["note"])
+        self.assertNotIn(EURODIS_INVOICE, found[0]["note"])
 
     def test_an_invoice_the_partner_was_never_sent_is_not_compared(self):
         # ACME's invoice, named by a EURODIS advice. The mock can only say
