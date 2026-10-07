@@ -380,9 +380,18 @@ same `TRN02` trace - the correction a payer owes once the bank returns a
 payment - so `GET /_mock/remittances` lists that earlier advice as `reversed`
 and names the one that reversed it; a debit for a trace never advised is a
 `reversal-of-nothing`. An advice left `advised` after its payment came back
-is the failure to test for. Both read the 820 only: which REMADV date is the
-value date, and how one REMADV reverses another, vary too much between guides
-to guess.
+is the failure to test for. **A REMADV reaches both, by EANCOM's conventions
+rather than D.96A's, because D.96A prescribes neither.** Its settlement date
+is the header `DTM+138`, the directory's "Payment date": EANCOM's REMADV
+admits 137, 138, 203, 227 and 263 at the head and not 209, and says each
+advice relates to one settlement date. And a REMADV corrects another by
+**replacing** it rather than by debiting it - there is no REMADV debit and no
+negative-amount convention anywhere we could find - so an advice with `BGM`
+1225 code 5 naming an earlier one in a header `RFF+RA` leaves that one
+`replaced`, naming what replaced it, and a replacement of an advice never
+received is a `replacement-of-nothing`. The conventions are the published
+EANCOM REMADV guide's; the mock follows them because a mock that judges
+nothing is less useful than one that says whose rule it is judging by.
 
 `GET /_mock/remittances` answers the **currency** the advice states beside its
 `total`, because an amount on its own cannot be tied to a bank payment or a

@@ -31,7 +31,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, List, Optional, Tuple
 
 from . import db, edifact, schema, x12
-from .envelope import Message, parse_date
+from .envelope import Message, parse_date, parse_edifact_date
 from .validate import BusinessFinding
 
 TOTAL_NOT_PARTS = "remittance-total-not-parts"
@@ -57,6 +57,19 @@ AMOUNTS_DISAGREE = "remittance-amounts-disagree"
 REFERENCE_CURRENCY = "2"
 BEFORE_SETTLEMENT = "remitted-before-settlement"
 REVERSES_NOTHING = "reversal-of-nothing"
+# A REMADV that replaces an advice the mock never received from that
+# partner. The counterpart of `reversal-of-nothing`, which is X12's shape
+# for the same mistake: a correction of something that was never said.
+REPLACES_NOTHING = "replacement-of-nothing"
+# 2005's code for a REMADV's settlement date, the counterpart of an 820's
+# BPR16: "Date on which an amount due is made available to the creditor, in
+# accordance with the terms of payment." EANCOM's REMADV admits 137, 138,
+# 203, 227 and 263 at the head, and not 209, and says each advice relates
+# to one settlement date (#187).
+SETTLEMENT_EDIFACT = "138"
+# BGM 1225's code for a replacement, and 1153's for the advice it names.
+REPLACEMENT = "5"
+REPLACED_ADVICE = "RA"
 
 CREDIT, DEBIT = "C", "D"
 
@@ -115,6 +128,18 @@ class Advice:
     # group repeats up to nine times, so a REMADV can name several and the
     # mock reports that rather than keeping one quietly.
     header_currencies: List[str] = field(default_factory=list)
+    # BGM 1225, what the advice is for. EANCOM's REMADV admits 9 Original,
+    # 31 Copy and 5 Replace, and 5 is the only one the mock acts on (#187).
+    # Empty for X12, which says this positionally and differently.
+    purpose: str = ""
+    # The advice this one replaces, from the header RFF+RA where 1225 is 5.
+    # The number is another advice's BGM, so it is matched against `trace`.
+    replaces: str = ""
+
+
+def _edifact_day(item):
+    """The date in a DTM, by the format its third component states (#209)."""
+    return parse_edifact_date(item.comp(1, 2), item.comp(1, 3))
 
 
 def read(message: Message, dialect: str) -> Advice:
@@ -134,6 +159,7 @@ def read(message: Message, dialect: str) -> Advice:
         return advice
     bgm = message.find("BGM")
     advice.trace = bgm.comp(2, 1) if bgm is not None else ""
+    advice.purpose = bgm.get(3) if bgm is not None else ""
     within = ""
     header: List[Tuple[str, Optional[str]]] = []
     for item in message.segments:
@@ -166,6 +192,16 @@ def read(message: Message, dialect: str) -> Advice:
                 # checks which segments a set may hold and not where they
                 # sit, so the reader cannot lean on that.
                 header.append((item.comp(1, 1), item.comp(1, 2) or None))
+        elif item.tag == "DTM" and not within:
+            # The header's, and only the header's. A DTM inside a DOC group
+            # dates that document and one after UNS is nobody's; counting
+            # either as the advice's is the fault #315 had with CUX, so the
+            # guard is here from the start rather than added afterwards.
+            if item.comp(1, 1) == SETTLEMENT_EDIFACT:
+                advice.settles = advice.settles or _edifact_day(item)
+        elif item.tag == "RFF" and not within:
+            if item.comp(1, 1) == REPLACED_ADVICE:
+                advice.replaces = advice.replaces or item.comp(1, 2)
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
                 amount = _amount(item.comp(1, 2))
@@ -205,16 +241,21 @@ def findings(message: Message, dialect: str, kind: str, interchange: str,
     `today` is the mock's clock, so `/_mock/advance` moves what "early" means.
     """
     out = _arithmetic(message, dialect, kind, interchange)
-    if dialect == "X12" and today is not None:
+    if today is not None:
         advice = read(message, dialect)
         if advice.settles is not None and advice.settles > today:
+            # Both dialects now: BPR16 for an 820, the header DTM+138 for a
+            # REMADV (#187). The note names the segment of the document in
+            # hand, because telling an EDIFACT caller about BPR16 sends them
+            # looking for a segment their message does not have.
+            where = "BPR16" if dialect == "X12" else "DTM+138"
             out.append(BusinessFinding(
                 rule=BEFORE_SETTLEMENT, kind=kind, code=message.code,
                 control=message.control, po_number="",
                 expected=advice.settles.isoformat(), found=today.isoformat(),
-                note="the advice says the payment takes effect on %s (BPR16) "
+                note="the advice says the payment takes effect on %s (%s) "
                      "and arrived on %s: reconciled now, it is cash that has "
-                     "not arrived" % (advice.settles.isoformat(),
+                     "not arrived" % (advice.settles.isoformat(), where,
                                       today.isoformat()),
                 interchange=interchange))
     return out
@@ -268,6 +309,22 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
                             "every advice for that trace was already reversed"),
                     interchange=interchange))
     advice = read(message, dialect)
+    if dialect == "EDIFACT" and advice.purpose == REPLACEMENT \
+            and advice.replaces:
+        if not _advices_numbered(conn, partner["id"], advice.replaces,
+                                 advice.trace):
+            # EANCOM's shape for the mistake `reversal-of-nothing` catches
+            # in an 820: a correction of something never said. There is no
+            # REMADV debit and no negative-amount convention to look for -
+            # no source has one - so this is the whole of it (#187).
+            found.append(BusinessFinding(
+                rule=REPLACES_NOTHING, kind=kind, code=message.code,
+                control=message.control, po_number="",
+                expected=advice.replaces, found="",
+                note="this REMADV replaces advice %s (BGM 1225 code 5, "
+                     "RFF+RA), but no advice numbered %s was received from "
+                     "%s" % (advice.replaces, advice.replaces, partner["id"]),
+                interchange=interchange))
     found.extend(_currency_findings(conn, partner, advice, message, kind,
                                     interchange))
     moment = db.now(conn)
@@ -282,6 +339,27 @@ def record(conn, partner: Dict[str, Any], message: Message, dialect: str,
     if found:
         conn.commit()
     return found
+
+
+def _advices_numbered(conn, partner_id: str, number: str, own: str) -> int:
+    """How many advices this partner sent carrying `number` as their own.
+
+    `reference` holds an inbound REMADV's BGM number, so the filter is in
+    SQL - but it is confirmed against the advice itself, as `_outstanding`
+    does and for the same reason: the column is a convenience and the
+    message is the fact.
+
+    The advice in hand is archived before this runs, so one that names its
+    own number is naming itself and has replaced nothing.
+    """
+    count = 0
+    for row in _archived(conn, partner_id, number):
+        message = _message(conn, row)
+        if message is None or row["dialect"] != "EDIFACT":
+            continue
+        if read(message, "EDIFACT").trace == number:
+            count += 1
+    return count - (1 if own == number else 0)
 
 
 def _outstanding(conn, partner_id: str, trace: str) -> Tuple[int, int]:
@@ -473,6 +551,17 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
                          for item in advice.invoices],
             "at": row["at"], "status": "reversal" if advice.credit_debit == DEBIT
                                         else "advised", "reversedBy": None,
+            # EANCOM's REMADV correction: BGM 1225 code 5 naming an earlier
+            # advice in RFF+RA. Both are needed - an RFF+RA on an original
+            # advice is a reference to another advice, not a claim to
+            # replace it - so the purpose gates the relation here exactly
+            # as it gates the finding. `Advice.replaces` stays faithful to
+            # the document either way; this field means "the advice this
+            # one replaces", and `replacedBy` is filled in below on the one
+            # it named (#187).
+            "replaces": (advice.replaces or None
+                         if advice.purpose == REPLACEMENT else None),
+            "replacedBy": None,
         })
     for index, item in enumerate(out):
         if item["creditDebit"] != DEBIT or not item["trace"]:
@@ -484,6 +573,19 @@ def listing(conn, partner_id: str = "") -> List[Dict[str, Any]]:
                 earlier["status"] = "reversed"
                 # The archive's id: ST02 repeats between interchanges.
                 earlier["reversedBy"] = item["id"]
+    for index, item in enumerate(out):
+        if not item["replaces"]:
+            continue
+        # The most recent one of that number not already replaced, which is
+        # what makes a chain work: A replaced by B replaced by C leaves each
+        # naming its own predecessor rather than all of them naming A.
+        for earlier in reversed(out[:index]):
+            if (earlier["partner"], earlier["trace"]) == (item["partner"],
+                                                          item["replaces"]) \
+                    and earlier["status"] != "replaced":
+                earlier["status"] = "replaced"
+                earlier["replacedBy"] = item["id"]
+                break
     return out
 
 
