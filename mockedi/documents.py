@@ -100,7 +100,8 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
     ship_to = order.ship_to
     decisions = decide(conn, partner, order, moment)
     total = Decimal("0.00")
-    for line, (status, confirmed, price, reason, scheduled) in zip(order.lines, decisions):
+    for line, (status, confirmed, price, reason, scheduled,
+               backordered) in zip(order.lines, decisions):
         total += cents(confirmed * price)
         # The seller knows its own item numbers even when the buyer sent only
         # one of them, and puts both on everything it sends back.
@@ -108,19 +109,22 @@ def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order
         conn.execute(
             "INSERT INTO order_line (partner, po_number, line, sku, upc,"
             " description, quantity, uom, price, ordered_price, status, confirmed,"
-            " shipped, invoiced, reason, scheduled_on)"
-            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " shipped, invoiced, reason, scheduled_on, backordered)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner["id"], order.po_number, line.number, (item["sku"] if item else line.sku),
              line.upc or (item["upc"] if item else ""),
              line.description or (item["description"] if item else ""),
              quantity_text(line.quantity), line.uom, unit_price(price),
              unit_price(line.price), status, quantity_text(confirmed),
-             "0", "0", reason, scheduled))
+             "0", "0", reason, scheduled, quantity_text(backordered)))
 
     # An order where nothing was confirmed is refused outright; it will never
-    # produce a shipment, so it must not sit in "received" for ever.
+    # produce a shipment, so it must not sit in "received" for ever. One
+    # whose lines are all waiting for stock will produce one, on the day the
+    # stock is due (#335).
     status = "received" if any(
-        confirmed > 0 for _s, confirmed, _p, _r, _sched in decisions) else "rejected"
+        confirmed > 0 or backordered > 0
+        for _s, confirmed, _p, _r, _sched, backordered in decisions) else "rejected"
     conn.execute(
         "INSERT OR REPLACE INTO purchase_order (po_number, partner, seller_order,"
         " ordered_on, requested_on, currency, status, total, ship_to_name,"
@@ -430,10 +434,19 @@ def _existing_seller_order(conn: sqlite3.Connection, po_number: str,
 
 
 def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
-           when: datetime.datetime) -> List[Tuple[str, Decimal, Decimal, str, str]]:
-    """One `(status, confirmed, price, reason, scheduled)` per ordered line."""
+           when: datetime.datetime
+           ) -> List[Tuple[str, Decimal, Decimal, str, str, Decimal]]:
+    """One `(status, confirmed, price, reason, scheduled, backordered)` per line.
+
+    `backordered` is what the seller has no stock for today and will ship on
+    `scheduled`: the balance of a line confirmed short of stock, or all of a
+    line with none. It is nothing where the line is rejected, and nothing
+    under `short-ship`, a partner that confirms less than it was asked for
+    and promises no balance (#335).
+    """
     behaviour = partner.get("behaviour") or "accept"
-    out: List[Tuple[str, Decimal, Decimal, str, str]] = []
+    nothing = Decimal("0")
+    out: List[Tuple[str, Decimal, Decimal, str, str, Decimal]] = []
     last = len(order.lines) - 1
 
     for index, line in enumerate(order.lines):
@@ -448,28 +461,30 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             # despatch advice.
             out.append((REJECTED, Decimal("0"), line.price,
                         "A quantity of %s was ordered; nothing can be supplied "
-                        "against it" % quantity_text(line.quantity), ""))
+                        "against it" % quantity_text(line.quantity), "", nothing))
             continue
 
         if item is None:
             out.append((REJECTED, Decimal("0"), line.price,
                         "%s is not in the catalogue" % (line.sku or line.upc or "the item"),
-                        ""))
+                        "", nothing))
             continue
 
         price = Decimal(item["price"])
         stock = Decimal(str(item["in_stock"]))
 
         if behaviour == "reject-all":
-            out.append((REJECTED, Decimal("0"), price, "Order refused", ""))
+            out.append((REJECTED, Decimal("0"), price, "Order refused", "",
+                        nothing))
             continue
         if behaviour == "reject-line" and index == last:
             out.append((REJECTED, Decimal("0"), price,
-                        "%s is discontinued" % item["sku"], ""))
+                        "%s is discontinued" % item["sku"], "", nothing))
             continue
 
         confirmed = line.quantity
         status, reason = ACCEPTED, ""
+        backordered = nothing
 
         if behaviour == "short-ship":
             confirmed = min(line.quantity, stock)
@@ -482,16 +497,27 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             # less than one unit and half a unit is billed as a whole (#206).
             confirmed = min(max(Decimal("1"), confirmed), line.quantity)
         elif stock < line.quantity:
-            confirmed = stock
+            # Stock is what is short, not the seller's willingness: the rest
+            # is backordered, and ships on the date this line is scheduled
+            # for. Until #335 that date was stated and nothing ever shipped
+            # against it.
+            confirmed = max(stock, nothing)
+            backordered = line.quantity - confirmed
 
         if confirmed <= 0:
-            out.append((BACKORDERED, Decimal("0"), price,
-                        "%s is out of stock" % item["sku"], scheduled))
+            reason = "%s is out of stock" % item["sku"]
+            if backordered > 0:
+                reason += "; %s to follow on %s" % (
+                    quantity_text(backordered), scheduled)
+            out.append((BACKORDERED, Decimal("0"), price, reason, scheduled,
+                        backordered))
             continue
         if confirmed < line.quantity:
             status = SHORT
-            reason = "Confirmed %s of %s; the balance is not available" % (
-                quantity_text(confirmed), quantity_text(line.quantity))
+            reason = "Confirmed %s of %s; %s" % (
+                quantity_text(confirmed), quantity_text(line.quantity),
+                "%s to follow on %s" % (quantity_text(backordered), scheduled)
+                if backordered > 0 else "the balance is not available")
             if line.price and line.price != price:
                 # Both apply, and a line carries one status code. Say the
                 # other one out loud rather than changing the price in
@@ -503,7 +529,7 @@ def decide(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
             reason = "Priced at %s, the order said %s" % (
                 unit_price(price), unit_price(line.price))
 
-        out.append((status, confirmed, price, reason, scheduled))
+        out.append((status, confirmed, price, reason, scheduled, backordered))
     return out
 
 
@@ -628,6 +654,10 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
     lines = order_lines(conn, po_number, partner_id)
 
     if not any(number(row["confirmed"]) > 0 for row in lines):
+        if any(number(row["backordered"]) > 0 for row in lines):
+            # Nothing to pack today, and something to pack on the day the
+            # stock is due: the order is waiting, not refused (#335).
+            return None
         conn.execute("UPDATE purchase_order SET status = 'rejected'"
                      " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
         conn.commit()
@@ -668,6 +698,57 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
     return shipment_row(conn, shipment_id)
+
+
+def backorder_dates(conn: sqlite3.Connection, po_number: str,
+                    partner_id: str) -> List[str]:
+    """The dates an order's lines are waiting for stock until, earliest first."""
+    return sorted({row["scheduled_on"]
+                   for row in order_lines(conn, po_number, partner_id)
+                   if number(row["backordered"]) > 0 and row["scheduled_on"]})
+
+
+def release_backorders(conn: sqlite3.Connection, po_number: str,
+                       partner_id: str, day: datetime.date) -> List[str]:
+    """Confirm what was waiting for stock due on or before `day` (#335).
+
+    The stock has come in: what each such line was waiting for is added to
+    what it has confirmed, and it waits for nothing. Nothing is packed here.
+    The caller schedules that, the way it does for a quantity an 865
+    confirmed after the first consignment left, so the balance goes out as a
+    consignment of its own with its own 856 and 810.
+
+    A line then confirmed in full is `IA`, or `IP` where the seller's price
+    is not the one ordered, which is what it would have been had the stock
+    been there on the day. Returns the lines released.
+    """
+    released = []
+    for row in order_lines(conn, po_number, partner_id):
+        waiting = number(row["backordered"])
+        if waiting <= 0 or not row["scheduled_on"] \
+                or row["scheduled_on"] > day.isoformat():
+            continue
+        confirmed = number(row["confirmed"]) + waiting
+        ordered_price = number(row["ordered_price"], "0.00")
+        price = number(row["price"], "0.00")
+        status, reason = row["status"], row["reason"]
+        if confirmed >= number(row["quantity"]):
+            if ordered_price and ordered_price != price:
+                status = PRICE_CHANGED
+                reason = "Priced at %s, the order said %s" % (
+                    unit_price(price), unit_price(ordered_price))
+            else:
+                status, reason = ACCEPTED, ""
+        conn.execute(
+            "UPDATE order_line SET confirmed = ?, backordered = '0', status = ?,"
+            " reason = ? WHERE partner = ? AND po_number = ? AND line = ?",
+            (quantity_text(confirmed), status, reason, partner_id, po_number,
+             row["line"]))
+        released.append(row["line"])
+    if released:
+        _retotal(conn, po_number, partner_id)
+        conn.commit()
+    return released
 
 
 def over_shipped(quantity: Decimal) -> Decimal:
@@ -830,7 +911,8 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
                 % (ALREADY_SHIPPED, shipped[0]["line"]))
         for row in existing.values():
             conn.execute(
-                "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
+                "UPDATE order_line SET status = ?, confirmed = '0',"
+                " backordered = '0', reason = ?"
                 " WHERE partner = ? AND po_number = ? AND line = ?",
                 (REJECTED, "Order cancelled at the buyer's request",
                  partner["id"], change.po_number, row["line"]))
@@ -872,8 +954,8 @@ def _delete_line(conn, partner, change, line, row) -> Dict[str, Any]:
                 "reason": "%s, so line %s cannot be deleted"
                           % (ALREADY_SHIPPED, line.number)}
     conn.execute(
-        "UPDATE order_line SET status = ?, confirmed = '0', reason = ?"
-        " WHERE partner = ? AND po_number = ? AND line = ?",
+        "UPDATE order_line SET status = ?, confirmed = '0', backordered = '0',"
+        " reason = ? WHERE partner = ? AND po_number = ? AND line = ?",
         (REJECTED, "Line deleted at the buyer's request", partner["id"],
          change.po_number, line.number))
     return {"line": line.number, "action": "DI", "status": REJECTED,
@@ -888,20 +970,20 @@ def _add_line(conn, partner, change, line, moment) -> Dict[str, Any]:
                                description=line.description,
                                quantity=line.quantity, uom=line.uom,
                                price=line.price))
-    status, confirmed, price, reason, scheduled = decide(
+    status, confirmed, price, reason, scheduled, backordered = decide(
         conn, partner, stand_in, moment)[0]
     item = _catalog(conn, line)
     conn.execute(
         "INSERT OR REPLACE INTO order_line (partner, po_number, line, sku, upc,"
         " description, quantity, uom, price, ordered_price, status, confirmed,"
-        " shipped, invoiced, reason, scheduled_on)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " shipped, invoiced, reason, scheduled_on, backordered)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (partner["id"], change.po_number, line.number, (item["sku"] if item else line.sku),
          line.upc or (item["upc"] if item else ""),
          line.description or (item["description"] if item else ""),
          quantity_text(line.quantity), line.uom, unit_price(price),
          unit_price(line.price), status, quantity_text(confirmed), "0", "0",
-         reason, scheduled))
+         reason, scheduled, quantity_text(backordered)))
     return {"line": line.number, "action": "AI", "status": status,
             "reason": reason}
 
@@ -930,28 +1012,39 @@ def _change_line(conn, partner, change, line, row, moment) -> Dict[str, Any]:
                                description=row["description"], quantity=wanted,
                                uom=line.uom or row["uom"],
                                price=line.price or number(row["ordered_price"], "0.00")))
-    status, confirmed, price, reason, scheduled = decide(
+    status, confirmed, price, reason, scheduled, backordered = decide(
         conn, partner, stand_in, moment)[0]
     # Never confirm less than has already left the building.
     if confirmed < shipped:
         confirmed = shipped
+    # Nor wait for stock for goods that have: the catalogue's stock is not
+    # drawn down, so a line whose backorder was released and shipped is
+    # decided short of stock again, and what it still waits for is only
+    # what the change asks for beyond what is confirmed (#335).
+    backordered = max(Decimal("0"), min(backordered, wanted - confirmed))
     conn.execute(
         "UPDATE order_line SET quantity = ?, uom = ?, price = ?,"
         " ordered_price = ?, status = ?, confirmed = ?, reason = ?,"
-        " scheduled_on = ? WHERE partner = ? AND po_number = ? AND line = ?",
+        " scheduled_on = ?, backordered = ?"
+        " WHERE partner = ? AND po_number = ? AND line = ?",
         (quantity_text(wanted), line.uom or row["uom"], unit_price(price),
          unit_price(line.price or number(row["ordered_price"], "0.00")), status,
          quantity_text(confirmed), reason, scheduled or row["scheduled_on"],
-         partner["id"], change.po_number, line.number))
+         quantity_text(backordered), partner["id"], change.po_number,
+         line.number))
     return {"line": line.number, "action": action, "status": status,
             "reason": reason}
 
 
 def _retotal(conn: sqlite3.Connection, po_number: str, partner_id: str) -> None:
     total = Decimal("0.00")
+    waiting = False
     for row in order_lines(conn, po_number, partner_id):
         total += cents(number(row["confirmed"]) * number(row["price"], "0.00"))
-    status = "received" if total > 0 else "cancelled"
+        waiting = waiting or number(row["backordered"]) > 0
+    # Nothing confirmed and nothing awaited is an order with nothing left in
+    # it. One still waiting for stock has not been cancelled by anybody.
+    status = "received" if total > 0 or waiting else "cancelled"
     current = order_row(conn, po_number, partner_id)
     if current and current["status"] in ("shipped", "invoiced"):
         status = current["status"]

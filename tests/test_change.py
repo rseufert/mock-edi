@@ -92,7 +92,9 @@ class ChangingAQuantity(MockServerCase):
         line = self.order("PO-CHANGE")["lines"][0]
         self.assertEqual(line["status"], "IQ")
         self.assertEqual(line["confirmed"], "4200")     # what is in stock
-        self.assertIn("not available", line["reason"])
+        # The balance is backordered, and the reason says so (#335).
+        self.assertEqual(line["backordered"], "95799")
+        self.assertIn("95799 to follow on", line["reason"])
 
     def test_the_despatch_when_it_comes_reflects_the_change(self):
         """The reason fulfilment is scheduled rather than done eagerly."""

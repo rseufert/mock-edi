@@ -925,7 +925,10 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         out.append(seg("QTY", ["113", quantity_text(confirmed), unit]))
         if confirmed < ordered:
             out.append(seg("QTY", ["83", quantity_text(ordered - confirmed), unit]))
-        if row.get("scheduled_on") and confirmed > 0:
+        # A line with nothing confirmed commits to no date - unless it is
+        # waiting for stock, when the date is the day all of it ships (#335).
+        if row.get("scheduled_on") and (
+                confirmed > 0 or number(str(row.get("backordered") or "0")) > 0):
             out.append(seg("DTM", [SCHEDULED_EDIFACT, _iso(row["scheduled_on"]),
                                    "102"]))
         out.append(seg("PRI", ["AAA", unit_price(number(row["price"], "0.00"))]))
