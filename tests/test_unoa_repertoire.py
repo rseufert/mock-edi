@@ -90,7 +90,8 @@ class WhatFitDoesWithIt(unittest.TestCase):
 
     def test_folding_never_changes_the_length(self):
         # `str.upper()` would: "Straße" becomes "STRASSE", a character longer,
-        # and a value at an element's maximum would grow past it.
+        # and a value at an element's maximum would grow past it. Nor does
+        # transliteration, unless it is told the element has room (#264).
         for value in ("Widget Co", "Stra\u00dfe", "\u0131stanbul", "L\u00f3d\u017a"):
             with self.subTest(value):
                 self.assertEqual(
@@ -99,9 +100,12 @@ class WhatFitDoesWithIt(unittest.TestCase):
 
     def test_what_folding_leaves_for_the_codec(self):
         # The sharp case: ß folds to nothing, so the codec substitutes it
-        # rather than expanding it to SS.
+        # rather than expanding it to SS - unless the element is known to
+        # have room for the second S (#264).
         self.assertEqual(fit("Stra\u00dfe", "ascii", charsets.LOWER_CASE,
                              fold=True), "STRA?E")
+        self.assertEqual(fit("Stra\u00dfe", "ascii", charsets.LOWER_CASE,
+                             fold=True, limit=35), "STRASSE")
 
     def test_and_stays_where_it_does_not(self):
         self.assertEqual(fit("Widget Co", "ascii"), "Widget Co")
@@ -111,27 +115,33 @@ class WhatFitDoesWithIt(unittest.TestCase):
         self.assertEqual(fit(kept, "ascii", charsets.LOWER_CASE), kept)
 
     def test_the_codec_still_substitutes_what_it_cannot_carry(self):
-        # Both exclusions at once: an accented capital the codec refuses and
-        # a lower-case letter the repertoire does.
-        self.assertEqual(fit("Éa", "ascii", charsets.LOWER_CASE), "??")
+        # Both exclusions at once: a character the codec refuses and has no
+        # plain letters for, and a lower-case letter the repertoire refuses.
+        self.assertEqual(fit("\u20aca", "ascii", charsets.LOWER_CASE), "??")
+        # An accented capital is no longer one of those: it is said without
+        # its accent (#264), and the lower case beside it still is not.
+        self.assertEqual(fit("\u00c9a", "ascii", charsets.LOWER_CASE), "E?")
 
     def test_a_substituted_character_cannot_escape_a_separator(self):
         """The #199 property, and the reason it still matters after folding.
 
-        Folding removes the lower case, so under level A what is left to
-        substitute is what ISO 646 never had: `Łódź` folds to `ŁÓDŹ` and the
-        codec takes the three it cannot carry. `fit` substitutes before
-        `escape` runs, so each `?` is doubled into a literal one. Had the
-        order been the other way round those `?` would have been release
+        Folding removes the lower case and transliteration the accents
+        (#264), so under level A what is left to substitute is what has no
+        Latin letter to be: a euro sign, a Greek word. `fit` substitutes
+        before `escape` runs, so each `?` is doubled into a literal one. Had
+        the order been the other way round those `?` would have been release
         characters and a conforming reader would have lost the separator
         after each - exactly what #199 fixed for the codec, inherited here
         rather than rebuilt.
         """
-        folded = fit("\u0141\u00f3d\u017a", "ascii", charsets.LOWER_CASE,
+        folded = fit("\u20ac5 \u0391\u03b8", "ascii", charsets.LOWER_CASE,
                      fold=True)
-        self.assertEqual(folded, "??D?")
-        # Three substitutions, each doubled: ?? ?? D ?? on the wire.
-        self.assertIn("????D??", rendered("UNOA", "\u0141\u00f3d\u017a"))
+        self.assertEqual(folded, "?5 ??")
+        # Three substitutions, each doubled on the wire.
+        self.assertIn("??5 ????", rendered("UNOA", "\u20ac5 \u0391\u03b8"))
+        # And the name that used to be the example is now a name.
+        self.assertEqual(fit("\u0141\u00f3d\u017a", "ascii",
+                             charsets.LOWER_CASE, fold=True), "LODZ")
 
 
 class WhatEachSyntaxSends(unittest.TestCase):

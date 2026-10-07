@@ -223,6 +223,37 @@ def wrap(messages: Sequence[Message], sender: str, receiver: str, control: str,
     )
 
 
+def _room(definition, tag: str):
+    """How many characters each position of a segment holds, by the dictionary.
+
+    For `fit`, which will not let a transliteration outgrow its element
+    (#264): `\u00df` is `ss`, and a name that filled C080's 35 characters would
+    be 36. 0 where the dictionary does not declare the position, which
+    leaves the value free to grow, as it is for a segment the mock does not
+    know at all.
+    """
+    declared = definition.segment_for(tag) if definition is not None else None
+    if declared is None:
+        return None
+
+    def room(position: int, component: int = 0) -> int:
+        element = declared.element(position)
+        if element is None:
+            return 0
+        if not component:
+            # A composite written as a bare value is its first component,
+            # and takes that one's room. Which is not always the room the
+            # text has: C273's first is 7009 at 17 where its text, 7008, is
+            # 35. No writer passes an IMD's composite bare today, and if one
+            # did the error would be on the safe side - less growth.
+            return (element.components[0].max_len if element.components
+                    else element.max_len)
+        if 1 <= component <= len(element.components):
+            return element.components[component - 1].max_len
+        return 0
+    return room
+
+
 def render(interchange: Interchange, newline: bool = False,
            una: bool = True, application_reference: str = "",
            charset: Optional[str] = None) -> str:
@@ -268,9 +299,11 @@ def render(interchange: Interchange, newline: bool = False,
         for item in group.messages:
             segments = (item.segments if delims.decimal in (".", "")
                         else _decimals(item, ".", delims.decimal))
+            definition = schema.lookup("EDIFACT", item.code)
             for element in segments:
                 out.append(render_segment(element, delims, charset,
-                                          outside, fold))
+                                          outside, fold,
+                                          _room(definition, element.tag)))
     out.append(render_segment(
         seg("UNZ", str(interchange.message_count), interchange.control),
         delims, charset, outside, fold))

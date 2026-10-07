@@ -104,11 +104,13 @@ class WhatEachSyntaxCanCarry(unittest.TestCase):
                                            "1", syntax=syntax))
 
     def test_unoc_cannot_carry_it(self):
-        # iso-8859-1 has ó and neither Ł nor ź.
+        # iso-8859-1 has ó and neither Ł nor ź: the two it lacks are said
+        # in plain letters (#264) and the one it has is left alone.
         written = self.rendered("UNOC")
         self.assertIn("UNB+UNOC:3+", written)
-        self.assertIn("?ód?", written)
+        self.assertIn("+L\u00f3dz'", written)
         self.assertNotIn(CITY, written)
+        self.assertNotIn("?", written.split("'", 1)[1])
 
     def test_unoy_carries_it_whole(self):
         written = self.rendered("UNOY")
@@ -119,7 +121,7 @@ class WhatEachSyntaxCanCarry(unittest.TestCase):
         # Level B is ISO 646: no accents at all.
         written = self.rendered("UNOB")
         self.assertIn("UNB+UNOB:3+", written)
-        self.assertIn("???d?", written)
+        self.assertIn("+Lodz'", written)
 
 
 class AFileFromBeforeTheColumn(unittest.TestCase):
