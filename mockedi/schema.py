@@ -1203,6 +1203,14 @@ RESPONSE_TYPE_CODES = {    # 4343 - the verdict an ORDRSP carries
 EDIFACT_DATE_QUALIFIERS = {  # 2005
     "137": "Document/message date/time", "2": "Delivery date/time, requested",
     "4": "Order date/time",
+    # A REMADV's settlement date, the counterpart of an 820's BPR16: "Date
+    # on which an amount due is made available to the creditor, in
+    # accordance with the terms of payment." The EANCOM REMADV guide uses
+    # 138 and not 209, and admits one settlement date per advice (#187).
+    # Named as the directory names it: Stedi writes "Payment date/time",
+    # edifactory and Stylus Studio "Payment date", and edifactory's 137
+    # matches this table's existing string exactly.
+    "138": "Payment date",
     "11": "Despatch date and/or time", "17": "Delivery date/time, estimated",
     "35": "Delivery date/time, actual",
     # What a seller's response dates a confirmed line with: the delivery
@@ -1221,6 +1229,10 @@ EDIFACT_REFERENCE_QUALIFIERS = {  # 1153
     "BM": "Bill of lading number", "IV": "Invoice number",
     "CR": "Customer reference number", "CT": "Contract number",
     "CN": "Carrier's reference number",
+    # What a REMADV replacing another names it by: BGM 1225 code 5 says a
+    # replacement and "the previous message should be identified in the RFF
+    # segment group 1" (#187).
+    "RA": "Remittance advice number",
 }
 EDIFACT_PARTY_QUALIFIERS = {  # 3035
     "BY": "Buyer", "SU": "Supplier", "DP": "Delivery party", "IV": "Invoicee",
