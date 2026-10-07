@@ -279,12 +279,18 @@ def _next_control(width: int = 9) -> str:
 
 def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
               receiver="MOCKEDI", control=None, group=None,
-              ordered_on="20260924", purpose="00", qualifier="VP", extra=()):
-    """An 850, as a rendered interchange."""
+              ordered_on="20260924", purpose="00", qualifier="VP", extra=(),
+              currency="USD"):
+    """An 850, as a rendered interchange.
+
+    `currency` is `CUR02`. It was hardcoded, which is why #316 was filed
+    against the mock: a test that could not state another currency looked
+    like a mock that could not read one.
+    """
     control = control or _next_control(9)
     group = group or control.lstrip("0") or "1"
     body = [seg("BEG", purpose, "SA", po_number, "", ordered_on),
-            seg("CUR", "BY", "USD"),
+            seg("CUR", "BY", currency),
             seg("DTM", "002", "20261010"),
             seg("N1", "ST", "Acme DC 4", "92", "ACME-DC4"),
             seg("N3", "9 Dock Road"),
@@ -300,8 +306,13 @@ def x12_order(po_number="4500000001", lines=DEFAULT_LINES, sender=ACME,
 
 def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS,
                   receiver="MOCKEDI", control=None, extra=(), delimiters=None,
-                  purpose="9"):
-    """An ORDERS, as a rendered interchange."""
+                  purpose="9", currency="EUR"):
+    """An ORDERS, as a rendered interchange.
+
+    `currency` is the `CUX`'s. It was hardcoded, which is why #316 was
+    filed against the mock: a test that could not state another currency
+    looked like a mock that could not read one.
+    """
     control = control or _next_control(4)
     body = [seg("BGM", ["220"], [po_number], purpose),
             seg("DTM", ["137", "20260924", "102"]),
@@ -310,7 +321,7 @@ def edifact_order(po_number="PO-2026-00001", lines=DEFAULT_LINES, sender=EURODIS
                 ["Hafenstrasse 12"], "Hamburg", "HH", "20457", "DE"),
             seg("NAD", "DP", ["EURODIS-L1", "", "92"], "", ["Eurodis Lager 1"],
                 ["Am Kai 4"], "Hamburg", "HH", "20459", "DE"),
-            seg("CUX", ["2", "EUR", "9"])]
+            seg("CUX", ["2", currency, "9"])]
     for index, (sku, quantity, price) in enumerate(lines, start=1):
         body.append(seg("LIN", str(index), "", [sku, "VP"]))
         body.append(seg("QTY", ["21", str(quantity), "PCE"]))
