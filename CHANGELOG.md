@@ -13,6 +13,503 @@ Entries waiting for a release are one file each in
 cannot conflict. `tools/check_changelog.py --release X.Y.Z` assembles them
 into a dated section here.
 
+## [0.8.0] - 2026-10-06
+
+0.8.0 is the release where the dictionary matches the standards it names, in
+both dialects, and where the mock stops guessing at what a partner sent it.
+Every X12 segment has the width 004010 gives it, every EDIFACT composite the
+component bounds D.96A gives it, the envelope segments are described, and a
+correct document in either dialect is no longer reported against. What the
+mock reads, it now reads whole: a remittance's currency (and a document's own,
+on its `MOA`), a REMADV's payment date and the advice it replaces, an element
+arriving with components it should not have, a repeated amount in one `DOC`
+group. Three things mock-films asked for are in: a mock can be started at a
+chosen time and held there, so a capture reproduces byte for byte; the courier
+can be held and deliveries stepped one document at a time; and a seller can
+over-ship. A delivered document can be sent again unchanged, and the timeline
+says which promise each shipment, invoice and document kept.
+
+Things that change behaviour: an ORDCHG now carries its own number in `BGM`
+and the order it amends in `RFF+ON`, as D.96A has it (the reader accepts both
+forms); an `ORDRSP` dates a confirmed line with `DTM+67`, not `DTM+2`; the 855
+and 865 no longer write `DTM*137`, and `ACK04` is written `067`; an EDIFACT
+answer is written in the syntax the partner is set to, and a character that
+syntax cannot carry is transliterated (`Łódź` as `Lodz`, `Müller` as `Muller`,
+a soft hyphen dropped) rather than written as `?`; a simple element arriving
+with components is a finding; an invoice for more than was ordered is a
+disagreement; a long description is written in pieces the standard allows. The
+schema moves from 12 to 15 and upgrades in place. The `examples/` integration
+has moved to mock-acme. On the repository, `main` now requires the `all checks
+passed` job, and the publish action is pinned.
+
+### Added
+
+- **A REMADV is judged early, and one REMADV can replace another**
+  ([#187]). Two of the remittance findings were judged for an 820 only,
+  because D.96A settles neither question — which date is the value date,
+  and how one advice corrects another. EANCOM's REMADV guide settles both,
+  and differently from X12.
+  `remitted-before-settlement` now reads a REMADV's header `DTM+138`, the
+  directory's "Payment date", against the mock's clock exactly as it reads
+  an 820's `BPR16`; the note names the segment the document in hand
+  actually has. `settles` and `settledOnArrival` in `/_mock/remittances`
+  carry it, and an advice with no `DTM+138` is neither early nor late, as
+  before.
+  A REMADV with `BGM` 1225 code 5 and a header `RFF+RA` **replaces** the
+  advice of that number from the same partner: the listing gains `replaces`
+  on the later advice and `replacedBy` on the earlier, whose `status`
+  becomes `replaced`, beside the `reversedBy` an 820 debit already had. A
+  replacement naming an advice the mock never received is the finding
+  `replacement-of-nothing`, EANCOM's shape for what `reversal-of-nothing`
+  catches in an 820. There is no REMADV debit or negative-amount reversal;
+  no source has one.
+  The dictionary gains `138` at `2005` and `RA` at `1153`, each with two
+  published sources, so a correct advice carrying either is no longer
+  reported against.
+
+- **An element says which header element it repeats** ([#210]). In the
+  dictionary, `IEA02` carries `"repeats": {"tag": "ISA", "position": 13,
+  "label": "ISA13"}`, and likewise `GE02`/`GS06`, `SE02`/`ST02`,
+  `UNZ`/`UNB`, `UNT`/`UNH` and `UNE`/`UNG`; every other element carries
+  `null`. Each pair is declared once in `schema.py`, and the validator's
+  check of it reads the positions from that declaration.
+- **The envelope entry says its own version** ([#210]), in a new
+  `envelopeVersion`: `00401` or `00501` (`ISA12`) for X12 and the syntax
+  version, `3`, for EDIFACT. `version` is unchanged: it is still the version
+  of the sets inside the envelope.
+- **Corrected: `GS`/`GE` and `UNG`/`UNE` may repeat** ([#210]). The envelope
+  entry served `maxUse` 1 for them, which says an interchange holds one
+  functional group. It holds any number, and they now say 999999. This is
+  a change to a value already served, not a new field.
+
+- **A timeline says which promise each shipment, invoice and sent document
+  kept** ([#211]). A `promised` event has `promise`, its id, and a `packed`,
+  an `invoiced` and a document the mock sent carry the `promise` they were
+  done in keeping. An order with two promises of one kind - shipped, then
+  changed to a larger quantity - could be paired up only by kind and by
+  counting; now each consignment and each 856 names its own promise. The id
+  is the `id` `/_mock/scheduled` already serves. `promise` is `null` where no
+  promise was being kept: an answer sent at once, a document sent with
+  `/_mock/send`, or anything written by an earlier version. Fields are added
+  and none is renamed. `/_mock/documents` rows, and rows collected from
+  `/_mock/mailbox`, gain `promise_id`, which is 0 for none.
+
+- **A seller can over-ship: the `over-ship` behaviour** ([#212]). The mock's
+  buying side has always reported a ship notice for more than was confirmed
+  or ordered, and no seller it could play produced one. A customer set to
+  `over-ship` is confirmed exactly what it ordered (855 `IA`, `ORDRSP`
+  `QTY+21`), then shipped three in ten more on every line - rounded up to a
+  whole unit and never less than one extra, so 100 is 130 - and invoiced for
+  what shipped. The 856 and 810 (`DESADV`, `INVOIC`) agree with each other.
+  Between two mocks the buyer reports `shipped-more-than-confirmed` and
+  `shipped-more-than-ordered` against the 856, and acknowledges every set as
+  accepted.
+
+- **`POST /_mock/outbox/<id>/resend` sends a document again, unchanged**
+  ([#262]). `retry` only takes a delivery that failed, so a document that had
+  arrived could not be sent a second time - which is the case that shows
+  whether a listener is idempotent about a control number it has already
+  seen. `resend` posts a delivered document to the partner again with the same
+  bytes, control numbers and AS2 `Message-ID`, and puts a collected one back
+  in the mailbox; its answer says what had become of the document in `was`.
+  One not yet due, or cancelled, is a 409. One still waiting to go is left
+  to, and `sent_before` in the answer says whether it has gone out already:
+  two posts in a row are one more copy, not two. `retry` still refuses anything
+  that did not fail, and its 409 now names `resend`.
+
+- **A mock can be held, and its deliveries stepped one at a time** ([#271]).
+  Two mocks wired to each other finished a whole rally inside one
+  `settle()`, so the state between two hops - the seller has promised, the
+  buyer has not yet answered - could not be read. Start a mock with
+  `--hold-delivery` (`Mock.start(hold_delivery=True)`) and it posts nothing
+  until asked: `POST /_mock/deliver`, or `Mock.step()`, sends the next held
+  document and answers once that one delivery has finished, saying which
+  document it was (`code`, `control`, `partner`) and how it ended. `?all`,
+  or `step(everything=True)`, sends everything held in order. "Next" is
+  what an unheld mock would have posted next. An asynchronous MDN is its own
+  step. With nothing to send the answer is `"sent": null` and `step()`
+  returns `None`. `settle()` and `exchange()` raise on a held mock rather
+  than wait for it, and `/_mock/health` says `"deliveryHeld"`. A mock
+  started without the flag behaves as before.
+
+- **A document on the timeline says which invoice, shipment or order it
+  carries** ([#273]). A `sent` or `received` event for an 810 or `INVOIC` now
+  has `invoice` and `shipment`, one for an 856 or `DESADV` has `shipment`, and
+  every document but an acknowledgment has `order`: the same names, and the
+  same values, as the `invoiced` and `packed` events beside them. An order
+  shipped in two consignments has two 856s and two 810s, and each can now be
+  matched to its own by a field. `/_mock/documents` rows, and the rows
+  collected from `/_mock/mailbox`, gain the same numbers as `shipment_id` and
+  `invoice_number`. Fields are added and none is
+  renamed; `summary` reads as it did. A `--db` file from an earlier version is
+  upgraded in place, and the documents already in it have the fields empty.
+
+- **The clock can be started at a chosen time** ([#280]): `--start-at
+  2026-11-02T09:00:00Z`, or `Mock.start(start_at=...)`. The clock then reads
+  that time until it is advanced and never follows the host's, so two runs
+  of the same script from a fresh start write the same documents, byte for
+  byte, and the same timeline. The time is ISO 8601 with a `Z` or an offset;
+  one with neither is refused. Documents are dated in the zone the start
+  time is written in, not the machine's, so a capture is the same on any
+  machine. Everything between two advances shares one `at`, and the timeline
+  keeps the order things happened in. `/_mock/advance` is unchanged,
+  `/_mock/reset` goes back to the start time, and `/_mock/state` gains
+  `clock` (`now`, `startAt`, `advancedSeconds`). A `--db` file keeps the
+  clock it was started on and refuses another. The README lists what still
+  follows the host: the request log, the HTTP and AS2 `Date` headers, and an
+  MDN's random `Message-ID`. Without `--start-at` nothing changes.
+
+### Changed
+
+- **An ORDCHG identifies itself by its own number, as D.96A has it** ([#186]).
+  `BGM` position 2 was declared as the composite `C106` and carried the order
+  number with the change's sequence packed in behind it. D.96A has no `C106`
+  in `BGM`: position 2 is element 1004, the document's own number, and the
+  order being amended is named by `RFF+ON` — which this message always wrote
+  anyway. **The wire changes:**
+
+      before   BGM+230+4500001001::2+4
+      after    BGM+230+4500001001-2+4
+               RFF+ON:4500001001        (unchanged, and now load-bearing)
+
+  The number is the order's and the sequence together because D.96A asks the
+  sender to identify the order change *uniquely*, which a bare `2` does not.
+  **The reader takes both forms**, so a buyer sending the shape this mock
+  wrote before 0.8.0 is still understood, and a partner's own numbering —
+  `BGM+230+CHG-00417` — is taken whole with the order read from `RFF+ON`.
+  With [#288] also in, that old form now *draws a finding* as well —
+  `BGM02 is a simple element and arrived with 2 components` — and is still
+  read and applied, because the finding is an error rather than a fatal one.
+  Nothing else moves: `1225` still says whether the request changes or
+  withdraws the order. One new refusal: a change to an order whose number is
+  34 or 35 characters is refused, because the number and a sequence together
+  would not fit `1004`'s `an..35` — the order itself is still accepted, and
+  the refusal does the arithmetic. An order of 36 or more was already refused
+  when placed.
+
+- **The 855 and 865 no longer carry `DTM*137`, and an acknowledged line is
+  dated with `067`, not `068`** ([#229]). If you read the acknowledgment's
+  date from its header `DTM`, read `BAK09` (855) or `BCA10` (865) instead:
+  the date is there, as it always was, and the `DTM` segment is gone, so
+  each document is one segment shorter and `SE01` is one less. If you match
+  on `ACK04`, it is now `067`; the date in `ACK05` is unchanged. In X12,
+  137 is a supplier's delivery rating and not a date of issue (it is the
+  document date in EDIFACT, where the mock still writes `DTM+137`), and 068
+  is the scheduled *ship* date where the mock means the scheduled delivery.
+  What the mock reads is not narrowed: a partner's `DTM*097` or `DTM*137`
+  is still taken as the acknowledgment's date when `BAK09` or `BCA10` is
+  empty, a line dated `067` or `068` is read either way, and an 850 may ask
+  for delivery with `067` as well.
+
+- **A letter the declared character set cannot carry is transliterated, not
+  replaced by a question mark** ([#264]). An EDIFACT document for a partner
+  in `Łódź` read `?ód?` in `UNOC`; it now reads `Lódz`, and `Lodz` in `UNOB`
+  and `LODZ` in `UNOA`. `Müller` in `UNOB` is `Muller`. If you assert on a
+  name, a street or a city the mock writes back in EDIFACT, and it has a
+  letter outside the partner's character set, the bytes change:
+
+  ```
+  before   NAD+BY+POLDIS::92++Poldis Sp. z o.o.+Piotrkowska 1+??ód??+LD+90-001+PL'
+  after    NAD+BY+POLDIS::92++Poldis Sp. z o.o.+Piotrkowska 1+Lódz+LD+90-001+PL'
+  ```
+
+  The letters follow Unicode CLDR's `Latin-ASCII` table, which is
+  language-neutral: `ü` is `u` and never `ue`, `ø` is `o`, `ß` is `ss`, `Æ`
+  is `AE`. A character the set does carry is untouched, so `ü` stays `ü` in
+  `UNOC`. A value never grows past its element's maximum: where `ss` would
+  not fit, the `ß` keeps its `?`. What has no plain form, a `€` or a
+  non-Latin word, is still a `?`. X12 is unchanged.
+
+- **The integration in `examples/` has moved to mock-acme** ([#279]).
+  `po_bridge.py` and its tests sat between this mock and mock-sap, so they now
+  live in [mock-acme](https://github.com/rseufert/mock-acme) with the rest of
+  that code, one copy, tested against all three mocks. `examples/README.md` says
+  which file became which. `demo.sh` and `client.py` stay.
+
+- **A simple element that arrives with components is now reported**
+  ([#288]). If a document you send puts the component separator inside an
+  element the standard makes simple - most often free text containing the
+  character your own `ISA16` or `UNA` names, such as `N1*ST*Acme> West` -
+  the mock used to read the first piece, drop the rest and say nothing. It
+  still reads the first piece, and now reports the element: `AK403` 6
+  (invalid character in data element) in a 997, `0085` 16 (too many
+  constituents) in a CONTRL, and a finding that quotes the pieces. It is an
+  error, not a fatal one: the set is acknowledged as accepted with errors,
+  and rejected only by a partner set to `strict`. Positions the dictionary
+  does not declare are not judged. Two X12 positions the standard makes
+  composites are now declared as such, so the dictionary serves `POC05` as
+  `C001` (unit, exponent, multiplier) and `AK401` as `C030` (element
+  position, component position) where it served one element; a plain `EA`
+  or a plain position reads exactly as before.
+
+- **An acknowledgment's note names the element, and keeps the number**
+  ([#294]). `ack_note` on a document, the `acknowledged` event on a
+  timeline and the `answers` of an acknowledgment used to say `element 3:
+  Data element too long`. They now say `PO103 (element 3): Data element
+  too long ('BOXES')` for a 997, and `QTY01/6063 (segment 13, element 2:1):
+  Invalid value` for a CONTRL, where the number is the one the
+  acknowledgment gave. A 997 is named from its own `AK3`; a CONTRL carries
+  only positions, so it is named from the message it is about, and keeps
+  the numbers alone when the mock does not hold that message. If you match
+  on the text of these notes, match on the part in brackets or after the
+  colon. Nothing the mock sends changes.
+
+- **An `ORDRSP` dates a confirmed line with `DTM+67`, not `DTM+2`**
+  ([#305]). If you read the seller's scheduled delivery date for a line
+  from an `ORDRSP`, look for qualifier `67`:
+
+  ```
+  before   DTM+2:20261007:102'
+  after    DTM+67:20261007:102'
+  ```
+
+  The date is the same. In D.96A, 2 is the date the buyer *requested*; 67
+  is the delivery date the seller's current schedule gives, which is what
+  the response means and what the 855 says with `067`. The `DTM+2` in the
+  header of an `ORDERS` the mock places is unchanged: there it is the
+  buyer's request. Reading is not narrowed: a line dated with `67`, `2` or
+  `17` is read, `67` first.
+
+- **Typographic punctuation the character set cannot carry is written
+  plainly, not as a question mark** ([#319]). A partner named `O’Brien`,
+  with the apostrophe a word processor curls, was written `O?Brien` in
+  every EDIFACT character set but UTF-8. It is now `O'Brien`; a dash is a
+  hyphen (`Smith–Jones` is `Smith-Jones`), curled quotation marks are
+  straight ones, a no-break space is a space, and `…` is three full stops
+  where the element has room for them. The rules are Unicode CLDR's, from
+  the same `Latin-ASCII` table as the letters ([#264]), with one exception:
+  a soft hyphen is dropped, where that table makes it a visible hyphen,
+  because it is a line-break hint and not part of the name. An apostrophe
+  written this way is released like any other (`O?'Brien` on the wire), so
+  the segment is not cut short. As with the letters, a character the
+  declared set does carry is untouched, and X12 is unchanged.
+
+### Fixed
+
+- **A `RFF` reference D.96A cannot carry is refused** ([#186]). `C506` was
+  declared with a fifth component, 1060, where D.96A's has four, so the
+  dictionary - which says `D:96A:UN` and serves that at
+  `GET /_mock/dictionary` - accepted a reference a translator that knew only
+  D.96A would refuse. A fifth component is now
+  `RFF01 (C506) has no component at position 5`. A composite can say how wide
+  the standard makes it, the way a segment has been able to since [#54], and
+  the composites that are deliberately short - `C058` declares one of D.96A's
+  five address lines - still report nothing past their end, which is the point
+  of declaring a width rather than assuming one. An empty trailing component
+  is not reported either: a trailing separator is how a sender writes "nothing
+  here". `BGM`'s position 2, the other half of [#186], is unchanged for now -
+  the mock writes an ORDCHG's change sequence in `C106`, so where D.96A puts
+  that sequence has to be settled first.
+
+- **A correct X12 segment is no longer told it has too many elements**
+  ([#202]). Twenty-one segments were declared narrower than the standard
+  makes them, so a valid `PER05`, `N405`, `PID09`, `BEG08`, `REF04`, `DTM05`
+  or `CUR04` drew "no element at position" and an `AK4` with code 3, and a
+  strict partner rejected the order. `BEG`, `BAK`, `BCH`, `BCA`, `POC`,
+  `BSN`, `BIG`, `CUR`, `REF`, `PER`, `FOB`, `DTM`, `N4`, `PID`, `ACK`, `TD1`,
+  `TD3`, `PRF`, `TXI`, `CAD` and `AK5` now have the width 004010 gives them,
+  and `BIG` and `N4` are one element wider in 005010, as they are in the
+  standard. The positions added are carried and not checked; the
+  dictionary's `width` and `checkedTo` say which is which. An element past
+  the standard's width is still code 3.
+
+- **A CONTRL names the element in error the way the standard counts it**
+  ([#208]). **If you match on the element position a `UCD` or a `UCI` reports,
+  it is one higher than before:** `0098`, *erroneous data element position in
+  segment*, counts the segment tag as position 1, and the mock was not
+  counting it. A bad `BGM03` was reported as element 3 and is now 4; a bad
+  `QTY01` was 1 and is now 2. The standard's words are "the segment code and
+  each following simple or composite data element defined in the segment
+  description shall cause the count to be incremented. The segment tag has
+  position number 1". Both places that write it moved: `UCD`, and `UCI07`
+  for an envelope refused outright. The two numbers beside it are unchanged
+  and were already right - `0104` counts a composite's components from 1,
+  with no tag to count, and `UCS`'s `0096` counts the `UNH` as segment 1 -
+  so a `UCD` whose two numbers were both `1` now reads `2:1`. The buyer-side
+  reconciliation note, which reports `0098` as it finds it, moves with it.
+
+- **The dictionary names X12's date qualifiers as the standard does**
+  ([#229]). `068` was named "Current Schedule Delivery", which is `067`;
+  it is "Current Schedule Ship". `137` was named "Document/Message Date",
+  its EDIFACT meaning; in X12 it is "Delivery Rating". `067` (Current
+  Schedule Delivery) and `097` (Transaction Creation) are added, and `038`
+  and `118` are spelled as the standard spells them ("Ship No Later",
+  "Requested Pick-up").
+
+- **An EDIFACT composite's components are bounded the way D.96A bounds them**
+  ([#239]). Seven component maxima in the EDIFACT dictionary were a later
+  directory's, so a document the mock accepted was refused by a translator
+  that knew only D.96A - while the X12 side already caught the same mistakes.
+  `QTY+21:1:BOXES'` is now refused: `6411` is `an..3`, not `an..8`. So is an
+  item description past 35 characters (`7008`), free text past 70 (`4440`), a
+  quantity past 15 digits (`6060`) and a monetary amount past 18 (`5004`).
+  `6411` also carries the units the mock can translate, as X12's element 355
+  has always carried its own, so a unit the mock cannot translate is a finding
+  that names the ones it takes rather than passing silently. Nothing the mock
+  writes changes: every seeded description, translated unit and reason it
+  sends was already inside D.96A's limits, and there are tests saying so.
+  A caller's over-long description or unit is now refused for an EDIFACT
+  supplier exactly as it already was for an X12 one.
+
+- **An EDIFACT answer is written in the syntax the partner is set to**
+  ([#263]). Whatever an interchange declared in `UNB` S001, the mock answered
+  `UNOC:3` — circularly, because it read the syntax back off the UNB it had
+  just written itself. A partner now carries a `syntax`, defaulting to `UNOC`,
+  so nothing changes until it is set; set it and the answer declares it and is
+  written in it. **A partner set to `UNOY` is sent `Łódź` whole**, where a
+  `UNOC` answer substituted `?ód?` — a loss that was entirely the mock's
+  choice. It is configured rather than mirrored from the last inbound
+  interchange: a partner the mock has only ever sent to has nothing to mirror.
+  `UNOA` is refused with a refusal that says why — level A is ISO 646 without
+  lower case, a repertoire rather than an encoding, and the mock cannot yet
+  hold a document to one; `UNOB` is the same repertoire with lower case.
+  Schema 13 adds the column, and a `--db` file from before it comes back
+  `UNOC`.
+
+- **A remittance advice is recorded with the currency it states** ([#281]).
+  `GET /_mock/remittances` answered a `total` and no currency anywhere, so
+  `"total": "1416.00"` was 1416.00 of nothing in particular — and the
+  arithmetic check compared an advice with the invoices it pays without asking
+  whether they were the same kind of money, so a EUR advice against a USD
+  invoice of the same figure passed. The listing now answers `currency`
+  beside `total`: `CUR02` for an 820, the summary `MOA`'s own currency for a
+  REMADV, falling back to the header `CUX`. An advice that states none is
+  answered `null` rather than a guessed default. Two findings come with it:
+  `remittance-currency-not-the-invoice`, where the advice pays an invoice the
+  mock issued in another currency, and `remittance-currency-disagrees`, where
+  a REMADV contradicts itself — a header `CUX` against a summary `MOA`, or
+  several header `CUX` segments against each other. D.96A permits all of it
+  and gives no rule for which wins, so the mock takes the reference currency
+  (`6347` code 2) and reports the rest rather than keeping one quietly. A
+  field is added; nothing is renamed.
+
+- **A long description no longer makes the mock write a document its own
+  dictionary rejects** ([#291]). A line's description comes from the order
+  and is written back in every answer, in the partner's dialect, so an 850
+  with a 100-character `PID05`, or since this release an `ORDERS` with a
+  40-character `IMD`, came back as a response and an invoice each over
+  length. A description longer than the element is now written in pieces,
+  as each standard says to: repeated free-form `PID` segments in X12, and
+  both `7008` components of an `IMD` and then further `IMD`s in EDIFACT,
+  cut at spaces. Reading matches it: every free-form `PID` of a line, or
+  both `7008`s of every free-form `IMD`, is one description, where only the
+  first was read. If a partner sends two free-form `PID`s for one line,
+  `/_mock/orders` now shows both, joined with a space. A description that
+  fits in one element is written exactly as before, and one that arrives
+  over length in a single element is still reported.
+
+- **Level A is held to its repertoire, and folds the lower case it cannot
+  carry** ([#295], [#263]). A syntax identifier was mapped to a character
+  *encoding*, and for `UNOA` that is not enough: level A is "the basic code
+  table of ISO 646 with the exceptions of lower case letters", which is a set
+  of permitted characters rather than a way of turning them into bytes — and
+  `ascii`, the right codec for it, admits lower case. `charsets` now states
+  the repertoire beside the codec, and `fit` folds `a`–`z` to `A`–`Z` before
+  substituting, in the one place substitution has happened since [#199] —
+  the `UNB` and `UNZ` included, since `UNB` is the segment that *declares*
+  the repertoire. **So a `UNOA` partner is sent `WIDGET CO`**, which is what
+  a real level A sender writes, and `UNOA` can be set on a partner for the
+  first time. Folding is `a`–`z` only and not a general upper-casing, which
+  would turn `ß` into `SS` and grow a value at an element's maximum past it.
+  **A level A partner's id may not have lower case**: folding a description
+  loses nothing that matters, where folding an identifier would address a
+  document to a party the mock holds as a different partner, so it is refused
+  rather than folded. The twelve ISO 646 positions open to national
+  substitution are excluded by the same definition and are deliberately
+  **not** enforced, with one source for which twelve they are and refusing a
+  permitted character being the worse error. Inbound is unchanged: a `UNOA`
+  document carrying lower case is still read as sent.
+
+- **A REMADV may state a currency per document, as D.96A lets it** ([#298]).
+  `CUX` is in three places in D.96A's REMADV — the header, each `DOC` group
+  and each line — five of each. This dictionary declared the header one, at
+  nine where the standard says five, and nothing else, so an advice stating a
+  currency per document was answered `no segment CUX is expected here` and
+  refused, where a translator that knows D.96A accepts it. The `DOC` group's
+  is now declared and read as that document's, and
+  `GET /_mock/remittances` answers a `currency` on each entry of `invoices`,
+  falling back to the advice's where the document states none. The
+  currency comparison is **per document**, so an advice can be right about
+  one invoice and wrong about another, and an advice whose header says one
+  thing and whose document says another is judged on the document. The
+  line-level one is still not declared: this message has no line group for it
+  to sit in, so a `CUX` inside a line remains an unexpected segment, which is
+  honest while `LIN` is absent.
+
+- **An invoice for more than was ordered is a disagreement** ([#309]). A
+  seller that shipped 130 against an order for 100 and billed the 130 drew
+  `shipped-more-than-ordered` on its 856 and nothing on its 810, because 130
+  billed is not more than 130 shipped: a buyer reading the invoice's
+  disagreements saw a clean bill for goods it never ordered. A new rule,
+  `billed-more-than-ordered`, compares everything billed for a line with the
+  order's quantity, carrying both. It can fire beside
+  `billed-more-than-shipped`, and beside `billed-before-shipped` when nothing
+  has shipped at all. A confirmation of more does not raise what was
+  ordered; a change the mock itself sent does. An integration that asserts an
+  exact list of disagreements for an over-billed invoice will see one more.
+
+- **The `IMD` description type codes are all eight D.96A has, and `A` and `E`
+  are the right way round** ([#317]). The dictionary listed five of them and
+  had the pair backwards: `A` is the directory's "Free-form long description"
+  and `E` its "Free-form short description", where the mock called `A` short
+  and `E` simply "Free-form", and `D`, `S` and `X` were missing. So an
+  `ORDERS` whose line carried an `IMD+D`, `IMD+S` or `IMD+X` - all real
+  codes - was reported against, with a finding naming the five the mock knew.
+  Those documents are now clean, and a code the directory does not have is
+  still reported.
+  A line's description is also read from more than `IMD+F`. Repeating an
+  `IMD` continues a description and a different type code starts a different
+  one, so the segments sharing one code are joined - as #291 already did for
+  `F` - and where a line offers two renderings the better one is taken whole
+  rather than both being run together: `F`, then `A`, then `E`, then `D`. A
+  long description sent as `IMD+A` was read back cut to its first 35
+  characters and now reads whole, which is the inbound half of #291. A line
+  carrying only `IMD+B`, `C`, `S` or `X` reads as it did, since those pair a
+  code with a gloss rather than carrying a description.
+
+- **A document's own currency on its `MOA` is read, as the advice's already
+  was** ([#322]). `C516` carries a currency in its third component, and the
+  REMADV reader used it for the summary `MOA` and ignored it inside a `DOC`
+  group — so the same fact, stated the same way, was read at one level and
+  lost at the other. A document could only say its currency with a `CUX` in
+  its group, which is what D.96A's SG5 gives and what #298 added; an advice
+  that puts the invoice's own currency on its `MOA` instead, as the EANCOM
+  REMADV guide has it, was read as stating nothing at all, and
+  `remittance-currency-not-the-invoice` never fired for the case it exists
+  to catch — a dollar invoice paid out of a euro account.
+  Both levels now resolve it the same way: the `MOA`'s own currency is the
+  document's, the `CUX` in its group is the fallback, and a group that names
+  two is reported as `remittance-currency-disagrees`, which is the rule the
+  header already used for a header `CUX` and a summary `MOA` that disagree.
+  A `CUX` may sit either side of its `MOA` and neither order decides it. An
+  advice that states no currency anywhere is still not a finding, and
+  `MOA+9`, which describes the invoice rather than the payment, is still not
+  read.
+
+- **A repeated `CUX` or `MOA+12` in one `DOC` group is reported, not
+  dropped** ([#325]). D.96A's REMADV allows five `MOA` and a `CUX` loop of
+  five inside the `DOC` group, and the mock validates such a document clean
+  — then kept the first `CUX` and the **last** `MOA+12` and said nothing
+  about either. The `MOA` half lost money, and lost it inconsistently: the
+  arithmetic check had its own loop that added every amount, so a group
+  stating `60.00` and `40.00` under a `100.00` total balanced and drew no
+  finding while `/_mock/remittances` reported `40.00` paid. The mock held
+  two readings of one document, and the finding whose job is to catch an
+  advice that does not add up had certified it.
+  The first of each now wins everywhere — in the listing and in the
+  arithmetic, so there is one reading — and the rest are reported.
+  `remittance-currency-disagrees` covers a second `CUX`, as it already did
+  for a second header `CUX`; a new `remittance-amounts-repeated` covers a
+  second `MOA+12`. **Nothing is summed**: D.96A does not say two amounts in
+  one group add up, and assuming they do would be the mock quietly changing
+  what a payer said. Two equal amounts are reported too — they are
+  ambiguous about whether one payment was stated twice or two were made,
+  which is why the rule is `repeated` and not `disagrees`, where two equal
+  currencies say one thing twice and draw nothing. An empty `5004` states
+  no amount and is not taken as the first; a written zero is. A group with
+  one of each is unchanged, and an `AJT` group's amount is still not a
+  document amount.
+
 ## [0.7.0] - 2026-10-01
 
 This release is mostly corrections to what the mock puts on the wire, found
@@ -1740,7 +2237,35 @@ documents a real one sends.
 [#230]: https://github.com/rseufert/mock-edi/issues/230
 [#231]: https://github.com/rseufert/mock-edi/issues/231
 [#232]: https://github.com/rseufert/mock-edi/issues/232
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.7.0...HEAD
+[#186]: https://github.com/rseufert/mock-edi/issues/186
+[#187]: https://github.com/rseufert/mock-edi/issues/187
+[#202]: https://github.com/rseufert/mock-edi/issues/202
+[#208]: https://github.com/rseufert/mock-edi/issues/208
+[#211]: https://github.com/rseufert/mock-edi/issues/211
+[#212]: https://github.com/rseufert/mock-edi/issues/212
+[#229]: https://github.com/rseufert/mock-edi/issues/229
+[#239]: https://github.com/rseufert/mock-edi/issues/239
+[#262]: https://github.com/rseufert/mock-edi/issues/262
+[#263]: https://github.com/rseufert/mock-edi/issues/263
+[#264]: https://github.com/rseufert/mock-edi/issues/264
+[#271]: https://github.com/rseufert/mock-edi/issues/271
+[#273]: https://github.com/rseufert/mock-edi/issues/273
+[#279]: https://github.com/rseufert/mock-edi/issues/279
+[#280]: https://github.com/rseufert/mock-edi/issues/280
+[#281]: https://github.com/rseufert/mock-edi/issues/281
+[#288]: https://github.com/rseufert/mock-edi/issues/288
+[#291]: https://github.com/rseufert/mock-edi/issues/291
+[#294]: https://github.com/rseufert/mock-edi/issues/294
+[#295]: https://github.com/rseufert/mock-edi/issues/295
+[#298]: https://github.com/rseufert/mock-edi/issues/298
+[#305]: https://github.com/rseufert/mock-edi/issues/305
+[#309]: https://github.com/rseufert/mock-edi/issues/309
+[#317]: https://github.com/rseufert/mock-edi/issues/317
+[#319]: https://github.com/rseufert/mock-edi/issues/319
+[#322]: https://github.com/rseufert/mock-edi/issues/322
+[#325]: https://github.com/rseufert/mock-edi/issues/325
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.8.0...HEAD
+[0.8.0]: https://github.com/rseufert/mock-edi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/rseufert/mock-edi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/rseufert/mock-edi/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/rseufert/mock-edi/compare/v0.4.0...v0.5.0
