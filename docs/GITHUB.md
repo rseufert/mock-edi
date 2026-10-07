@@ -19,7 +19,7 @@ for good — the only remedy is yanking it and burning the number.
 
 | Setting | Required | Why |
 | --- | --- | --- |
-| `pypi` environment: deployment branches and tags | `v*` tags only | `publish.yml` runs `on: release: published` **and** `workflow_dispatch`. Without this, a manual dispatch publishes whatever ref it was fired from. |
+| `pypi` environment: deployment branches and tags | `v*` tags only | `publish.yml` runs `on: release: published` **and** `workflow_dispatch`. The only thing keeping a manual dispatch away from PyPI is the job's own `if: github.event_name == 'release'`, one line in a file any pull request can change; this makes it a setting as well. |
 | `pypi` environment: required reviewers | the maintainer | Trusted Publishing has no API token, which is the point — but it also means there is no token to revoke once something is wrong. This is the only place a second deliberate act can be required, and reviewing your own deployment is not theatre: it turns a mis-click into a prompt. |
 | Tag ruleset on `v*` | no deletion, no non-fast-forward | A PyPI version and its release page are keyed to a tag. A tag that moves leaves the published artifact pointing at history that no longer produced it, and because the version cannot be re-uploaded, that cannot be corrected afterwards. |
 | `pypa/gh-action-pypi-publish` | pinned to a commit SHA | It is the only third-party action that runs with `id-token: write`. `@release/v1` is a branch: whatever is on it at the time is what gets the OIDC token. |
