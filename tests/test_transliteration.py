@@ -220,6 +220,36 @@ class TypographicPunctuation(unittest.TestCase):
         self.assertEqual(fit("O\u2019Brien \u2013 Co", "utf-8"),
                          "O\u2019Brien \u2013 Co")
 
+    def test_a_soft_hyphen_is_dropped_which_is_not_what_cldr_does(self):
+        """The one exception to the table. CLDR makes U+00AD a hyphen; it is
+        a note of where a line may break and not a character of the name,
+        and `Gross-handel` is a company nobody has on file. Zack's decision
+        on #326."""
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "ascii", limit=35),
+                         "Grosshandel")
+        self.assertEqual(fit("a\u00adb", "ascii"), "ab")
+        self.assertEqual(fit("A\u00adB", "ascii", charsets.LOWER_CASE,
+                             fold=True), "AB")
+
+    def test_and_is_dropped_where_nothing_may_grow(self):
+        # Dropping it shortens the value, so it can never be why an element
+        # overflows: it goes even with no room, where `ss` does not.
+        both = "Gro\u00df\u00adstra\u00dfe"         # two that grow, one that goes
+        self.assertEqual(fit(both, "ascii"), "Gro?stra?e")
+        # And where dropping it makes the room, the room is used: the value
+        # comes out no longer than it went in, which is all `fit` promises.
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "ascii"), "Grosshandel")
+        full = "Gro\u00df\u00adstra\u00dfe" + "x" * 24      # 35 characters
+        self.assertEqual(len(full), 35)
+        self.assertNotIn("\u00ad", fit(full, "ascii", limit=35))
+        self.assertNotIn("-", fit(full, "ascii", limit=35))
+
+    def test_but_a_set_that_carries_it_keeps_it(self):
+        # The rule everything here follows: what the declared set can say
+        # is not touched. ISO 8859-1 has the soft hyphen.
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "iso-8859-1"),
+                         "Gro\u00df\u00adhandel")
+
     def test_level_a_gets_it_folded_with_the_rest(self):
         self.assertEqual(fit("O\u2019Brien \u0141\u00f3d\u017a", "ascii",
                              charsets.LOWER_CASE, fold=True), "O'BRIEN LODZ")
@@ -239,6 +269,19 @@ class TypographicPunctuation(unittest.TestCase):
         # 12 spaces, 24 quotes (25 less the backtick), 12 dashes, 3 leaders.
         from mockedi.envelope import _PUNCTUATION
         self.assertEqual(len(_PUNCTUATION), 51)
+
+    def test_no_rule_is_in_both_tables(self):
+        # `_RULES` merges the two, and the order of the merge would decide
+        # silently between a letter rule and a punctuation rule that shared
+        # a character. None does.
+        from mockedi.envelope import _LETTERS, _PUNCTUATION, _RULES
+        self.assertEqual(set(_LETTERS) & set(_PUNCTUATION), set())
+        self.assertEqual(len(_RULES), len(_LETTERS) + len(_PUNCTUATION))
+
+    def test_only_the_soft_hyphen_becomes_nothing(self):
+        from mockedi.envelope import _RULES
+        self.assertEqual([said for said, plain in _RULES.items() if not plain],
+                         ["\u00ad"])
 
 
 class PunctuationThatBecomesADelimiter(unittest.TestCase):

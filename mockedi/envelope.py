@@ -434,6 +434,13 @@ _LETTERS = {
 # levels A and B exclude, and this table should not produce what the
 # declared level cannot say.
 #
+# And one is changed, on purpose: the soft hyphen, U+00AD. CLDR makes it a
+# hyphen, which is right for text that will be shown and wrong for a name
+# that will be matched. A soft hyphen is not a character of the name; it is
+# a typesetter's note of where a line may break. Written as `-` it turns
+# `Grosshandel` into `Gross-handel`, a company nobody has in their party
+# table. So it becomes nothing. Zack's decision on #326, at Eddie's finding.
+#
 # Ten of these become an apostrophe, which ends an EDIFACT segment. That is
 # safe for the reason `\u0149` is: `fit` runs before `escape`, so it is
 # released like any other. tests/test_transliteration.py holds which.
@@ -450,7 +457,7 @@ _PUNCTUATION = {
     "\u2033": '"', "\u301d": '"', "\u301e": '"',
     "\uff02": '"', "\uff07": "'", "\u00ab": '<<',
     "\u00bb": '>>', "\u2039": '<', "\u203a": '>',
-    "\u00ad": '-', "\u2010": '-', "\u2011": '-',
+    "\u00ad": '', "\u2010": '-', "\u2011": '-',
     "\u2012": '-', "\u2013": '-', "\u2014": '-',
     "\u2015": '-', "\ufe31": '-', "\ufe32": '-',
     "\ufe58": '-', "\ufe63": '-', "\uff0d": '-',
@@ -511,7 +518,9 @@ def transliterate(text: str, charset: str, grow: bool = True) -> str:
                 and out[-1][-1:].isascii() and out[-1][-1:].isalnum()):
             continue            # a mark with no composed form: it comes off
         plain = _plain(char)
-        out.append(plain if grow or len(plain) == 1 else char)
+        # A plain form of one character or none can never be why a value
+        # outgrows its element, so it is taken even where nothing may grow.
+        out.append(plain if grow or len(plain) <= 1 else char)
     return "".join(out)
 
 
