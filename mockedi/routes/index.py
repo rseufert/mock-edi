@@ -72,7 +72,7 @@ def page(mock, base: str) -> str:
         ("GET", "/_mock/mailbox", "Collect what is waiting. <code>?leave</code> to peek."),
         ("GET", "/_mock/orders/{po}/timeline", "Everything that happened to one order, in order."),
         ("GET", "/_mock/outbox", "Documents produced, and what became of them."),
-        ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice."),
+        ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice, the backorder waiting for its day."),
         ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
         ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
         ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything, "

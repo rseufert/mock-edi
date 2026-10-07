@@ -682,7 +682,7 @@ what the mock did.
 | Behaviour | Partner | What the partner does |
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
-| `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
+| `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. No balance follows, unlike a line short of stock, which is [backordered](#backorders). |
 | `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
 | `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
@@ -709,7 +709,10 @@ sellers actually do. The first that fires wins:
 4. **Confirmed is capped at what is in stock** — `IQ` when it falls short,
    `IB` when there is none. This cap outranks the price rule, so a line that
    is both short *and* mispriced comes back `IQ` with the price named in its
-   reason rather than changed in silence.
+   reason rather than changed in silence. **The balance is backordered, and
+   ships**: see [Backorders](#backorders) below. No seeded item is out of
+   stock, so `IB` needs an order for something the catalogue has none of,
+   and the ordinary case is `IQ`: order 100 of `PANEL-A3`, which has 35.
 5. **A price the seller disagrees with is billed at the seller's price** and
    flagged `IP`. Price discrepancies are the commonest EDI dispute there is.
 
@@ -1012,6 +1015,47 @@ testing. A change that revives a cancelled order is packed and billed the same
 way. The second consignment is advised before it is billed: when the first
 invoice comes due before the new despatch, it bills what has shipped, and the
 second consignment gets an invoice of its own after its 856.
+
+### Backorders
+
+A line confirmed short **because stock ran out** is not finished. The 855 or
+ORDRSP confirms what there is, dates the line, and says in its reason how
+many follow and when: `Confirmed 35 of 100; 65 to follow on 2026-10-09`.
+What is in stock ships and is billed at once. The balance is held on the
+line as `backordered`, and `GET /_mock/scheduled` shows a `backorder`
+promised for the start of that day.
+
+When the mock's clock reaches the day - `POST /_mock/advance`, or the real
+clock - the balance is confirmed and goes out as a **second consignment**,
+exactly as a quantity raised by an 865 does: its own shipment number and
+856, its own invoice number and 810, each carrying the balance and nothing
+else. Two payables against one purchase order, and a second invoice that is
+not the first arriving again, which is what a buyer's duplicate check has to
+tell apart. The line is then `IA`, or `IP` where the price was in dispute.
+
+```bash
+curl -X POST --data-binary @order-for-100-PANEL-A3.edi http://127.0.0.1:8080/edi
+curl "http://127.0.0.1:8080/_mock/scheduled"          # a backorder, due in a few days
+curl -X POST "http://127.0.0.1:8080/_mock/advance?all"   # the clock goes to that day
+```
+
+Three things follow from it being a promise like any other:
+
+- **`/_mock/advance?all` now goes to the backorder's day**, since that is
+  the last thing due. A test that orders more than is in stock and then
+  settles everything gets the second 856 and 810, and a clock some days on.
+- **A change while it waits is not held up by it.** A quantity raised on
+  another line ships at once as its own consignment; the backorder keeps its
+  day. A line lowered to what is in stock, an order restated, and an order
+  cancelled each close the promise unkept, and `/_mock/scheduled?all` says
+  why.
+- **An order with no stock for any line waits** as `received`; it is not
+  refused, and ships whole on its day.
+
+`short-ship` is a different thing and is unchanged: that partner confirms
+less than it was asked for on purpose, says the balance is not available,
+promises nothing and sends nothing more. In EDIFACT both write the shortfall
+as `QTY+83`, as before; the reason in `FTX` is what tells them apart.
 
 **Give yourself a window.** A change is only meaningful before the goods
 leave, and with every delay at zero the order is invoiced before the POST

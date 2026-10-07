@@ -245,6 +245,39 @@ class NoStockAtAll(BackorderCase):
         self.assertEqual(self.order(self.po)["status"], "invoiced")
 
 
+class NoStockAtAllInEdifact(BackorderCase):
+
+    def test_the_ordrsp_dates_a_line_it_confirms_nothing_of(self):
+        conn = self.httpd.mock.conn
+        with self.httpd.mock.lock:
+            conn.execute("UPDATE catalog SET in_stock = 0 WHERE sku = ?",
+                         (SCARCE,))
+            conn.commit()
+        self.send(edifact_order(self.po, lines=((SCARCE, 10, PRICE),)),
+                  headers=EDIFACT_TYPE)
+        message = self.document(EURODIS, "response").groups[0].messages[0]
+        day = self.line()["scheduled_on"].replace("-", "")
+        self.assertEqual([item.comp(1, 2) for item in message.find_all("DTM")
+                          if item.comp(1, 1) == "67"], [day])
+        self.assertEqual([q.comp(1, 2) for q in message.find_all("QTY")
+                          if q.comp(1, 1) in ("113", "83")], ["0", "10"])
+
+
+class APinnedClock(BackorderCase):
+    """The day starts where the mock's documents are dated, pinned or not."""
+    config_kwargs = {"start_at": "2026-03-01T23:30:00-05:00"}
+
+    def test_the_backorder_is_due_at_midnight_in_the_pinned_zone(self):
+        self.send(x12_order(self.po, lines=SHORT_ORDER))
+        day = datetime.date.fromisoformat(self.line()["scheduled_on"])
+        self.assertGreater(day, datetime.date(2026, 3, 1))
+        (promise,) = self.scheduled("backorder")
+        self.assertEqual(promise["due_at"], "%sT05:00:00Z" % day.isoformat())
+        self.advance()
+        self.assertEqual(self.order(self.po)["shipments"][1]["shipped_on"],
+                         day.isoformat())
+
+
 class TwoDates(BackorderCase):
     """Two lines due on two days are two promises, kept on their own days."""
 
