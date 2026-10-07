@@ -81,6 +81,29 @@ class TheDocumentIsCorrect(unittest.TestCase):
 
 class TheFirstAmountIsTaken(unittest.TestCase):
 
+    def test_an_empty_5004_states_no_amount_and_is_not_the_first(self):
+        # Found by Piotr: `_amount("")` is zero, so taking the first
+        # segment regardless answered 0 for a group whose next MOA says
+        # 40.00 - worse than the last-wins this replaced.
+        advice = read(seg("DOC", ["380"], ["INV1"]),
+                      seg("MOA", ["12", "", "USD"]),
+                      seg("MOA", ["12", "40.00", "GBP"]), total="40.00")
+        self.assertEqual((str(advice.invoices[0].paid),
+                          advice.invoices[0].currency), ("40.00", "GBP"))
+        self.assertEqual([str(a) for a in advice.invoices[0].amounts],
+                         ["40.00"])
+
+    def test_a_written_zero_is_an_amount_and_is_taken(self):
+        advice = read(*group(amounts=("0", "40.00")), total="0")
+        self.assertEqual(str(advice.invoices[0].paid), "0")
+
+    def test_the_arithmetic_skips_an_unstated_amount_too(self):
+        body = [seg("DOC", ["380"], ["INV1"]), seg("MOA", ["12", ""]),
+                seg("MOA", ["12", "40.00"])]
+        _total, parts, _c = remittance._total_not_parts(
+            message(*body, total="100.00"), "EDIFACT")
+        self.assertEqual(str(parts), "40.00")
+
     def test_the_first_not_the_last(self):
         advice = read(*group(amounts=("60.00", "40.00")))
         self.assertEqual(str(advice.invoices[0].paid), "60.00")
@@ -180,8 +203,8 @@ class WhatIsReported(MockServerCase):
     def test_a_second_amount_is_said_out_loud(self):
         found = self.findings(*group(EURODIS_INVOICE, ("60.00", "40.00")),
                               total="60.00")
-        self.assertIn(remittance.AMOUNTS_DISAGREE, found)
-        row = found[remittance.AMOUNTS_DISAGREE]
+        self.assertIn(remittance.AMOUNTS_REPEATED, found)
+        row = found[remittance.AMOUNTS_REPEATED]
         self.assertEqual((row["expected"], row["found"]), ("60.00", "40.00"))
         self.assertIn("60.00 and 40.00", row["note"])
         self.assertIn("60.00 taken, being the first", row["note"])
@@ -198,7 +221,7 @@ class WhatIsReported(MockServerCase):
 
     def test_one_of_each_reports_neither(self):
         found = self.findings(*group(EURODIS_INVOICE, ("100.00",), ("EUR",)))
-        self.assertNotIn(remittance.AMOUNTS_DISAGREE, found)
+        self.assertNotIn(remittance.AMOUNTS_REPEATED, found)
         self.assertNotIn(remittance.CURRENCY_DISAGREES, found)
 
     def test_the_listing_shows_the_first_amount(self):
@@ -206,6 +229,24 @@ class WhatIsReported(MockServerCase):
                       total="60.00")
         _s, _h, rows = self.get("/_mock/remittances?partner=" + EURODIS)
         self.assertEqual([i["paid"] for i in rows[-1]["invoices"]], ["60.00"])
+
+    def test_two_equal_amounts_are_still_reported(self):
+        # Named `repeated` and not `disagrees` for this case: two equal
+        # amounts do not disagree, but they are ambiguous about whether one
+        # payment was stated twice or two were made. Two equal currencies
+        # say one thing twice and draw nothing; found by Piotr.
+        found = self.findings(*group(EURODIS_INVOICE, ("50.00", "50.00"),
+                                     ("EUR", "EUR")), total="50.00")
+        self.assertIn(remittance.AMOUNTS_REPEATED, found)
+        self.assertNotIn(remittance.CURRENCY_DISAGREES, found)
+
+    def test_the_currencies_are_named_in_the_order_the_document_gave(self):
+        # The note's reason is "being the first", so a sorted list that did
+        # not start with it would read as a contradiction. Found by Piotr.
+        found = self.findings(*group(EURODIS_INVOICE, ("100.00",),
+                                     ("USD", "EUR")))
+        self.assertIn("group names USD, EUR", found[
+            remittance.CURRENCY_DISAGREES]["note"])
 
     def test_the_document_is_still_accepted(self):
         # Reported, not refused: it is a correct document that says two

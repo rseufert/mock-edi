@@ -49,7 +49,7 @@ CURRENCY_DISAGREES = "remittance-currency-disagrees"
 # the mock must say which it took rather than keep the last one quietly
 # (#325). Its own rule and not `remittance-currency-disagrees`, because
 # that one is about currency and this is about money.
-AMOUNTS_DISAGREE = "remittance-amounts-disagree"
+AMOUNTS_REPEATED = "remittance-amounts-repeated"
 # 6347's code for the currency an advice's amounts are in: "Reference
 # currency - the currency applicable to amounts stated. It may have to be
 # converted." Which is what a total is in, where the other codes are about
@@ -204,10 +204,15 @@ def read(message: Message, dialect: str) -> Advice:
                 advice.replaces = advice.replaces or item.comp(1, 2)
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
-                amount = _amount(item.comp(1, 2))
+                # An empty 5004 states no amount; it is not a statement of
+                # zero. Taking it as the first would answer `0` for a group
+                # whose next MOA says 40.00, which is worse than the last-
+                # wins this replaced. A written `0` is stated and counts.
+                amount = (_amount(item.comp(1, 2))
+                          if item.comp(1, 2).strip() else None)
                 if amount is not None:
                     advice.invoices[-1].amounts.append(amount)
-                if advice.invoices[-1].paid is None:
+                if advice.invoices[-1].paid is None and amount is not None:
                     # The first, not the last: a second MOA+12 in one group
                     # used to replace the first and the money in it was gone
                     # (#325). C516's third component comes from the same
@@ -452,16 +457,27 @@ def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
                      "document's, being the first, and D.96A does not say "
                      "they must agree"
                      % (item.invoice,
-                        ", ".join(sorted(set(item.group_currencies))),
+                        # In the order the document gave them, not sorted:
+                        # the reason stated here is "the first", so a list
+                        # that did not start with it would read as a
+                        # contradiction. The header's says "the reference
+                        # currency" and can sort.
+                        ", ".join(item.group_currencies),
                         item.group_currency),
                 interchange=interchange))
         # Several MOA+12 in one group. The first is what was remitted and
         # the rest are reported; nothing is summed, because D.96A does not
         # say two amounts in one group add up and guessing that they do is
         # how the mock would quietly change what a payer said (#325).
+        #
+        # Reported even where they are equal, and named `repeated` rather
+        # than `disagrees` for that reason: two equal currencies say the
+        # same thing twice and are harmless, but two equal amounts are
+        # ambiguous about whether one payment was stated twice or two were
+        # made. That ambiguity is the thing worth saying.
         if len(item.amounts) > 1:
             out.append(BusinessFinding(
-                rule=AMOUNTS_DISAGREE, kind=kind, code=message.code,
+                rule=AMOUNTS_REPEATED, kind=kind, code=message.code,
                 control=message.control, po_number="",
                 expected=str(item.amounts[0]),
                 found=", ".join(str(amount) for amount in item.amounts[1:]),
@@ -663,6 +679,8 @@ def _total_not_parts(message: Message,
                 within = item.tag
                 taken = False
             elif item.tag == "MOA" and item.comp(1, 1) == "12":
+                if within == "DOC" and not item.comp(1, 2).strip():
+                    continue        # states no amount, as `read` has it
                 amount = _amount(item.comp(1, 2))
                 if amount is None:
                     return None

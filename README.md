@@ -416,7 +416,7 @@ the **reference** currency (`6347` code 2, "the currency applicable to amounts
 stated") at the head, the first inside a group, and reports the rest rather
 than keeping one quietly. A group may also state the amount remitted more than
 once — five `MOA` are allowed there too — and that is
-`remittance-amounts-disagree`: the first is what was remitted, in the listing
+`remittance-amounts-repeated`: the first is what was remitted, in the listing
 and in the arithmetic alike, and the others are named. **Nothing is summed.**
 D.96A does not say two amounts in one group add up, and a mock that assumed
 they did would be quietly changing what a payer said. An advice naming an
