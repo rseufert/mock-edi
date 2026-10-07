@@ -842,8 +842,9 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
 # The rule that matters, and the one most likely to be wrong in real code:
 # **a change cannot unmake what has already happened.**  A quantity cannot be
 # lowered below what has shipped, a shipped line cannot be deleted, and an
-# order that has been invoiced cannot be changed at all.  Everything else here
-# is bookkeeping.
+# order that has been invoiced cannot be changed - except in what has not
+# happened to it yet, the balance still waiting for stock (#337).  Everything
+# else here is bookkeeping.
 #
 # The window in which a change is possible is the window before despatch, so a
 # mock running with no delays - where an order is invoiced before the POST
@@ -862,6 +863,10 @@ NOT_FOUND = "no such purchase order"
 NUMBER_IN_USE = "order number already in use"
 ALREADY_INVOICED = "the order has been invoiced and can no longer be changed"
 ALREADY_SHIPPED = "the goods have shipped"
+# Said instead where an invoiced order still has a line waiting for stock:
+# the same refusal, and what the buyer may still ask for (#337).
+ONLY_THE_BACKORDER = ALREADY_INVOICED + (
+    "; only a quantity still waiting for stock can be lowered or cancelled")
 
 
 @dataclass
@@ -896,11 +901,25 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     # the pipeline's refusal of an 850 on a placed number hold together.
     if order["direction"] == PLACED:
         return ChangeOutcome(change.po_number, REFUSED, NOT_FOUND)
-    if order["status"] == "invoiced":
-        return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)
-
     existing = {row["line"]: row for row in
                 order_lines(conn, change.po_number, partner["id"])}
+
+    if order["status"] == "invoiced":
+        # Invoiced, and so not to be changed - except for what has not
+        # happened yet. A balance waiting for stock has not shipped and has
+        # not been billed, and a buyer may still want less of it or none
+        # (#337). The change is taken whole or not at all.
+        if not any(number(row["backordered"]) > 0 for row in existing.values()):
+            return ChangeOutcome(change.po_number, REFUSED, ALREADY_INVOICED)
+        if not _only_lowers_what_waits(change, existing):
+            return ChangeOutcome(change.po_number, REFUSED, ONLY_THE_BACKORDER)
+        outcome = ChangeOutcome(change.po_number)
+        for line in change.lines:
+            outcome.lines.append(_lower_backorder(
+                conn, partner, change, line, existing[line.number]))
+        _retotal(conn, change.po_number, partner["id"])
+        conn.commit()
+        return outcome
 
     if change.cancels:
         shipped = [row for row in existing.values() if number(row["shipped"]) > 0]
@@ -943,6 +962,98 @@ def apply_change(conn: sqlite3.Connection, partner: Dict[str, Any], change,
     _retotal(conn, change.po_number, partner["id"])
     conn.commit()
     return outcome
+
+
+def _wanted_of_waiting(line, row) -> Optional[Decimal]:
+    """What a change asks a waiting line to come down to, or None.
+
+    None is a change that is not only about the balance still waiting for
+    stock: a line with nothing waiting, a quantity raised, one lowered below
+    what the line has confirmed or has shipped, whichever is more, or a
+    different price. A deletion asks for nothing, and is only about the
+    balance where nothing of the line has shipped.
+    """
+    from .transactions import ADD, DELETE, NO_CHANGE
+    if row is None or line.action == ADD:
+        return None
+    ordered = number(row["quantity"])
+    # What has left the building is the floor, not only what was confirmed:
+    # an over-shipping seller packs more than it confirmed (#212), and a
+    # quantity lowered under what shipped is the one thing a change may
+    # never do.
+    confirmed = max(number(row["confirmed"]), number(row["shipped"]))
+    if line.action == NO_CHANGE:
+        return ordered
+    if number(row["backordered"]) <= 0:
+        return None
+    if line.action == DELETE:
+        return Decimal("0") if confirmed <= 0 and number(row["shipped"]) <= 0 \
+            else None
+    if line.price and line.price not in (number(row["ordered_price"], "0.00"),
+                                         number(row["price"], "0.00")):
+        return None
+    wanted = line.quantity if line.quantity > 0 else ordered
+    return wanted if confirmed <= wanted <= ordered else None
+
+
+def _only_lowers_what_waits(change, existing) -> bool:
+    """Whether every line of a change is about a balance waiting for stock."""
+    if change.cancels or not change.lines:
+        return False
+    return all(_wanted_of_waiting(line, existing.get(line.number)) is not None
+               for line in change.lines)
+
+
+def _lower_backorder(conn, partner, change, line, row) -> Dict[str, Any]:
+    """Take some or all of a waiting balance off a line, and say what came off.
+
+    The ordered quantity and what is waited for come down together; what is
+    confirmed, shipped and billed is not touched. Lowered part-way the line
+    is still short and its reason restates the balance and the day. Lowered
+    to what is confirmed the line is whole, and the caller's
+    `_promise_backorders` closes the promise that has nothing left to ship.
+    """
+    from .transactions import CHANGE_LINE, DELETE, NO_CHANGE
+    action = line.action or CHANGE_LINE
+    ordered, confirmed = number(row["quantity"]), number(row["confirmed"])
+    waiting = number(row["backordered"])
+    wanted = _wanted_of_waiting(line, row)
+    if action == DELETE:
+        return _delete_line(conn, partner, change, line, row)
+    if action == NO_CHANGE or wanted == ordered:
+        return {"line": line.number, "action": action, "status": row["status"],
+                "reason": ""}
+    left = wanted - confirmed
+    ordered_price = number(row["ordered_price"], "0.00")
+    price = number(row["price"], "0.00")
+    if left > 0:
+        status = row["status"]
+        stored = "Confirmed %s of %s; %s to follow on %s" % (
+            quantity_text(confirmed), quantity_text(wanted),
+            quantity_text(left), row["scheduled_on"])
+        if ordered_price and ordered_price != price:
+            # A line short and repriced says both, as `decide` has it: a
+            # buyer reconciling the invoice still needs the price named.
+            stored += "; priced at %s, the order said %s" % (
+                unit_price(price), unit_price(ordered_price))
+        said = "%s taken off the backorder at the buyer's request; %s to " \
+               "follow on %s" % (quantity_text(waiting - left),
+                                 quantity_text(left), row["scheduled_on"])
+    else:
+        status, stored = ACCEPTED, ""
+        if ordered_price and ordered_price != price:
+            status = PRICE_CHANGED
+            stored = "Priced at %s, the order said %s" % (
+                unit_price(price), unit_price(ordered_price))
+        said = "%s no longer to follow, at the buyer's request" % (
+            quantity_text(waiting))
+    conn.execute(
+        "UPDATE order_line SET quantity = ?, backordered = ?, status = ?,"
+        " reason = ? WHERE partner = ? AND po_number = ? AND line = ?",
+        (quantity_text(wanted), quantity_text(max(left, Decimal("0"))), status,
+         stored, partner["id"], change.po_number, line.number))
+    return {"line": line.number, "action": action, "status": status,
+            "reason": said}
 
 
 def _delete_line(conn, partner, change, line, row) -> Dict[str, Any]:

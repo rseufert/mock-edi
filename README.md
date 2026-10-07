@@ -683,7 +683,7 @@ what the mock did.
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
 | `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. No balance follows, unlike a line short of stock, which is [backordered](#backorders). |
-| `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. |
+| `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. It over-ships a [backorder](#backorders) too: of 100 ordered with 35 in stock, 46 go at once and 71 on the day, so the "65 to follow" in the reason is what was owed, not what will arrive. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
 | `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
 | `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
@@ -1049,6 +1049,19 @@ Three things follow from it being a promise like any other:
   day. A line lowered to what is in stock, an order restated, and an order
   cancelled each close the promise unkept, and `/_mock/scheduled?all` says
   why.
+- **A waiting balance can be lowered or cancelled, even on an invoiced
+  order.** With no delays the order is invoiced as soon as its first
+  consignment is billed, and an invoiced order takes no changes - except
+  for what has not happened yet. An 860 or ORDCHG that only lowers a line's
+  quantity, to no less than the line has confirmed, takes the difference off
+  the backorder: lowered to what is confirmed, the promise is closed unkept
+  and nothing more ships; lowered part-way, the smaller balance ships on the
+  day. The 865 or ORDRSP says what came off. A line waiting whole, with
+  nothing shipped, can be deleted. Anything else in the change - a line
+  with nothing waiting, a quantity raised or lowered below what shipped, a
+  price, a new line, cancelling the order - and the whole change is
+  refused, with nothing in it applied, in words that say what may still be
+  asked.
 - **An order with no stock for any line waits** as `received`; it is not
   refused, and ships whole on its day.
 
