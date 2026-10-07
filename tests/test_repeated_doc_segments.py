@@ -93,6 +93,29 @@ class TheFirstAmountIsTaken(unittest.TestCase):
         self.assertEqual([str(a) for a in advice.invoices[0].amounts],
                          ["40.00"])
 
+    def test_a_currency_on_an_amountless_moa_goes_with_the_amount(self):
+        """`MOA+12::USD` alone leaves the document stating no currency.
+
+        Found by Piotr. On `main` it read `0 USD`; it now reads nothing,
+        because the empty `5004` is not an amount and #322's rule is that a
+        document's amount and the currency it is in come from one segment.
+        A currency belonging to a payment that was not stated is not that
+        document's currency, and `paid: null` says plainly that nothing was
+        stated. The group's own `CUX` is the way to say a currency without
+        an amount, and it still works; the listing falls back to the
+        advice's. Pinned so that it is a decision and not a silence.
+        """
+        advice = read(seg("DOC", ["380"], ["INV1"]),
+                      seg("MOA", ["12", "", "USD"]), total="0")
+        self.assertIsNone(advice.invoices[0].paid)
+        self.assertIsNone(advice.invoices[0].currency)
+
+    def test_but_the_groups_own_cux_still_says_it(self):
+        advice = read(seg("DOC", ["380"], ["INV1"]),
+                      seg("MOA", ["12", "", "USD"]),
+                      seg("CUX", ["2", "GBP", "11"]), total="0")
+        self.assertEqual(advice.invoices[0].currency, "GBP")
+
     def test_a_written_zero_is_an_amount_and_is_taken(self):
         advice = read(*group(amounts=("0", "40.00")), total="0")
         self.assertEqual(str(advice.invoices[0].paid), "0")
