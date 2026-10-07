@@ -44,6 +44,12 @@ CURRENCY_NOT_THE_INVOICE = "remittance-currency-not-the-invoice"
 # recurs in SG3, SG5 and SG9, and C516 carries 6345 itself - so the mock
 # reports the disagreement rather than picking a side silently (#281).
 CURRENCY_DISAGREES = "remittance-currency-disagrees"
+# A DOC group stating more than one amount remitted. D.96A allows five MOA
+# in the group and `validate` accepts them, so the document is correct and
+# the mock must say which it took rather than keep the last one quietly
+# (#325). Its own rule and not `remittance-currency-disagrees`, because
+# that one is about currency and this is about money.
+AMOUNTS_REPEATED = "remittance-amounts-repeated"
 # 6347's code for the currency an advice's amounts are in: "Reference
 # currency - the currency applicable to amounts stated. It may have to be
 # converted." Which is what a total is in, where the other codes are about
@@ -91,6 +97,13 @@ class Paid:
     # What the CUX in this document's group said. The counterpart of
     # `Advice.header_currency`, and the fallback for `currency` above.
     group_currency: Optional[str] = None
+    # Every currency the group's CUX segments name, and every amount its
+    # MOA+12 segments state, both in document order. The group admits five
+    # of each and `validate` accepts them, so the mock reports the extras
+    # rather than dropping them - which is what the header does with its
+    # own repeated CUX, and did not do here (#325).
+    group_currencies: List[str] = field(default_factory=list)
+    amounts: List[Decimal] = field(default_factory=list)
 
 
 @dataclass
@@ -167,9 +180,9 @@ def read(message: Message, dialect: str) -> Advice:
             # so. Declared since #298; before that the segment was reported
             # as unexpected and this read nothing.
             if within == "DOC" and advice.invoices:
-                advice.invoices[-1].group_currency = (
-                    advice.invoices[-1].group_currency
-                    or item.comp(1, 2) or None)
+                if item.comp(1, 2):
+                    advice.invoices[-1].group_currencies.append(
+                        item.comp(1, 2))
             elif not within:
                 # The header's own: before any DOC, AJT or UNS. Not `within
                 # not in ("DOC", "AJT")`, which counted a CUX *after* UNS as
@@ -191,12 +204,22 @@ def read(message: Message, dialect: str) -> Advice:
                 advice.replaces = advice.replaces or item.comp(1, 2)
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
-                advice.invoices[-1].paid = _amount(item.comp(1, 2))
-                # C516's third component again, which this read only at the
-                # summary level (#322). Set beside the amount and from the
-                # same segment, so a document's amount and the currency it
-                # is in can never come from two different places.
-                advice.invoices[-1].currency = item.comp(1, 3) or None
+                # An empty 5004 states no amount; it is not a statement of
+                # zero. Taking it as the first would answer `0` for a group
+                # whose next MOA says 40.00, which is worse than the last-
+                # wins this replaced. A written `0` is stated and counts.
+                amount = (_amount(item.comp(1, 2))
+                          if item.comp(1, 2).strip() else None)
+                if amount is not None:
+                    advice.invoices[-1].amounts.append(amount)
+                if advice.invoices[-1].paid is None and amount is not None:
+                    # The first, not the last: a second MOA+12 in one group
+                    # used to replace the first and the money in it was gone
+                    # (#325). C516's third component comes from the same
+                    # segment, so a document's amount and the currency it is
+                    # in can never come from two different places (#322).
+                    advice.invoices[-1].paid = amount
+                    advice.invoices[-1].currency = item.comp(1, 3) or None
             elif within == "UNS":
                 advice.total = _amount(item.comp(1, 2))
                 # C516's third component, which the summary MOA may state
@@ -211,6 +234,7 @@ def read(message: Message, dialect: str) -> Advice:
     for paid in advice.invoices:
         # After the loop, not inside it: a group's CUX may sit either side
         # of its MOA and neither order should decide which currency wins.
+        paid.group_currency = (paid.group_currencies or [None])[0]
         paid.currency = paid.currency or paid.group_currency
     return advice
 
@@ -419,6 +443,51 @@ def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
                  % (advice.header_currency, advice.currency),
             interchange=interchange))
     for item in advice.invoices:
+        # Several CUX in one group, as the header has several: the first is
+        # taken and the rest are said out loud rather than dropped (#325).
+        others = [currency for currency in item.group_currencies
+                  if currency != item.group_currency]
+        if others:
+            out.append(BusinessFinding(
+                rule=CURRENCY_DISAGREES, kind=kind, code=message.code,
+                control=message.control, po_number="",
+                expected=item.group_currency or "",
+                found=", ".join(sorted(set(others))),
+                note="invoice %s's group names %s; %s taken as the "
+                     "document's, being the first, and D.96A does not say "
+                     "they must agree"
+                     % (item.invoice,
+                        # In the order the document gave them, not sorted:
+                        # the reason stated here is "the first", so a list
+                        # that did not start with it would read as a
+                        # contradiction. The header's says "the reference
+                        # currency" and can sort.
+                        ", ".join(item.group_currencies),
+                        item.group_currency),
+                interchange=interchange))
+        # Several MOA+12 in one group. The first is what was remitted and
+        # the rest are reported; nothing is summed, because D.96A does not
+        # say two amounts in one group add up and guessing that they do is
+        # how the mock would quietly change what a payer said (#325).
+        #
+        # Reported even where they are equal, and named `repeated` rather
+        # than `disagrees` for that reason: two equal currencies say the
+        # same thing twice and are harmless, but two equal amounts are
+        # ambiguous about whether one payment was stated twice or two were
+        # made. That ambiguity is the thing worth saying.
+        if len(item.amounts) > 1:
+            out.append(BusinessFinding(
+                rule=AMOUNTS_REPEATED, kind=kind, code=message.code,
+                control=message.control, po_number="",
+                expected=str(item.amounts[0]),
+                found=", ".join(str(amount) for amount in item.amounts[1:]),
+                note="invoice %s's group states %s as the amount remitted; "
+                     "%s taken, being the first, and the %s not added to it"
+                     % (item.invoice,
+                        " and ".join(str(a) for a in item.amounts),
+                        item.amounts[0],
+                        "other" if len(item.amounts) == 2 else "others"),
+                interchange=interchange))
         # The same disagreement one level down, and reported by the same
         # rule: D.96A lets a DOC group state its currency on its CUX and on
         # its MOA, and says no more about it there than it does at the head
@@ -604,15 +673,25 @@ def _total_not_parts(message: Message,
         per_document: List[Decimal] = []
         total = None
         within = ""
+        taken = False
         for item in message.segments:
             if item.tag in ("DOC", "AJT", "UNS"):
                 within = item.tag
+                taken = False
             elif item.tag == "MOA" and item.comp(1, 1) == "12":
+                if within == "DOC" and not item.comp(1, 2).strip():
+                    continue        # states no amount, as `read` has it
                 amount = _amount(item.comp(1, 2))
                 if amount is None:
                     return None
                 if within == "DOC":
-                    per_document.append(amount)
+                    # The first of a group, as `read` takes it (#325). This
+                    # loop used to add every one, so a group with two of
+                    # them balanced an advice whose listing showed one: the
+                    # arithmetic certified a sum the mock does not make.
+                    if not taken:
+                        per_document.append(amount)
+                        taken = True
                 elif within == "UNS":
                     total = amount
         if total is None:

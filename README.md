@@ -420,13 +420,19 @@ in one currency paying an invoice the mock issued in another — the amounts can
 agree to the penny and still be two different sums of money. And
 `remittance-currency-disagrees` is a REMADV that contradicts itself: a header
 `CUX` and a summary `MOA` naming different currencies, several header `CUX`
-segments naming different ones — the group repeats up to nine times — or the
-same disagreement inside one `DOC` group. D.96A
-permits all of it and gives no rule for which wins, so the mock takes the
-**reference** currency (`6347` code 2, "the currency applicable to amounts
-stated") and reports the rest rather than keeping one quietly. An advice naming
-an invoice the mock never issued to that partner draws neither finding: it
-can only say two currencies differ about an invoice it wrote.
+segments naming different ones — the group repeats up to nine times — or
+either of those inside one `DOC` group, which admits five `CUX` of its own.
+D.96A permits all of it and gives no rule for which wins, so the mock takes
+the **reference** currency (`6347` code 2, "the currency applicable to amounts
+stated") at the head, the first inside a group, and reports the rest rather
+than keeping one quietly. A group may also state the amount remitted more than
+once — five `MOA` are allowed there too — and that is
+`remittance-amounts-repeated`: the first is what was remitted, in the listing
+and in the arithmetic alike, and the others are named. **Nothing is summed.**
+D.96A does not say two amounts in one group add up, and a mock that assumed
+they did would be quietly changing what a payer said. An advice naming an
+invoice the mock never issued to that partner draws none of these: it can only
+say two currencies differ about an invoice it wrote.
 
 A REMADV may state a currency **per document**, which is how one advice pays
 invoices in two currencies. It can say it two ways, as the advice itself can
