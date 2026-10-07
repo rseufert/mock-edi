@@ -175,6 +175,72 @@ class AnythingElseIsStillRefused(ChangeCase):
         self.assertEqual(self.line()["backordered"], "0")
 
 
+class ASellerThatOverShipped(BackorderCase):
+    """Found in review: what shipped is the floor, not what was confirmed.
+
+    `over-ship` packs three in ten more than it confirmed (#212): 35
+    confirmed, 46 packed and billed. Lowering the line to 35 would leave an
+    order for 35 against 46 invoiced - the one thing a change may never do,
+    and what the ordinary path refuses in those words.
+    """
+
+    def setUp(self):
+        super().setUp()
+        self.behaviour(ACME, "over-ship")
+        self.send(x12_order(self.po, lines=SHORT_ORDER))
+        line = self.line()
+        self.assertEqual((line["confirmed"], line["shipped"],
+                          line["invoiced"]), ("35", "46", "46"))
+        self.total = self.order(self.po)["total"]
+
+    def change(self, quantity):
+        return self.send(x12_change(self.po, [("1", "QD", quantity, PRICE)],
+                                    skus=SKUS))
+
+    def test_it_cannot_be_lowered_to_what_was_confirmed(self):
+        receipt = self.change(35)
+        self.assertEqual([item["reason"] for item in receipt["refusals"]],
+                         [documents.ONLY_THE_BACKORDER])
+        self.assertEqual(self.line()["quantity"], "100")
+
+    def test_nor_to_anything_under_what_shipped(self):
+        receipt = self.change(40)
+        self.assertEqual([item["reason"] for item in receipt["refusals"]],
+                         [documents.ONLY_THE_BACKORDER])
+
+    def test_the_total_still_covers_what_was_billed(self):
+        self.change(35)
+        self.assertEqual(self.order(self.po)["total"], self.total)
+
+    def test_the_balance_above_what_shipped_can_still_come_down(self):
+        receipt = self.change(60)
+        self.assertEqual(receipt.get("refusals") or [], [])
+        self.assertEqual(self.line()["quantity"], "60")
+
+
+class AShortLineThatIsAlsoRepriced(BackorderCase):
+    """Found in review: lowered part-way, the reason keeps the price."""
+
+    def setUp(self):
+        super().setUp()
+        self.send(x12_order(self.po, lines=((SCARCE, 100, "100.00"),)))
+        self.assertIn("priced at 124.50, the order said 100.00",
+                      self.line()["reason"])
+
+    def test_part_way_the_price_is_still_named(self):
+        self.send(x12_change(self.po, [("1", "QD", 55, "100.00")], skus=SKUS))
+        line = self.line()
+        self.assertEqual(line["reason"],
+                         "Confirmed 35 of 55; 20 to follow on %s; priced at "
+                         "124.50, the order said 100.00" % line["scheduled_on"])
+
+    def test_to_what_is_confirmed_it_is_a_price_change_and_says_so(self):
+        self.send(x12_change(self.po, [("1", "QD", 35, "100.00")], skus=SKUS))
+        line = self.line()
+        self.assertEqual((line["status"], line["reason"]),
+                         ("IP", "Priced at 124.50, the order said 100.00"))
+
+
 class AnInvoicedOrderWithNothingWaiting(BackorderCase):
 
     def test_is_refused_in_the_words_it_always_was(self):

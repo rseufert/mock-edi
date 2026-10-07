@@ -969,14 +969,19 @@ def _wanted_of_waiting(line, row) -> Optional[Decimal]:
 
     None is a change that is not only about the balance still waiting for
     stock: a line with nothing waiting, a quantity raised, one lowered below
-    what the line has confirmed - which has shipped or is about to - or a
+    what the line has confirmed or has shipped, whichever is more, or a
     different price. A deletion asks for nothing, and is only about the
     balance where nothing of the line has shipped.
     """
     from .transactions import ADD, DELETE, NO_CHANGE
     if row is None or line.action == ADD:
         return None
-    ordered, confirmed = number(row["quantity"]), number(row["confirmed"])
+    ordered = number(row["quantity"])
+    # What has left the building is the floor, not only what was confirmed:
+    # an over-shipping seller packs more than it confirmed (#212), and a
+    # quantity lowered under what shipped is the one thing a change may
+    # never do.
+    confirmed = max(number(row["confirmed"]), number(row["shipped"]))
     if line.action == NO_CHANGE:
         return ordered
     if number(row["backordered"]) <= 0:
@@ -1019,17 +1024,22 @@ def _lower_backorder(conn, partner, change, line, row) -> Dict[str, Any]:
         return {"line": line.number, "action": action, "status": row["status"],
                 "reason": ""}
     left = wanted - confirmed
+    ordered_price = number(row["ordered_price"], "0.00")
+    price = number(row["price"], "0.00")
     if left > 0:
         status = row["status"]
         stored = "Confirmed %s of %s; %s to follow on %s" % (
             quantity_text(confirmed), quantity_text(wanted),
             quantity_text(left), row["scheduled_on"])
+        if ordered_price and ordered_price != price:
+            # A line short and repriced says both, as `decide` has it: a
+            # buyer reconciling the invoice still needs the price named.
+            stored += "; priced at %s, the order said %s" % (
+                unit_price(price), unit_price(ordered_price))
         said = "%s taken off the backorder at the buyer's request; %s to " \
                "follow on %s" % (quantity_text(waiting - left),
                                  quantity_text(left), row["scheduled_on"])
     else:
-        ordered_price = number(row["ordered_price"], "0.00")
-        price = number(row["price"], "0.00")
         status, stored = ACCEPTED, ""
         if ordered_price and ordered_price != price:
             status = PRICE_CHANGED
