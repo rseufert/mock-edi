@@ -286,13 +286,20 @@ free-form `PID`s, or several `IMD`s **of one type code**, that a partner
 sends for one line. Where a partner offers two renderings instead - D.96A's
 `IMD+A` is a long description and `IMD+E` a short one - the mock takes one
 whole rather than running both together, preferring `F`, then `A`, then `E`,
-then `D`. A description that fits is written exactly as before. One that
-*arrives* in a single element over length is still reported as over length;
-the mock then answers it in pieces that fit. A single word longer than the
-element has nowhere to be cut, and reads back with a space where the cut
-fell. And the pieces have an end: a line takes 200 `PID` segments or 99
-`IMD`s, so a description past 16,000 characters in X12 or 6,930 in EDIFACT
-is cut there.
+then `D`. A partner that describes a line by characteristic is read
+differently, and on purpose: several free-form `IMD`s that differ in `7081`,
+the item characteristic, are read as one description, in the order they came,
+so `IMD+F+8+:::BRACKET'`, `IMD+F+35+:::BLUE'` and `IMD+F+98+:::LARGE'` are
+`BRACKET BLUE LARGE`. Two type codes are two renderings of the whole item,
+and joining them says it twice; three characteristics are three different
+facts about it, and joining them loses none. The mock has one description
+for a line, and writes it back with no `7081` at all. A description that fits
+is written exactly as before. One that *arrives* in a single element over
+length is still reported as over length; the mock then answers it in pieces
+that fit. A single word longer than the element has nowhere to be cut, and
+reads back with a space where the cut fell. And the pieces have an end: a line
+takes 200 `PID` segments or 99 `IMD`s, so a description past 16,000 characters
+in X12 or 6,930 in EDIFACT is cut there.
 
 **A letter the character set cannot carry is said in plain letters.** An
 EDIFACT interchange declares its character set in `UNB`, and a partner's
@@ -386,9 +393,18 @@ same `TRN02` trace - the correction a payer owes once the bank returns a
 payment - so `GET /_mock/remittances` lists that earlier advice as `reversed`
 and names the one that reversed it; a debit for a trace never advised is a
 `reversal-of-nothing`. An advice left `advised` after its payment came back
-is the failure to test for. Both read the 820 only: which REMADV date is the
-value date, and how one REMADV reverses another, vary too much between guides
-to guess.
+is the failure to test for. **A REMADV reaches both, by EANCOM's conventions
+rather than D.96A's, because D.96A prescribes neither.** Its settlement date
+is the header `DTM+138`, the directory's "Payment date": EANCOM's REMADV
+admits 137, 138, 203, 227 and 263 at the head and not 209, and says each
+advice relates to one settlement date. And a REMADV corrects another by
+**replacing** it rather than by debiting it - there is no REMADV debit and no
+negative-amount convention anywhere we could find - so an advice with `BGM`
+1225 code 5 naming an earlier one in a header `RFF+RA` leaves that one
+`replaced`, naming what replaced it, and a replacement of an advice never
+received is a `replacement-of-nothing`. The conventions are the published
+EANCOM REMADV guide's; the mock follows them because a mock that judges
+nothing is less useful than one that says whose rule it is judging by.
 
 `GET /_mock/remittances` answers the **currency** the advice states beside its
 `total`, because an amount on its own cannot be tied to a bank payment or a

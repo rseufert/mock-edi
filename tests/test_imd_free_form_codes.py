@@ -127,6 +127,35 @@ class JoiningWithinOneCode(unittest.TestCase):
         self.assertEqual(read.lines[0].description, LONG)
 
 
+class SeveralCharacteristics(unittest.TestCase):
+    """`7081`, the item characteristic, is not looked at - on purpose (#321).
+
+    Two type codes are two renderings of the whole item, so joining them
+    says it twice and one is chosen. Three characteristics are three
+    different facts about it, so joining them loses none: `BRACKET BLUE
+    LARGE` is a better one-line description than `BRACKET`. Zack's choice,
+    and the README says so; this holds it so that it stays a choice.
+    """
+
+    def characteristic(self, code, text):
+        return seg("IMD", "F", code, ["", "", "", text])
+
+    def test_they_are_read_as_one_description_in_the_order_they_came(self):
+        read = line(self.characteristic("8", "BRACKET"),
+                    self.characteristic("35", "BLUE"),
+                    self.characteristic("98", "LARGE"))
+        self.assertEqual(read.lines[0].description, "BRACKET BLUE LARGE")
+
+    def test_and_one_with_none_joins_them_where_it_stands(self):
+        read = line(self.characteristic("", "BRACKET"),
+                    self.characteristic("35", "BLUE"))
+        self.assertEqual(read.lines[0].description, "BRACKET BLUE")
+
+    def test_the_mock_writes_none_itself(self):
+        for written in transactions.description_edifact("BRACKET BLUE LARGE"):
+            self.assertEqual(written.get(2), "")
+
+
 class ChoosingBetweenCodes(unittest.TestCase):
 
     def test_a_long_description_and_a_short_one_are_not_run_together(self):
