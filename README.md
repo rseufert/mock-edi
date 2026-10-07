@@ -294,13 +294,12 @@ so `IMD+F+8+:::BRACKET'`, `IMD+F+35+:::BLUE'` and `IMD+F+98+:::LARGE'` are
 and joining them says it twice; three characteristics are three different
 facts about it, and joining them loses none. The mock has one description
 for a line, and writes it back with no `7081` at all. A description that fits
-is written exactly as before. One that
-*arrives* in a single element over length is still reported as over length;
-the mock then answers it in pieces that fit. A single word longer than the
-element has nowhere to be cut, and reads back with a space where the cut
-fell. And the pieces have an end: a line takes 200 `PID` segments or 99
-`IMD`s, so a description past 16,000 characters in X12 or 6,930 in EDIFACT
-is cut there.
+is written exactly as before. One that *arrives* in a single element over
+length is still reported as over length; the mock then answers it in pieces
+that fit. A single word longer than the element has nowhere to be cut, and
+reads back with a space where the cut fell. And the pieces have an end: a line
+takes 200 `PID` segments or 99 `IMD`s, so a description past 16,000 characters
+in X12 or 6,930 in EDIFACT is cut there.
 
 **A letter the character set cannot carry is said in plain letters.** An
 EDIFACT interchange declares its character set in `UNB`, and a partner's
