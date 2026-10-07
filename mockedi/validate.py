@@ -59,6 +59,9 @@ class ElementFinding:
     value: str
     note: str
     severity: str = ERROR
+    # The 0085 code, where the fault has a word of its own in EDIFACT that
+    # the mapping below would not arrive at from the 723 code.
+    edifact: str = ""
 
     @property
     def edifact_code(self) -> str:
@@ -68,8 +71,9 @@ class ElementFinding:
         too long 39, a character of the wrong type 37. An invalid code, date
         or time is 12, Invalid value.
         """
-        return {"1": "13", "2": "13", "3": "16", "4": "40", "5": "39",
-                "6": "37", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
+        return self.edifact or {
+            "1": "13", "2": "13", "3": "16", "4": "40", "5": "39",
+            "6": "37", "7": "12", "8": "12", "9": "12"}.get(self.code, "12")
 
 
 @dataclass
@@ -373,6 +377,19 @@ def _is_acknowledgment_only(interchange: Interchange) -> bool:
             and any(item.tag == "TA1" for item in interchange.preamble))
 
 
+def _from_header(header: Optional[Seg], said: "schema.Repeat",
+                 otherwise: str) -> str:
+    """The header's value at the position a trailer is declared to repeat.
+
+    From the header segment itself, at the position `schema.py` names. The
+    parser's own reading of it stands in when there is no such header to
+    read - a group or a message built in code rather than parsed.
+    """
+    if header is None or header.tag != said.header_tag:
+        return otherwise
+    return header.get(said.header_position) or otherwise
+
+
 def _same_number(left: str, right: str) -> bool:
     """Control numbers compared as numbers when both are: 000000077 is 77."""
     left, right = (left or "").strip(), (right or "").strip()
@@ -430,10 +447,14 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
                 errors.append(("5", "GE01 counts %s transaction sets, the group "
                                     "holds %d" % (trailer.get(1) or "(empty)",
                                                   len(group.messages))))
-            if not _same_number(trailer.get(2), group.control):
-                errors.append(("4", "GE02 says group control number %s, GS06 "
-                                    "says %s" % (trailer.get(2) or "(empty)",
-                                                 group.control)))
+            said = schema.repeat(schema.GE)
+            given = _from_header(group.header, said, group.control)
+            if not _same_number(trailer.get(said.position), given):
+                errors.append(("4", "%s says group control number %s, %s "
+                                    "says %s" % (said.label,
+                                                 trailer.get(said.position)
+                                                 or "(empty)",
+                                                 said.header_label, given)))
         if errors:
             report.group_errors[(group.functional_id, group.control)] = errors
 
@@ -448,11 +469,14 @@ def _check_x12_envelope(interchange: Interchange, report: InterchangeReport) -> 
             code="021", tag="IEA", position=1,
             note="IEA01 counts %s functional groups, the interchange holds %d"
                  % (trailer.get(1) or "(empty)", len(explicit))))
-    if not _same_number(trailer.get(2), header.get(13)):
+    said = schema.repeat(schema.IEA)
+    given = header.get(said.header_position)
+    if not _same_number(trailer.get(said.position), given):
         findings.append(EnvelopeFinding(
-            code="001", tag="IEA", position=2,
-            note="IEA02 says interchange control number %s, ISA13 says %s"
-                 % (trailer.get(2) or "(empty)", header.get(13))))
+            code="001", tag="IEA", position=said.position,
+            note="%s says interchange control number %s, %s says %s"
+                 % (said.label, trailer.get(said.position) or "(empty)",
+                    said.header_label, given)))
 
 
 def _check_edifact_envelope(interchange: Interchange,
@@ -471,11 +495,13 @@ def _check_edifact_envelope(interchange: Interchange,
                 code="29", tag="UNE", position=1,
                 note="UNE counts %s messages, the group holds %d"
                      % (trailer.get(1) or "(empty)", len(group.messages))))
-        if not _same_number(trailer.get(2), group.control):
+        said = schema.repeat(schema.UNE)
+        given = _from_header(group.header, said, group.control)
+        if not _same_number(trailer.get(said.position), given):
             findings.append(EnvelopeFinding(
-                code="28", tag="UNE", position=2,
+                code="28", tag="UNE", position=said.position,
                 note="UNE says group reference %s, UNG says %s"
-                     % (trailer.get(2) or "(empty)", group.control)))
+                     % (trailer.get(said.position) or "(empty)", given)))
 
     trailer = interchange.trailer
     if trailer is None:
@@ -492,11 +518,13 @@ def _check_edifact_envelope(interchange: Interchange,
             code="29", tag="UNZ", position=1,
             note="UNZ counts %s %s, the interchange holds %d"
                  % (trailer.get(1) or "(empty)", what, counted)))
-    if (trailer.get(2) or "").strip() != (interchange.control or "").strip():
+    said = schema.repeat(schema.UNZ)
+    given = _from_header(interchange.header, said, interchange.control)
+    if (trailer.get(said.position) or "").strip() != (given or "").strip():
         findings.append(EnvelopeFinding(
-            code="28", tag="UNZ", position=2,
+            code="28", tag="UNZ", position=said.position,
             note="UNZ says interchange reference %s, UNB says %s"
-                 % (trailer.get(2) or "(empty)", interchange.control)))
+                 % (trailer.get(said.position) or "(empty)", given)))
 
 
 # ---------------------------------------------------------------------------
@@ -509,11 +537,14 @@ def _check_trailer(message: Message, dialect: str, report: MessageReport) -> Non
     if trailer is None:
         report.set_errors.append(("2", "the %s trailer is missing" % trailer_tag))
         return
-    declared_control = trailer.get(2)
-    if declared_control != message.control:
+    said = schema.repeat(schema.SE if dialect == "X12" else schema.UNT)
+    head = message.segments[0] if message.segments else None
+    given = _from_header(head, said, message.control)
+    declared_control = trailer.get(said.position)
+    if declared_control != given:
         report.set_errors.append((
-            "3", "%s02 says control number %s, the header says %s"
-            % (trailer_tag, declared_control or "(empty)", message.control)))
+            "3", "%s says control number %s, the header says %s"
+            % (said.label, declared_control or "(empty)", given)))
     declared = trailer.get(1)
     actual = len(message.segments)
     if declared and declared.isdigit() and int(declared) != actual:
@@ -875,17 +906,50 @@ def _check_elements(item: Seg, definition: schema.Segment, loop: str,
             if element.ref == "C507":
                 findings.extend(_check_edifact_date(components, position,
                                                     definition))
-            # A component past the definition is *not* reported, and that is
-            # deliberate rather than an oversight to match up with the rule
-            # above. A segment's element list is complete here unless it
-            # declares a full_width; a composite's component list is not known
-            # to be - the same composite is declared at two different widths
-            # in two places in this file, which is how the short ones below
-            # were found. Reporting against a definition that may itself be
-            # short is the bug this change exists to remove.
+            # A component past the definition is reported only by a composite
+            # that says how wide the standard makes it, the way a segment
+            # does. Without that the list is not known to be complete - most
+            # composites here are deliberately short, and the same composite
+            # is declared at two different widths in two places in this file -
+            # so reporting against it would be the false positive #54 removed
+            # for segments. A composite that declares its width is claiming to
+            # be complete, and there code 3 is the truth (#186).
+            if element.full_width:
+                for index in range(element.component_width + 1,
+                                   len(components) + 1):
+                    value = components[index - 1]
+                    # A trailing separator is how a sender writes "nothing
+                    # here", not a claim about the component past the end.
+                    if not value:
+                        continue
+                    findings.append(ElementFinding(
+                        position=position, component=index, ref=element.ref,
+                        code="3", value=value, severity=ERROR,
+                        note="%s (%s) has no component at position %d"
+                             % (definition.label(position), element.ref,
+                                index)))
         else:
             value = raw[0] if isinstance(raw, list) and raw else (
                 "" if isinstance(raw, list) else raw)
+            sent = [part for part in raw if part] if isinstance(raw, list) else []
+            if len(sent) > 1:
+                # The parser splits on the component separator wherever it
+                # finds one; it does not know which elements are composites.
+                # This one is not, so the sender put a separator in a simple
+                # element, and what follows reads only the first piece of it.
+                # Said rather than done in silence: the mock would otherwise
+                # read a document differently from how it was sent (#288).
+                #
+                # Only here, for a position the dictionary declares. One past
+                # the declaration and inside the segment's width was passed
+                # over above and is not judged - REF04 really is a composite.
+                findings.append(ElementFinding(
+                    position=position, component=0, ref=element.ref, code="6",
+                    value=str(raw), severity=ERROR, edifact="16",
+                    note="%s is a simple element and arrived with %d "
+                         "components (%s); read as %r"
+                         % (definition.label(position), len(sent),
+                            ", ".join(repr(part) for part in sent), value)))
             findings.extend(_check_value(value, element, position, 0, definition))
 
     if findings:

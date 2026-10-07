@@ -529,7 +529,9 @@ class WhatComesBack(BuyingCase):
         self.assertFalse(summary["accepted"])
         contrl = next(parse(self.sent(schema.ACKNOWLEDGMENT, "NORDIC")).messages())[1]
         ucd = contrl.find("UCD")
-        self.assertEqual((ucd.get(1), ucd.comp(2, 1), ucd.comp(2, 2)), ("12", "1", "2"))
+        # 0098 counts the segment tag, so C506 - RFF's first data element -
+        # is 2, and 1154 is still component 2 of it (#208).
+        self.assertEqual((ucd.get(1), ucd.comp(2, 1), ucd.comp(2, 2)), ("12", "2", "2"))
 
     def test_one_for_another_suppliers_order_is_rejected(self):
         self.post("/_mock/partners", {"id": "OTHERSUP", "role": "supplier"})
@@ -602,7 +604,12 @@ class ABehaviourOnASupplier(BuyingCase):
 
     def test_strict_rejects_what_accept_lets_through(self):
         # PID05 is 80 characters at most: a finding, but not a fatal one.
-        sloppy = lambda: supplier_sends(schema.RESPONSE, "PO-BHV", description="W" * 90)
+        # The mock's own writer no longer produces one - it says a long
+        # description in pieces (#291) - so the fault is put into what it
+        # wrote, the way a supplier's translator would have sent it.
+        sloppy = lambda: supplier_sends(
+            schema.RESPONSE, "PO-BHV", description="W" * 10).replace(
+                "W" * 10, "W" * 90)
         summary = self.send(sloppy())
         self.assertTrue(summary["transactionSets"][0]["findings"])
         self.assertEqual([f["order"] for f in summary["filed"]], ["PO-BHV"])

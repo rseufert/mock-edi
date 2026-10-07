@@ -207,8 +207,13 @@ class SyntaxReport(unittest.TestCase):
         ucd = [s for s in segments if s.tag == "UCD"][0]
         self.assertEqual(ucs.get(1), "4")           # QTY is the fourth segment
         self.assertEqual(ucd.get(1), "12")          # invalid value
-        self.assertEqual(ucd.comp(2, 1), "1")       # element 1
-        self.assertEqual(ucd.comp(2, 2), "1")       # component 1
+        # 0098 counts the segment tag as 1, so QTY01 is 2. This said "1" with
+        # the comment "element 1" until #208 - written from the same reading
+        # the code had, which is why nothing disagreed. 0104 beside it is
+        # *not* shifted: a component's count starts at 1 with no tag to
+        # count. See TheNumbersCONTRLReports in tests/test_contrl_positions.py.
+        self.assertEqual(ucd.comp(2, 1), "2")       # QTY01, the tag being 1
+        self.assertEqual(ucd.comp(2, 2), "1")       # component 1 of C186
 
     def test_a_rejected_message_is_action_code_four(self):
         segments, _report = self.build(self.BODY[1:])   # no BGM

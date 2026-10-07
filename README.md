@@ -8,8 +8,8 @@
 **A mock EDI trading partner.** Not an EDI library and not an AS2 server — the
 thing on the *other end*. Send it an 850 and it sends back a 997, then an 855
 that answers line by line, then an 856 with a shipment tree, then an 810 that
-bills what shipped. Send it an EDIFACT `ORDERS` and the same thing happens in
-`CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
+bills what shipped. An EDIFACT partner sends an `ORDERS` and the same thing
+happens in `CONTRL` / `ORDRSP` / `DESADV` / `INVOIC`.
 
 ```
    you ──850──▶  mock-edi
@@ -57,6 +57,10 @@ pip install mock-edi
 mock-edi --port 8080
 ```
 
+`8080` is the default, so plain `mock-edi` listens there too. The three mocks
+keep distinct defaults - mock-sap on `8000`, mock-edi on `8080`, mock-bank on
+`8090` - so all three run side by side with no flag to pass.
+
 ```bash
 curl -X POST --data-binary @order.edi http://127.0.0.1:8080/edi
 ```
@@ -92,7 +96,7 @@ ST*855*0002~
 BAK*00*AD*4500000042*20260924****5100002*20260924~
 ...
 PO1*1*100*EA*12.50**VP*WIDGET-001*UP*076123400003~
-ACK*IA*100*EA*068*20260926~
+ACK*IA*100*EA*067*20260926~
 ```
 
 Run it from a checkout with no install at all, or in a container:
@@ -166,6 +170,20 @@ until a whole pass changes nothing, and raises with what each side still holds
 rather than hanging. Pass `advance=False` for a test about *when* something
 arrives rather than about what.
 
+When the test is about the state *between* two hops of that conversation,
+start the mocks held and send one document at a time:
+
+```python
+seller = Mock.start(as2_id="SELLCO", hold_delivery=True)
+buyer = Mock.start(as2_id="BUYCO", hold_delivery=True)
+...
+buyer.step()                    # the 850 goes; {"code": "850", "status": "delivered", ...}
+seller.timeline("4500000042")   # the seller has promised, and nobody has answered it
+seller.step()                   # its 997
+```
+
+See [One document at a time](#one-document-at-a-time).
+
 `Mock("http://host:9000")` talks to one that is already running, wherever it
 is. `Mock.start(**config)` starts one on a port the OS picks and stops it
 again, and takes the same keywords as the command line.
@@ -178,12 +196,13 @@ that is *about* the refusal.
 Still no dependencies. `tests/support.py` in this repository is written on top
 of it, which is the only test of such a thing that means anything.
 
-And an example of the code it exists to test: [`examples/po_bridge.py`](examples/po_bridge.py)
-sends SAP purchase orders as 850s and posts the 855s back into SAP, and
-[`examples/test_po_bridge.py`](examples/test_po_bridge.py) tests it against
-this mock and [mock-sap](https://github.com/rseufert/mock-sap).
-The other half of the same integration lives in mock-sap:
-[`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
+The code it exists to test lives in [mock-acme](https://github.com/rseufert/mock-acme), the integration between
+the mocks. [`mockacme/po_bridge.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/po_bridge.py), which
+was `examples/po_bridge.py` here, sends SAP purchase orders as 850s and posts
+the 855s back into SAP, tested against this mock and
+[mock-sap](https://github.com/rseufert/mock-sap).
+The other half of the same integration is beside it:
+[`mockacme/invoice_check.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/invoice_check.py)
 checks this mock's 810 invoices against the purchase order and the 856 ship
 notice before posting them into SAP, and its tests cover a short shipment, a
 price disagreement and the `duplicate-invoice` behaviour.
@@ -200,7 +219,8 @@ Both are walked through, test by test, in
 | Plain EDI inbound | `POST /edi` — the same pipeline, answering with a JSON summary |
 | Validate only | `POST /_mock/validate` — findings, and nothing changed |
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
-| Outbox | `GET /_mock/outbox` — the queue, including what is not due yet |
+| Outbox | `GET /_mock/outbox` — the queue, including what is not due yet; `POST /_mock/outbox/<id>/retry` for a failed delivery, `POST /_mock/outbox/<id>/resend` to send one again unchanged |
+| Deliver one | `POST /_mock/deliver` — with `--hold-delivery`, send the next held document or asynchronous MDN and say what it was; `?all` sends everything held |
 | Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
@@ -244,6 +264,75 @@ always a bug: its traceback goes to stderr, even with `-q`.
 | Remittance advice, received | **820** | **REMADV** |
 | Syntax acknowledgment | **997** | **CONTRL** |
 
+**The answer comes in the partner's dialect, not the order's.** A partner
+has a `dialect`, as a real one does, and the response, the despatch advice and
+the invoice are written in it whatever the order arrived in. Only the
+acknowledgment follows the interchange, because it answers that interchange's
+syntax:
+
+| Who sends an EDIFACT `ORDERS` | Acknowledgment | Response, despatch, invoice |
+| --- | --- | --- |
+| `ACME`, an X12 partner | `CONTRL` | 855, 856, 810 |
+| `EURODIS`, an EDIFACT partner | `CONTRL` | `ORDRSP`, `DESADV`, `INVOIC` |
+
+So to see the EDIFACT flow, send as `EURODIS` - step 9 of
+[`examples/demo.sh`](examples/demo.sh) does - or give a partner the dialect:
+`PATCH /_mock/partners/ACME` with `{"dialect": "EDIFACT", "version":
+"D:96A:UN"}`.
+
+**A long description is said in pieces.** A line's description is whatever
+the buyer sent, and it goes back in every document that answers the order, in
+the partner's dialect. `PID05` holds 80 characters and D.96A's `7008` holds
+35, so the mock writes a longer one the way each standard does: as several
+free-form `PID` segments, or in both `7008`s of an `IMD` and then a further
+`IMD`. It is cut at spaces and reads back as the one text it was; so do two
+free-form `PID`s, or several `IMD`s **of one type code**, that a partner
+sends for one line. Where a partner offers two renderings instead - D.96A's
+`IMD+A` is a long description and `IMD+E` a short one - the mock takes one
+whole rather than running both together, preferring `F`, then `A`, then `E`,
+then `D`. A partner that describes a line by characteristic is read
+differently, and on purpose: several free-form `IMD`s that differ in `7081`,
+the item characteristic, are read as one description, in the order they came,
+so `IMD+F+8+:::BRACKET'`, `IMD+F+35+:::BLUE'` and `IMD+F+98+:::LARGE'` are
+`BRACKET BLUE LARGE`. Two type codes are two renderings of the whole item,
+and joining them says it twice; three characteristics are three different
+facts about it, and joining them loses none. The mock has one description
+for a line, and writes it back with no `7081` at all. A description that fits
+is written exactly as before. One that *arrives* in a single element over
+length is still reported as over length; the mock then answers it in pieces
+that fit. A single word longer than the element has nowhere to be cut, and
+reads back with a space where the cut fell. And the pieces have an end: a line
+takes 200 `PID` segments or 99 `IMD`s, so a description past 16,000 characters
+in X12 or 6,930 in EDIFACT is cut there.
+
+**A letter the character set cannot carry is said in plain letters.** An
+EDIFACT interchange declares its character set in `UNB`, and a partner's
+`syntax` says which the mock writes. A buyer in `Łódź` is written `Lódz` in
+`UNOC` (ISO 8859-1 has the `ó` and not the other two), `Lodz` in `UNOB` and
+`LODZ` in `UNOA`; in `UNOD` or `UNOY` it is `Łódź`, untouched, because those
+carry it. A character the declared set does carry is never changed. There is
+no EDIFACT rule for which letters, so the mock follows a published one,
+Unicode CLDR's `Latin-ASCII`: marks come off (`ü` is `u`) and the letters
+with no mark to remove have a rule each (`Ł` is `L`, `ß` is `ss`, `Æ` is
+`AE`, `Ø` is `O`, `Þ` is `TH`). That table is language-neutral, and it is a
+choice of legibility over locale: a German counterparty would send `Mueller`
+where the mock sends `Muller`, and a Danish one `Oere` for `Ore`. A value
+never outgrows its element for it - where `ss` would not fit, the `ß` is a
+`?` - and anything with no plain form at all, a `€` or a Greek word, is
+still a `?`. Typographic punctuation goes the same way, by the same table:
+the apostrophe a word processor curls is an apostrophe (`O’Brien` is
+`O'Brien`), a dash is a hyphen, curled quotation marks are straight ones, a
+no-break space is a space and `…` is three full stops where there is room.
+One rule is not CLDR's: a soft hyphen is dropped, where that table makes it a
+hyphen. It marks where a line may break and is not a character of the name,
+and a name is matched, not displayed - `Gross-handel` is nobody's customer.
+X12 declares no character set and is not touched. One place the two rules
+above meet: a long description is cut into pieces before any of this, and a
+piece that was cut to fill its 35 characters has no room left. So a `ß` in a
+full piece is a `?` while the same word in a shorter piece of the same
+description is spelled `ss`. Both are valid; it is legibility that depends on
+where the cut fell.
+
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
 what you assert about an X12 flow holds for the EDIFACT one. `GET
@@ -257,7 +346,13 @@ to no set, so it is served once for each dialect: `GET
 each described as any other segment is, in the order they are on the wire,
 with a `level` (`interchange` or `group`) and a `role` (`header`, `trailer`,
 or `advice` for `UNA`). Every set's entry names its envelope's path, so the
-whole of one interchange can be read from two requests. A set, version or
+whole of one interchange can be read from two requests. An element that
+has to say again what its header said carries `repeats`, naming the header's
+element: `IEA02` repeats `ISA13`, `GE02` `GS06`, `SE02` `ST02`, and in
+EDIFACT `UNZ` and `UNT` repeat the references `UNB` and `UNH` gave. It is
+one declaration, and the validator's check of the pair reads it too. An
+envelope's `version` is the version of the sets inside it, and
+`envelopeVersion` is its own: `ISA12`, or EDIFACT's syntax version. A set, version or
 dialect the mock does not have is a 404 saying which.
 
 **Versions.** X12 **004010** and **005010**, and EDIFACT **D.96A**. An X12 set
@@ -303,9 +398,62 @@ same `TRN02` trace - the correction a payer owes once the bank returns a
 payment - so `GET /_mock/remittances` lists that earlier advice as `reversed`
 and names the one that reversed it; a debit for a trace never advised is a
 `reversal-of-nothing`. An advice left `advised` after its payment came back
-is the failure to test for. Both read the 820 only: which REMADV date is the
-value date, and how one REMADV reverses another, vary too much between guides
-to guess.
+is the failure to test for. **A REMADV reaches both, by EANCOM's conventions
+rather than D.96A's, because D.96A prescribes neither.** Its settlement date
+is the header `DTM+138`, the directory's "Payment date": EANCOM's REMADV
+admits 137, 138, 203, 227 and 263 at the head and not 209, and says each
+advice relates to one settlement date. And a REMADV corrects another by
+**replacing** it rather than by debiting it - there is no REMADV debit and no
+negative-amount convention anywhere we could find - so an advice with `BGM`
+1225 code 5 naming an earlier one in a header `RFF+RA` leaves that one
+`replaced`, naming what replaced it, and a replacement of an advice never
+received is a `replacement-of-nothing`. The conventions are the published
+EANCOM REMADV guide's; the mock follows them because a mock that judges
+nothing is less useful than one that says whose rule it is judging by.
+
+`GET /_mock/remittances` answers the **currency** the advice states beside its
+`total`, because an amount on its own cannot be tied to a bank payment or a
+cleared item. An 820 states it in `CUR02` — `BPR` carries no currency at all,
+and `CUR` is one per message, outside the loop that holds the invoices, so an
+820 names exactly one. A REMADV states it in the summary `MOA`'s own currency
+component, falling back to the header `CUX`.
+
+An advice that states none is answered `null`, not `USD`. An absent currency
+and a guessed one are different claims, and a default would put a guess beside
+the facts the orders and invoices of this mock state for themselves.
+
+Two findings come with it. `remittance-currency-not-the-invoice` is an advice
+in one currency paying an invoice the mock issued in another — the amounts can
+agree to the penny and still be two different sums of money. And
+`remittance-currency-disagrees` is a REMADV that contradicts itself: a header
+`CUX` and a summary `MOA` naming different currencies, several header `CUX`
+segments naming different ones — the group repeats up to nine times — or
+either of those inside one `DOC` group, which admits five `CUX` of its own.
+D.96A permits all of it and gives no rule for which wins, so the mock takes
+the **reference** currency (`6347` code 2, "the currency applicable to amounts
+stated") at the head, the first inside a group, and reports the rest rather
+than keeping one quietly. A group may also state the amount remitted more than
+once — five `MOA` are allowed there too — and that is
+`remittance-amounts-repeated`: the first is what was remitted, in the listing
+and in the arithmetic alike, and the others are named. **Nothing is summed.**
+D.96A does not say two amounts in one group add up, and a mock that assumed
+they did would be quietly changing what a payer said. An advice naming an
+invoice the mock never issued to that partner draws none of these: it can only
+say two currencies differ about an invoice it wrote.
+
+A REMADV may state a currency **per document**, which is how one advice pays
+invoices in two currencies. It can say it two ways, as the advice itself can
+one level up, and both levels resolve it alike: the document's own `MOA`
+carries a currency in its third component and that is the document's, with a
+`CUX` inside the `DOC` group as the fallback. A guide may use either — D.96A
+gives the `CUX` in SG5, and EANCOM puts the invoice's currency on the `MOA`.
+Each entry of `invoices` answers its own `currency`, falling back to the
+advice's where the document states none, and the comparison is made per
+document — so an advice can be right about one invoice and wrong about
+another, and where the header and a document disagree the document is what
+that entry is judged on. D.96A has a third `CUX`, inside the line group; this
+message declares no line group, so a `CUX` inside a line is still an
+unexpected segment.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
@@ -356,7 +504,9 @@ GS04/05 and UNB S004 carry no zone and are the sender's local time by the
 standards' long convention, so they are written as the host's clock reads
 them. So is every date and time inside a document - `BAK09`, `BSN03/04`,
 `BIG01`, an ORDRSP's `DTM+137` - which is the mock's clock read in the host's
-zone, so a document and its envelope always name the same day. A date a
+zone, so a document and its envelope always name the same day. (A mock
+started with `--start-at` reads them in the zone its start time is written
+in instead, so that they do not depend on the machine.) A date a
 partner sends without a zone is read the same way: `BPR16` is compared with
 the day the mock would write today.
 
@@ -392,6 +542,33 @@ the `UCI` action or `TA104`), and each set it names with that set's code,
 control number and verdict. A `TA1` answers an envelope and no set, so its
 `sets` is empty. The event's own `interchange` is still the envelope the
 acknowledgment travelled in.
+
+A document says which business document it carries, sent or received, in the
+names the business events use. Every one but an acknowledgment has `order`;
+an 856 or `DESADV` has `shipment` as well, the same value as the `packed`
+event's; and an 810 or `INVOIC` has `invoice` and the `shipment` it bills, as
+the `invoiced` event does. So the second 810 of an order shipped in two
+consignments is matched to its invoice by a field, not by where it sits. The
+numbers were recorded when the mock wrote the document, or read a supplier's:
+they are not parsed back out of the payload. A document from a `--db` file
+written before 0.8.0 has the fields and nothing in them. `/_mock/documents`
+serves the same two numbers on each row, as `shipment_id` and
+`invoice_number`, and so does a row collected from `/_mock/mailbox`: whoever
+collects an 810 is told which invoice it is, without parsing it.
+
+What was done says which promise it kept. A `promised` event has `promise`,
+its id, which is the `id` `/_mock/scheduled` serves for it; and a `packed`,
+an `invoiced`, and a document the mock sent carry the `promise` they were
+done in keeping. An order shipped and then changed to a larger quantity holds
+two promises to despatch, and each consignment and each 856 names its own.
+The promise is the one in whose keeping the thing happened, which is not
+always one of its own kind: a seller that bills before it despatches packs in
+keeping the invoice's promise. One promise to invoice can raise two invoices,
+when two consignments are waiting to be billed. `promise` is `null` where
+none was being kept: an answer sent at once, a document sent with
+`/_mock/send`, or anything in a `--db` file written before 0.8.0. A row
+from `/_mock/documents` or collected from `/_mock/mailbox` has the same
+number as `promise_id`, where 0 means none.
 
 Nothing new is recorded — this is the same rows `/_mock/documents`,
 `/_mock/outbox` and `/_mock/scheduled` return, sorted into the sequence they
@@ -429,6 +606,58 @@ digits, and `.`, `-` or `_` between them: narrower than the standards allow,
 because an id also becomes a pickup filename and part of a URL, and one with a
 `/` in it once wrote documents outside `--pickup-dir`.
 
+A partner's `syntax` is the identifier an EDIFACT answer declares in `UNB`
+S001, and so the character set the mock writes it in. It defaults to `UNOC` -
+ISO 8859-1 - which is what the mock always sent, so nothing changes until it
+is set. Set it to what the partner's own translator reads:
+
+```bash
+curl -sX PATCH localhost:8080/_mock/partners/EURODIS \
+     -d '{"syntax": "UNOY"}'
+```
+
+`UNOY` is UTF-8, so a partner set to it is sent `Łódź` whole where a `UNOC`
+answer substituted `?ód?`. It is **configured, not mirrored** from whatever
+the last inbound interchange declared: a partner the mock has only ever sent
+to has nothing to mirror, and an answer that depended on which document
+arrived first would undo what `--start-at` is for. X12 declares no character
+set at all, so the field is ignored for an X12 partner.
+
+`UNOA` is level A: ISO 646 *without lower case*. That is a **repertoire**
+rather than an encoding — a set of permitted characters, not a way of turning
+them into bytes — so the mock holds a document to it rather than relying on a
+codec, which would admit lower case. And it does what a real level A sender
+does with the lower case it cannot send: **folds it**.
+
+```
+level B   NAD+BY+ACME::91++Widget Co++Lodz
+level A   NAD+BY+ACME::91++WIDGET CO++LODZ
+```
+
+Folding is `a`–`z` to `A`–`Z` and not a general upper-casing: level A's
+alphabet *is* A–Z, and `ß` upper-cased would become `SS`, a character longer,
+so a value at an element's maximum would grow past it. Anything outside ISO
+646 is substituted as it always was — `Łódź` becomes `??D?` — and each `?`
+appears doubled on the wire because the release character is escaped after
+the substitution, which is what stops a substituted character from swallowing
+the separator after it.
+
+**A level A partner's id may not have lower case.** Folding a description
+loses nothing that matters; folding an *identifier* does, because this mock
+holds partner ids case-distinctly, so `acme` and `ACME` can both be partners
+and a folded `UNB` would address a document to a party the mock itself cannot
+tell from another. In real EDI the question does not arise — a level A
+partner's id is upper case, because the syntax demands it — so a lower-case
+one is refused with `UNOA` rather than folded. Any other syntax carries it
+unchanged.
+
+The twelve ISO 646 positions open to national substitution — `#`, `$`, `@`,
+`[`, `\`, `]`, `^`, `` ` ``, `{`, `|`, `}`, `~` — are excluded by level A's
+definition too, and the mock does **not** enforce them: only one published
+source for which twelve they are could be found, and refusing a character
+level A permits is the worse mistake to make. An unknown identifier is
+refused, and the refusal lists the ones the mock answers in.
+
 A partner's `role` is what it is to the mock: a `customer` the mock sells to,
 the default and every partner there was before, or a `supplier` it buys from.
 A behaviour that only a seller can have - one that changes what the mock does
@@ -454,6 +683,7 @@ what the mock did.
 | --- | --- | --- |
 | `accept` | customer or supplier | Confirms everything in full and ships what was ordered. |
 | `short-ship` | customer | Confirms less than was ordered (`855` `IQ`, `ORDRSP` `QTY+83`), and ships and invoices the confirmed quantity. |
+| `over-ship` | customer | Confirms every line as ordered (`855` `IA`, `ORDRSP` `QTY+21`), then ships three in ten more than it confirmed on every line - rounded up to a whole unit and never less than one extra, so 100 is 130, 10 is 13 and 1 is 2 - and invoices what it shipped. The 856 and 810 agree with each other and not with the 855. A buyer mock reports `shipped-more-than-confirmed` and `shipped-more-than-ordered` against the 856. |
 | `reject-line` | customer | Refuses one line outright (`IR`) and leaves it out of the shipment and the invoice. |
 | `reject-all` | customer | Acknowledges the syntax, then refuses the order (`BAK` `RD`, every line detailed as `IR`). |
 | `no-ack` | customer or supplier | Says nothing at all. No 997, no 855. For testing your chase-up timer — the failure that actually costs money. |
@@ -524,6 +754,61 @@ leaves the clock where it was. A parameter the endpoint does not take is a
 `partner` with `failed` - so `?days=30` is refused and told what it is in
 seconds, where it used to answer 200 and move nothing.
 
+### Starting the clock at a chosen time
+
+Left alone, the clock is the host's, so no two runs of a script carry the
+same dates. Give the mock a start time and it does not follow the host at
+all:
+
+```bash
+mock-edi --start-at 2026-11-02T09:00:00Z
+```
+
+```python
+with Mock.start(start_at="2026-11-02T09:00:00Z") as mock: ...
+```
+
+The clock reads that time until it is advanced, and after an advance it
+stands at the new time. **Two runs of the same script from a fresh start
+write the same documents, byte for byte, and the same timeline**, on any day
+and on any machine.
+
+- **The time is ISO 8601 with a `Z` or an offset.** One with neither is
+  refused at start: read as UTC or as the host's zone it would be a guess.
+- **The zone it is written in is the zone documents are dated in.**
+  `...T09:00:00Z` dates them in UTC; `...T09:00:00+01:00` in +01:00, with no
+  daylight saving. The host's zone has no say, which is what makes a capture
+  the same on a laptop and in CI. (Without `--start-at`, document dates are
+  in the host's zone, as [Timestamps](#timestamps) says.) So the same
+  instant written two ways can date documents a day apart:
+  `2026-11-02T00:30:00+01:00` dates them 2 November and
+  `2026-11-01T23:30:00Z` dates them 1 November.
+- **Many events share one time.** Everything between two advances carries the
+  same `at`. The timeline's order is still the order things happened in: it
+  is decided by a sequence the mock keeps, not by the time.
+- **`/_mock/advance` is unchanged.** `?seconds=N` and `?all` move the clock
+  from where it stands. `/_mock/reset` puts it back to the start time.
+  `/_mock/state` says where it is under `clock`: `now`, `startAt` (`null`
+  when there is none) and `advancedSeconds`.
+- **A `--db` file keeps the clock it was started on.** Started again with the
+  same `--start-at`, it comes back as far on as it was left. A different
+  start time, or none, is refused and names the one the file has; so is a
+  start time for a file that has already traded by the host's clock.
+
+**What follows the start time:** every `at` and `due_at`; `ISA09`/`10`,
+`GS04`/`05` and the `UNB` date and time; every date inside a document the
+mock writes, the orders it places with `/_mock/purchase` included; the dates
+of the seeded demo orders; and the date an MDN states.
+
+**What does not**, and so differs between two runs:
+
+| | Why |
+| --- | --- |
+| The request log's `at` (`/_mock/requests`), and `started` in `/_mock/health` | About the process, not the conversation. |
+| The HTTP `Date` header on the mock's responses | Written by the HTTP server. |
+| The AS2 `Date` header on a document or an asynchronous MDN the mock posts | When it was posted, which is the host's business. |
+| An MDN's `Message-ID` and MIME boundary | Random. A document's own AS2 `Message-ID` is a counter and does repeat. |
+
 ## AS2
 
 ```bash
@@ -583,6 +868,59 @@ Documents are then POSTed to your listener with AS2 headers, in the order they
 were queued, and whatever MDN you return is recorded against them in
 `/_mock/outbox`.
 
+## One document at a time
+
+The courier posts each document as soon as it is released. Wire two mocks to
+each other and one `settle()` runs the whole rally: the seller makes its
+promises on receipt of the 850, the buyer answers the 855 with a 997, and
+both have happened before anything outside can look. The two events sit in
+different mocks with the same time on them, so nothing orders them afterwards.
+
+Start a mock with `--hold-delivery` (`Mock.start(hold_delivery=True)`) and it
+posts nothing until it is asked. What it releases stays `ready`:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/deliver          # the next one
+curl -X POST "http://127.0.0.1:8080/_mock/deliver?all"    # everything held, in order
+```
+
+```json
+{"sent": {"type": "document", "id": 2, "partner": "ACME", "code": "855",
+          "kind": "response", "reference": "4500000042", "control": "2",
+          "messageId": "<...>", "to": "http://localhost:9000/as2",
+          "status": "delivered", "note": "MDN: ...; processed"},
+ "waiting": 2}
+```
+
+One step is one POST of the mock's own, and the answer comes once that one
+has finished, `delivered` or `failed`. With nothing to send the answer is
+`{"sent": null, "waiting": 0}`, at once, so a loop over it ends:
+`while mock.step(): ...`.
+
+- **"Next" is what an unheld mock would have posted next.** The courier has
+  one queue, first in, first out, and a held one keeps the same queue: the
+  order of release, which for documents released together is their order in
+  the outbox. After a restart on a `--db` file it is documents by id, then
+  asynchronous MDNs by id.
+- **An asynchronous MDN is its own step.** It is its own POST, queued behind
+  what was already waiting, and its `sent` has `"type": "mdn"`. A read
+  between the two steps shows the document delivered and the receipt still
+  `pending`. A synchronous MDN is the HTTP response to the document it
+  answers and travels with it.
+- **A retry is held too, and so is a resend.** `/_mock/outbox/<id>/retry`,
+  `/_mock/outbox/<id>/resend` and `/_mock/advance?failed` put the document
+  back on the end of the queue and answer as they always did; it goes when
+  it is stepped. So does anything `/_mock/advance` releases.
+- **`settle()` and `exchange()` raise on a held mock**, at once, naming the
+  hold. They wait for deliveries, and a held mock makes none on its own.
+- **What is not held:** receiving (the mock answers what it is sent, MDN
+  included), the mailbox (a partner with no `as2_url` collects as before, and
+  a step passes its documents over), and `--pickup-dir`, where a released
+  document is written at once.
+- **Only at start.** A running mock cannot be switched between held and not;
+  `?all` lets the rest go. `POST /_mock/deliver` on a mock that is not held is
+  a `409`, and `/_mock/health` says `"deliveryHeld"`.
+
 ## A delivery that failed can be tried again
 
 A partner's listener restarts between the 997 and the 855, and the mock has
@@ -596,10 +934,28 @@ curl -X POST "http://127.0.0.1:8080/_mock/advance?failed"   # everything that fa
 ```
 
 The same bytes and the same control numbers go out again, in the order they
-were queued. That is a *retry*, not a resend: `/_mock/send` builds a new
-document with a new control number, which is a different event on the wire —
-and being idempotent about a control number it has already seen is exactly
-the thing a listener has to get right.
+were queued. That is not `/_mock/send`, which writes a new document with a
+new control number, a different event on the wire.
+
+A retry is for a delivery that **failed**, and refuses any other. To send a
+document that **arrived** a second time - which is how to find out whether a
+listener is idempotent about a control number it has already seen - ask for
+that by name:
+
+```bash
+curl -X POST http://127.0.0.1:8080/_mock/outbox/3/resend
+```
+
+A delivered document is posted to the partner again with the same bytes,
+control numbers and AS2 `Message-ID`; a collected one goes back in the mailbox
+to be collected again. The answer's `was` says what had become of it. A
+document not yet due, or cancelled, has not been sent once and is a `409`.
+
+One that is waiting to go is left waiting, and nothing is resent. Its answer
+carries `sent_before`: `false` for a document that has not gone out at all,
+`true` for one already queued to go again. So two `resend` posts in a row put
+one more copy on the wire, not two. Let the first be delivered or collected
+before asking for another: `mock.settle()`, with `mockedi.testing`.
 
 `/_mock/outbox` carries the history: `attempts`, `last_error` and
 `last_attempt_at`, so a document delivered on the second try says so.
@@ -634,7 +990,7 @@ be fulfilled as the order it withdraws.
 
 ```
 POC*1*QD*60**EA*12.50**VP*WIDGET-001~     the buyer wants 60, not 100
-ACK*IA*60*EA*068*20260926~                 the seller agrees
+ACK*IA*60*EA*067*20260926~                 the seller agrees
 POC*2*DI*40**EA*4.15**VP*BRKT-050~         the buyer drops line 2
 ACK*IR*0*EA~
 REF*ZZ**Line deleted at the buyer's request~
@@ -748,6 +1104,7 @@ the 856:
 | --- | --- |
 | `billed-before-shipped` | no 856 has arrived for the order |
 | `billed-more-than-shipped` | a line billed, over every invoice so far, beyond what shipped |
+| `billed-more-than-ordered` | a line billed, over every invoice so far, beyond what was ordered, whether or not anything has shipped; both quantity rules can fire on one invoice. What was ordered is the order as it stands: a confirmation of more does not raise it, a change the mock sent does |
 | `price-not-agreed` | a price that is neither the ordered nor the confirmed one |
 | `total-not-lines` | MOA+79 is not the sum of the lines, or the total (TDS01, MOA+139) is not the lines plus allowances and charges (SAC, ALC) plus tax; not judged when an allowance gives only a percentage |
 | `invoice-repeated` | an invoice number already received for the order; it is counted once |
@@ -1006,6 +1363,20 @@ differ. On the EDIFACT side a `UNZ` that miscounts, names another interchange
 or never arrives rejects the interchange in the CONTRL's `UCI`, with `0085`
 codes 29, 28 and 13.
 
+**A simple element that arrives in pieces is reported.** The component
+separator means something only inside a composite. An element the standard
+makes simple, sent with one in it - `REF*ZZ*A>B` where `ISA16` is `>`, or a
+`BGM` whose message function is `9:X` - is read as its first piece, as it
+always was, and now says so: `REF02 is a simple element and arrived with 2
+components ('A', 'B'); read as 'A'`, with `AK403` 6 in a 997 and `0085` 16 in
+a CONTRL. It is an error and not a fatal one, so the set is accepted with
+errors unless the partner is `strict`. Only a position the dictionary
+declares is judged: one past the declaration and inside the segment's width
+is carried and not checked, because the standard may have a composite there,
+as it does at `REF04`. Free text that contains the sender's own separator is
+the usual way to meet this, and a real translator on the other side would
+split it too.
+
 Two limits, stated plainly: loop *membership* and repetition counts are
 checked but loop *sequence* is not, and conditional requirements ("if PO104 is
 present then PO103 must be") are not modelled. Both would need a rule language
@@ -1097,8 +1468,10 @@ everything in memory.
 | --- | --- |
 | `--auth USER:PASSWORD` | Require HTTP basic authentication on every request, control plane included - before pointing a shared staging environment at it. Binding a non-loopback address without it prints a warning. The password may hold any characters; a client may send it as UTF-8 or as Latin-1. |
 | `--deliver-to HOST[,HOST]` | Hosts the courier may POST to; anywhere by default. The mock posts released documents to whatever `as2_url` a partner carries, and asynchronous MDNs to whatever `Receipt-Delivery-Option` an AS2 sender names - and `/as2` cannot require authentication and still be AS2. This says which hosts are allowed: a partner `as2_url` outside the list is refused by the control plane with a `400`, a document already bound for one fails without being posted, and a `Receipt-Delivery-Option` outside it is refused with a failure MDN. |
+| `--hold-delivery` | Post nothing until asked. Released documents and asynchronous MDNs wait, in order, and `POST /_mock/deliver` sends the next one and says what it was. For reading the state between two hops of a conversation between two mocks. See [One document at a time](#one-document-at-a-time). |
 | `--latency-ms MS` | Add a delay to every request. |
 | `--error-rate FRACTION` | Answer that fraction of requests with a `500`, for a client's retry logic. Only the trading endpoints are failed - never anything under `/_mock/`. |
+| `--start-at TIME` | Start the mock's clock at this time and hold it there until it is advanced: `2026-11-02T09:00:00Z`, or with an offset. Two runs of one script then write the same documents and the same timeline. Documents are dated in the zone written here, not the host's. See [Starting the clock at a chosen time](#starting-the-clock-at-a-chosen-time). |
 | `--seed N` | Seed for the demo data and for `--error-rate`'s choices (default `42`), so a run can be repeated exactly. |
 | `--no-request-log` | Keep requests out of the `request_log` table, and out of `/_mock/requests`. |
 
@@ -1172,9 +1545,9 @@ a good pull request carries.
 OData V2 and V4, BAPI/RFC and IDoc shapes over SQLite, also with zero
 dependencies. An IDoc `ORDERS05` and an X12 850 are the same business
 document, so the two mocks make a reasonable pair of ends for testing a
-middleware layer. [`examples/po_bridge.py`](examples/po_bridge.py) is one, and
-mock-sap's [`examples/invoice_check.py`](https://github.com/rseufert/mock-sap/blob/main/examples/invoice_check.py)
-is another.
+middleware layer. [mock-acme](https://github.com/rseufert/mock-acme) is that layer:
+[`po_bridge.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/po_bridge.py) is one piece of it and
+[`invoice_check.py`](https://github.com/rseufert/mock-acme/blob/main/mockacme/invoice_check.py) is another.
 
 [Testing an SAP-to-EDI Integration Without SAP or a Trading Partner](https://rickseufert.com/blog/2026/09/24/testing-an-sap-to-edi-integration)
 uses the two mocks together: purchase orders out and confirmations in, then

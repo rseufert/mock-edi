@@ -1,7 +1,7 @@
 """What the mock has to say: the mailbox a partner collects from, the outbox, and the drop directory.
 
 A retry and a scan are POSTs, and refuse another method in the words they
-always used.
+always used. So is a step of a held mock's deliveries.
 """
 from __future__ import annotations
 
@@ -39,24 +39,103 @@ def outbox(h) -> Tuple[int, int]:
         (limit(h.query),)))
 
 
+@route("POST", "/_mock/deliver", refuse="POST to deliver what is held")
+def deliver(h) -> Tuple[int, int]:
+    """Send the next thing a held mock is holding, or all of it with `?all`.
+
+    The answer says what moved and how it ended; `sent` is null when there
+    was nothing to send, so a loop over this ends. One step is one POST of
+    the mock's own: a document, or an asynchronous MDN, which is its own
+    send and is stepped on its own.
+    """
+    if not h.config.hold_delivery:
+        return h.json(409, {
+            "error": "delivery is not held: this mock posts each document as "
+                     "soon as it is released. Start it with --hold-delivery "
+                     "to send one at a time"})
+    everything = flag(h.query, "all")
+    sent = []
+    # The courier records each delivery under the lock this request holds.
+    with h.mock.unlocked():
+        while True:
+            moved = h.mock.courier.step()
+            if moved is None:
+                break
+            sent.append(moved)
+            if not everything:
+                break
+    waiting = h.mock.courier.waiting()
+    if everything:
+        return h.json(200, {"sent": sent, "count": len(sent), "waiting": waiting})
+    return h.json(200, {"sent": sent[0] if sent else None, "waiting": waiting})
+
+
 @route("POST", "/_mock/outbox/<id>/retry", refuse="POST to retry a delivery")
 def retry(h, identifier: str) -> Tuple[int, int]:
-    conn = h.mock.conn
+    row, missing = _outbound(h, identifier)
+    if row is None:
+        return h.json(*missing)
+    if row["status"] != "failed":
+        # A delivery that failed is tried again here. One that worked is a
+        # different request, and the refusal says where to make it (#262).
+        return h.json(409, {
+            "error": "outbound document %d is %s, not failed; only a failed "
+                     "delivery can be retried. POST /_mock/outbox/%d/resend "
+                     "sends a document again unchanged, whatever became of it"
+                     % (row["id"], row["status"], row["id"])})
+    retried = h.mock.pipeline.redeliver(row["id"])
+    return h.json(200, {"retried": retried, "count": len(retried)})
+
+
+@route("POST", "/_mock/outbox/<id>/resend", refuse="POST to send a document again")
+def resend(h, identifier: str) -> Tuple[int, int]:
+    """The same bytes and the same control numbers, a second time.
+
+    For a document whose delivery worked: posted to the partner again, or put
+    back in the mailbox to be collected again. It is how a test finds out
+    whether a listener is idempotent about a control number it has already
+    seen, which `retry` cannot show - that one refuses anything that did not
+    fail. `was` is what had become of the document before this.
+
+    One row goes out once each time it is queued, so asking twice before the
+    first has gone does not queue a third copy. The answer for a document
+    that is waiting says which wait it is: `sent_before` is true when it has
+    gone out already and is queued to go again, and false when it has not
+    gone out at all.
+    """
+    row, missing = _outbound(h, identifier)
+    if row is None:
+        return h.json(*missing)
+    was = row["status"]
+    if was in ("pending", "cancelled"):
+        return h.json(409, {
+            "error": "outbound document %d is %s: it has not been sent once, "
+                     "so it cannot be sent again" % (row["id"], was)})
+    if was == "ready":
+        # Waiting to be collected or delivered, and left to. Either it has
+        # never gone out, and there is no first time for this to be the
+        # second of; or it is already queued to go again, by a `resend` or a
+        # `retry` a moment ago, and will go once for that. The two are not
+        # the same answer to a test counting copies on the wire.
+        sent_before = bool(row["attempts"] or row["delivered_at"])
+        return h.json(200, {"resent": [], "count": 0, "was": was,
+                            "sent_before": sent_before})
+    resent = h.mock.pipeline.redeliver(row["id"], again=True)
+    return h.json(200, {"resent": resent, "count": len(resent), "was": was})
+
+
+def _outbound(h, identifier: str):
+    """The outbox row a path names: `(row, None)`, or `(None, (404, body))`."""
     try:
         outbound_id = int(identifier)
     except ValueError:
-        return h.json(404, {"error": "no outbound document %r" % identifier})
-    row = db.one(conn, "SELECT status FROM outbound WHERE id = ?",
+        return None, (404, {"error": "no outbound document %r" % identifier})
+    row = db.one(h.mock.conn, "SELECT id, status, attempts, delivered_at FROM outbound"
+                              " WHERE id = ?",
                  (outbound_id,))
     if row is None:
-        return h.json(404, {"error": "no outbound document %d" % outbound_id})
-    if row["status"] != "failed":
-        return h.json(409, {
-            "error": "outbound document %d is %s, not failed; only a "
-                     "failed delivery can be retried"
-                     % (outbound_id, row["status"])})
-    retried = h.mock.pipeline.redeliver(outbound_id)
-    return h.json(200, {"retried": retried, "count": len(retried)})
+        return None, (404, {"error": "no outbound document %d" % outbound_id})
+    return row, None
 
 
 @route("GET", "/_mock/drop")

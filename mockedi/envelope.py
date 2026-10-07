@@ -10,8 +10,12 @@ a purchase order is.
 """
 from __future__ import annotations
 
+import datetime
+import functools
+import unicodedata
 from dataclasses import dataclass, field
-from typing import Dict, Iterator, List, Optional, Sequence, Tuple, Union
+from typing import (Callable, Dict, Iterator, List, Optional, Sequence, Tuple,
+                    Union)
 
 Value = Union[str, List[str]]
 
@@ -387,8 +391,160 @@ def escape(value: str, delims: Delimiters) -> str:
     return "".join(out)
 
 
-def fit(value: str, charset: str) -> str:
-    """`value` with every character `charset` cannot carry replaced by `?`.
+# a-z to A-Z, for a syntax whose repertoire has no lower case (#263). Built
+# here rather than imported from `charsets` so that the syntax layer goes on
+# depending on nothing above it.
+_FOLD = str.maketrans("abcdefghijklmnopqrstuvwxyz",
+                      "ABCDEFGHIJKLMNOPQRSTUVWXYZ")
+
+
+# What a letter becomes when the declared set cannot carry it (#264).
+#
+# There is no EDIFACT rule for this. The standard's only answer to a
+# character outside the declared set is an error (0085 code 21), and what a
+# sender does to avoid one is convention. This is the Unicode Consortium's:
+# CLDR's `Latin-ASCII` transform, `common/transforms/Latin-ASCII.xml` at
+# commit f68302c0ae, which is language-neutral. It removes the marks from
+# Latin letters (so `ü` is `u`, never `ue`) and gives the letters that have
+# no decomposition an explicit rule each. Those rules are copied here for
+# the letters of Latin-1 Supplement and Latin Extended-A, which is where
+# European names live, and for the capital sharp s.
+#
+# A German counterparty would write `Mueller` and a Danish one `Oere`. The
+# mock writes `Muller` and `Ore`, on purpose: an envelope does not say what
+# language a name is in, and `ue` is wrong for a Finnish or a Turkish `ü`.
+# Zack's choice on #264, where the sources are.
+_LETTERS = {
+    "\u00c6": "AE", "\u00d0": "D", "\u00d8": "O", "\u00de": "TH",
+    "\u00df": "ss", "\u00e6": "ae", "\u00f0": "d", "\u00f8": "o",
+    "\u00fe": "th", "\u0110": "D", "\u0111": "d", "\u0126": "H",
+    "\u0127": "h", "\u0131": "i", "\u0132": "IJ", "\u0133": "ij",
+    "\u0138": "q", "\u013f": "L", "\u0140": "l", "\u0141": "L",
+    "\u0142": "l", "\u0149": "'n", "\u014a": "N", "\u014b": "n",
+    "\u0152": "OE", "\u0153": "oe", "\u0166": "T", "\u0167": "t",
+    "\u017f": "s", "\u1e9e": "SS",
+}
+
+
+# And what typographic punctuation becomes (#319): the apostrophe a word
+# processor curls, a dash, a no-break space. From the same file and commit,
+# its sections "Spaces", "Quotes, apostrophes" and "Dashes, hyphens" taken
+# whole, and the three dot leaders from the section after. One rule is left
+# out: U+02CB becomes a backtick, which is one of the ISO 646 positions
+# levels A and B exclude, and this table should not produce what the
+# declared level cannot say.
+#
+# And one is changed, on purpose: the soft hyphen, U+00AD. CLDR makes it a
+# hyphen, which is right for text that will be shown and wrong for a name
+# that will be matched. A soft hyphen is not a character of the name; it is
+# a typesetter's note of where a line may break. Written as `-` it turns
+# `Grosshandel` into `Gross-handel`, a company nobody has in their party
+# table. So it becomes nothing. Zack's decision on #326, at Eddie's finding.
+#
+# Ten of these become an apostrophe, which ends an EDIFACT segment. That is
+# safe for the reason `\u0149` is: `fit` runs before `escape`, so it is
+# released like any other. tests/test_transliteration.py holds which.
+_PUNCTUATION = {
+    "\u00a0": ' ', "\u2002": ' ', "\u2003": ' ',
+    "\u2004": ' ', "\u2005": ' ', "\u2006": ' ',
+    "\u2007": ' ', "\u2008": ' ', "\u2009": ' ',
+    "\u200a": ' ', "\u205f": ' ', "\u3000": ' ',
+    "\u02b9": "'", "\u02ba": '"', "\u02bb": "'",
+    "\u02bc": "'", "\u02bd": "'", "\u02c8": "'",
+    "\u2018": "'", "\u2019": "'", "\u201a": ',',
+    "\u201b": "'", "\u201c": '"', "\u201d": '"',
+    "\u201e": ',,', "\u201f": '"', "\u2032": "'",
+    "\u2033": '"', "\u301d": '"', "\u301e": '"',
+    "\uff02": '"', "\uff07": "'", "\u00ab": '<<',
+    "\u00bb": '>>', "\u2039": '<', "\u203a": '>',
+    "\u00ad": '', "\u2010": '-', "\u2011": '-',
+    "\u2012": '-', "\u2013": '-', "\u2014": '-',
+    "\u2015": '-', "\ufe31": '-', "\ufe32": '-',
+    "\ufe58": '-', "\ufe63": '-', "\uff0d": '-',
+    "\u2024": '.', "\u2025": '..', "\u2026": '...',
+}
+
+# Everything with a rule of its own, as opposed to a mark that comes off.
+_RULES = dict(_LETTERS, **_PUNCTUATION)
+
+
+@functools.lru_cache(maxsize=4096)
+def _carried(char: str, charset: str) -> bool:
+    try:
+        char.encode(charset)
+    except UnicodeEncodeError:
+        return False
+    return True
+
+
+@functools.lru_cache(maxsize=4096)
+def _plain(char: str) -> str:
+    """One character said in unaccented Latin letters and plain
+    punctuation, or itself if it has no such form: `\u0141` is `L`, `\u017a` is `z`, `\u00df` is `ss`."""
+    if char in _RULES:
+        return _RULES[char]
+    base, marks = unicodedata.normalize("NFD", char)[:1], \
+        unicodedata.normalize("NFD", char)[1:]
+    # Marks come off Latin letters and digits only, as in CLDR: a Greek
+    # letter without its accent is still a letter the set cannot carry.
+    latin = base in _LETTERS or (base.isalnum() and (
+        base.isascii() or unicodedata.name(base, "").startswith("LATIN")))
+    if marks and latin and all(unicodedata.category(mark) == "Mn"
+                               for mark in marks):
+        return _LETTERS.get(base, base)
+    return char
+
+
+def transliterate(text: str, charset: str, grow: bool = True) -> str:
+    """`text` with each character `charset` cannot carry said in plain letters.
+
+    A character the set does carry is left exactly as it is: `\u00fc` stays
+    `\u00fc` under ISO 8859-1 and becomes `u` only under ISO 646. One with no
+    plain form is left for `fit` to substitute, as before.
+
+    With `grow` off, a letter whose plain form is two characters is left
+    alone too, for the caller that has no room for the second.
+    """
+    if text.isascii():
+        return text
+    # A letter and a mark sent as two characters are one letter.
+    text = unicodedata.normalize("NFC", text)
+    out: List[str] = []
+    for char in text:
+        if _carried(char, charset):
+            out.append(char)
+            continue
+        if (unicodedata.category(char) == "Mn" and out
+                and out[-1][-1:].isascii() and out[-1][-1:].isalnum()):
+            continue            # a mark with no composed form: it comes off
+        plain = _plain(char)
+        # A plain form of one character or none can never be why a value
+        # outgrows its element, so it is taken even where nothing may grow.
+        out.append(plain if grow or len(plain) <= 1 else char)
+    return "".join(out)
+
+
+def fit(value: str, charset: str, outside: str = "", fold: bool = False,
+        limit: int = 0) -> str:
+    """`value` with every character the set cannot carry said another way.
+
+    A letter is transliterated - `\u0141\u00f3d\u017a` is `Lodz`, not `?\u00f3d?` -
+    and whatever has no plain form is replaced by `?` (#264).
+
+    `limit` is the element's maximum length, when the caller knows it. A
+    few letters have a plain form of two characters (`\u00df` is `ss`), so a
+    value that filled its element would outgrow it and the mock would write
+    a document its own dictionary reports. So a value grows only into room
+    it is known to have: with no `limit`, or with one the longer form would
+    pass, those letters keep the `?` they had, which is one character. A
+    full element loses a letter's legibility rather than its validity, and
+    `fit` on its own never makes a value longer.
+
+    `outside` is the repertoire's own exclusion, for a syntax whose codec
+    admits more than the syntax does: `UNOA`'s codec is `ascii` and level A
+    has no lower case, so the codec alone would pass `Widget` (#295). A
+    character excluded here is substituted exactly as one the codec cannot
+    encode is, in the same place and for the same reason.
 
     This belongs *before* `escape` and that is the whole point (#199). The
     substitution used to happen on the way to bytes, after the segment had
@@ -403,22 +559,51 @@ def fit(value: str, charset: str) -> str:
     An empty `charset` fits nothing, for the callers that do not know one.
     """
     text = "" if value is None else str(value)
+    if charset and not text.isascii():
+        # Only with a character set, and that is all that keeps X12 out of
+        # this: `x12.render` calls `render_segment` too, and passes none.
+        #
+        # Before folding, so that `\u0142` is `l` and then `L` under level A.
+        plain = transliterate(text, charset)
+        if len(plain) > len(text) and not (limit and len(plain) <= limit):
+            plain = transliterate(text, charset, grow=False)
+        text = plain
+    if fold:
+        # Before the substitutions below: a folded character is then inside
+        # the repertoire and the codec both, which is the point of folding.
+        text = text.translate(_FOLD)
+    if outside:
+        text = "".join("?" if char in outside else char for char in text)
     if not charset:
         return text
     return text.encode(charset, "replace").decode(charset)
 
 
-def render_segment(seg: Seg, delims: Delimiters, charset: str = "") -> str:
-    """One segment, trailing empty elements trimmed as every real sender does."""
+def render_segment(seg: Seg, delims: Delimiters, charset: str = "",
+                   outside: str = "", fold: bool = False,
+                   limit: Optional[Callable[[int, int], int]] = None) -> str:
+    """One segment, trailing empty elements trimmed as every real sender does.
+
+    `limit(element, component)` is the most characters that position holds,
+    both counted from 1 and `component` 0 for an element that has none; 0
+    where it is not known. See `fit` for what it is for.
+    """
+    def room(element: int, component: int = 0) -> int:
+        return limit(element, component) if limit is not None else 0
+
     parts: List[str] = []
-    for value in seg.elements:
+    for position, value in enumerate(seg.elements, start=1):
         if isinstance(value, list):
-            components = [escape(fit(v, charset), delims) for v in value]
+            components = [
+                escape(fit(v, charset, outside, fold, room(position, index)),
+                       delims)
+                for index, v in enumerate(value, start=1)]
             while components and components[-1] == "":
                 components.pop()
             parts.append(delims.component.join(components))
         else:
-            parts.append(escape(fit(value, charset), delims))
+            parts.append(escape(fit(value, charset, outside, fold,
+                                    room(position)), delims))
     while parts and parts[-1] == "":
         parts.pop()
     return delims.element.join([seg.tag] + parts)
@@ -432,6 +617,37 @@ def seg(tag: str, *elements: Value) -> Seg:
 
 # -- date and time, in the shapes both dialects use
 
+class DocumentZone(datetime.tzinfo):
+    """The zone a pinned mock dates its documents in: a fixed offset from UTC.
+
+    A mock started at a chosen time (`--start-at`) has to write the same
+    dates on any machine, so it cannot read them off the host's zone. It
+    reads them in the zone its start time was written in instead, and its
+    clock hands out moments carrying this, which `local` leaves as they are
+    (#280). No daylight saving: an offset is an offset.
+    """
+
+    def __init__(self, offset: datetime.timedelta):
+        self.offset = offset
+
+    def utcoffset(self, moment):
+        return self.offset
+
+    def dst(self, moment):
+        return datetime.timedelta(0)
+
+    def tzname(self, moment):
+        return datetime.timezone(self.offset).tzname(None)
+
+    def __reduce__(self):
+        # tzinfo's own would call __init__ with no offset, so a moment from a
+        # pinned clock could not be copied or pickled.
+        return (DocumentZone, (self.offset,))
+
+    def __repr__(self) -> str:
+        return "DocumentZone(%s)" % self.tzname(None)
+
+
 def local(moment):
     """The same moment as the host's wall clock reads it.
 
@@ -441,9 +657,12 @@ def local(moment):
     sender's local time by the standards' long convention, so they are
     written as the host reads them, whatever the clock underneath is in.
 
-    A naive moment is already local and is left alone.
+    A naive moment is already local and is left alone. So is one from a
+    pinned mock's clock, which says its own zone: the host's has no say in a
+    date that has to be the same on every machine.
     """
-    if getattr(moment, "tzinfo", None) is None:
+    zone = getattr(moment, "tzinfo", None)
+    if zone is None or isinstance(zone, DocumentZone):
         return moment
     return moment.astimezone()
 

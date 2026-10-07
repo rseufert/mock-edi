@@ -67,8 +67,26 @@ wire_time = hhmm
 SKU_QUALIFIERS = ("VP", "SA", "BP", "IN", "SK", "MG", "MF")
 UPC_QUALIFIERS = ("UP", "EN", "UI")
 # The date qualifiers that all mean "when the buyer wants it".
-REQUESTED_X12 = ("002", "010", "038", "068", "017")
+REQUESTED_X12 = ("002", "010", "038", "067", "068", "017")
+# The date an acknowledged line carries in ACK04/05: when the line is
+# scheduled to arrive, which is 067. It was written 068, the ship date's
+# code, under 067's name; the EDIFACT side writes the same date as a
+# delivery date (#229).
+SCHEDULED_X12 = "067"
+# What a partner may have dated its acknowledgment with in a header DTM,
+# when BAK09 or BCA10 is empty: 097 is the standard's code for it, and 137
+# is what this mock wrote before 0.8.0 and what a document it stored then
+# still says.
+ISSUED_X12 = ("097", "137")
 REQUESTED_EDIFACT = ("2", "17", "10")
+# The date a seller's response puts on a confirmed line: 67, the delivery
+# date its current schedule gives. It was written 2, which says the buyer
+# requested it (#305). Read back from 67 first, then from 2 and 17, which is
+# what this mock wrote before 0.8.0 and what other senders use. The price of
+# still reading those: a partner whose response dates a line only with 2,
+# meaning to echo what the buyer asked for, is read as having scheduled it.
+SCHEDULED_EDIFACT = "67"
+SCHEDULED_READ_EDIFACT = ("67", "2", "17")
 
 
 @dataclass
@@ -485,9 +503,7 @@ def _line_x12(block: Sequence[Seg], fallback: int) -> Line:
         uom=head.get(3) or "EA",
         price=number(head.get(4), "0.00"),
     )
-    for item in block[1:]:
-        if item.tag == "PID" and item.get(5):
-            line.description = line.description or item.get(5)
+    line.description = _description_x12(block)
     if not line.sku:
         # Some buyers identify items by a qualifier the mock does not list.
         # Take whatever is there rather than refuse the line - but never the
@@ -564,9 +580,84 @@ def _line_edifact(block: Sequence[Seg], fallback: int) -> Line:
         elif item.tag == "PRI":
             if item.comp(1, 1) in ("AAA", "AAB", "AAE"):
                 line.price = number(item.comp(1, 2), "0.00")
-        elif item.tag == "IMD":
-            line.description = line.description or item.comp(3, 4)
+    line.description = _edifact_description(block)
     return line
+
+
+# ---------------------------------------------------------------------------
+# A description longer than one element holds
+#
+# An order line's description is whatever the buyer sent, and it is written
+# back into every document that answers the order - in the partner's dialect,
+# which need not be the one it arrived in. `PID05` holds 80 characters and
+# D.96A's `7008` holds 35, so a description can be one the mock accepted and
+# cannot write in one element (#291). Both standards have an answer, and it
+# is the same one: say it in pieces. X12 repeats `PID`; EDIFACT has two
+# `7008`s in an `IMD` and repeats that.
+# ---------------------------------------------------------------------------
+
+PID_WIDTH = 80          # PID05, element 352
+IMD_WIDTH = 35          # C273's 7008, twice in one IMD
+# How many of each a line may carry, in every set the mock writes a
+# description into. Pieces have an end too: a description past 200 PIDs
+# (16,000 characters) or 99 IMDs (6,930) is cut there, because the segment
+# after that is one the dictionary reports. Nothing real is that long; it
+# was reached by reading every free-form PID of a line as one text and
+# answering in the other dialect (#291).
+PID_MOST = 200
+IMD_MOST = 99
+
+
+def pieces(text: str, width: int) -> List[str]:
+    """`text` in parts of at most `width` characters, cut at spaces.
+
+    Cut at the last space that fits, so that joining the parts with a space
+    gives the text back. A run of more than `width` characters with no space
+    in it has nowhere to be cut and is cut where it must be; it then reads
+    back with a space where the cut fell, which is the one thing this loses.
+
+    A text that fits is returned as it is, to the byte: nothing about a
+    description that needed no help is changed.
+    """
+    if len(text or "") <= width:
+        return [text] if text else []
+    words = " ".join(text.split())
+    out: List[str] = []
+    while len(words) > width:
+        cut = words.rfind(" ", 0, width + 1)
+        if cut <= 0:
+            out.append(words[:width])
+            words = words[width:]
+        else:
+            out.append(words[:cut])
+            words = words[cut + 1:]
+    if words:
+        out.append(words)
+    return out
+
+
+def joined(parts: Sequence[str]) -> str:
+    """The parts of a description as one text: `pieces`, the other way."""
+    return " ".join(part.strip() for part in parts if part and part.strip())
+
+
+def description_x12(text: str) -> List[Seg]:
+    """A description as free-form `PID` segments, as many as it takes.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    return [seg("PID", "F", "", "", "", part)
+            for part in pieces(text, PID_WIDTH)[:PID_MOST]]
+
+
+def description_edifact(text: str) -> List[Seg]:
+    """A description as free-form `IMD` segments, two `7008`s to each.
+
+    And no more than a line may hold: past that it is cut.
+    """
+    parts = pieces(text, IMD_WIDTH)[:2 * IMD_MOST]
+    return [seg("IMD", "F", "", ["", "", ""] + parts[index:index + 2])
+            for index in range(0, len(parts), 2)]
 
 
 # ---------------------------------------------------------------------------
@@ -657,7 +748,6 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         order.get("seller_order") or "",      # BAK08: the seller's order
         wire_date(when))]              # BAK09: acknowledged on
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", wire_date(when)))
     if order.get("currency"):
         out.insert(1, seg("CUR", "SE", order["currency"]))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
@@ -673,10 +763,10 @@ def _x12_855(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         if status == REJECTED:
             out.append(seg("ACK", status, "0", row["uom"]))
         else:
-            out.append(seg("ACK", status, confirmed, row["uom"], "068",
+            out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
         if row.get("reason"):
             out.append(seg("REF", "ZZ", "", row["reason"]))
     out.append(seg("CTT", str(len(lines))))
@@ -757,7 +847,7 @@ def _x12_810(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
                        unit_price(number(row["price"], "0.00")), "",
                        "VP", row["sku"], *(("UP", row["upc"]) if row.get("upc") else ())))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
 
     out.append(seg("TDS", implied_decimal(number(invoice["total"], "0.00"))))
     tax = number(str(invoice.get("tax") or "0"), "0.00")
@@ -828,7 +918,7 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if row.get("upc"):
             out.append(seg("PIA", "1", [row["upc"], "UP"]))
         if row.get("description"):
-            out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+            out.extend(description_edifact(row["description"]))
         ordered = number(row["quantity"])
         confirmed = number(str(row.get("confirmed") or "0"))
         out.append(seg("QTY", ["21", quantity_text(ordered), unit]))
@@ -836,7 +926,8 @@ def _edifact_ordrsp(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if confirmed < ordered:
             out.append(seg("QTY", ["83", quantity_text(ordered - confirmed), unit]))
         if row.get("scheduled_on") and confirmed > 0:
-            out.append(seg("DTM", ["2", _iso(row["scheduled_on"]), "102"]))
+            out.append(seg("DTM", [SCHEDULED_EDIFACT, _iso(row["scheduled_on"]),
+                                   "102"]))
         out.append(seg("PRI", ["AAA", unit_price(number(row["price"], "0.00"))]))
         if row.get("reason"):
             out.append(seg("FTX", "AAO", "", "", [row["reason"]]))
@@ -898,7 +989,7 @@ def _edifact_invoic(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict]
         if row.get("upc"):
             out.append(seg("PIA", "1", [row["upc"], "UP"]))
         if row.get("description"):
-            out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+            out.extend(description_edifact(row["description"]))
         out.append(seg("QTY", ["47", quantity_text(invoiced), unit]))
         out.append(seg("MOA", ["203", price_text(invoiced * price)]))
         out.append(seg("PRI", ["AAA", unit_price(price)]))
@@ -953,28 +1044,61 @@ def _read_change_x12(message: Message) -> Change:
             uom=head.get(5) or "EA",
             price=number(head.get(6), "0.00"),
         )
-        for item in block[1:]:
-            if item.tag == "PID" and item.get(5):
-                line.description = line.description or item.get(5)
+        line.description = _description_x12(block)
         change.lines.append(line)
     return change
 
 
+def change_number(po_number: str, sequence: str) -> str:
+    """The number an ORDCHG identifies itself by: the order's and the sequence.
+
+    D.96A asks the sender to identify the order change uniquely, and the
+    sequence alone does not - every order's first change would be `1`. The
+    order is still named in its own right by `RFF+ON` (#186).
+    """
+    return "%s-%s" % (po_number, sequence or "1")
+
+
+def change_sequence(number: str, po_number: str) -> str:
+    """The sequence back out of a change request's number.
+
+    `change_number`'s inverse, and it has to be, or a change request read
+    and written again would carry `PO4711-PO4711-2`. A number that is not of
+    that shape is taken whole, which is what a partner's own numbering
+    looks like.
+    """
+    prefix = "%s-" % po_number
+    if po_number and number.startswith(prefix):
+        return number[len(prefix):]
+    return number
+
+
 def _read_change_edifact(message: Message) -> Change:
     change = Change()
-    bgm = message.find("BGM")
-    if bgm is not None:
-        change.po_number = bgm.comp(2, 1)
-        # BGM's message function code says whether this is a change or a
-        # cancellation; 1 is cancellation in both dialects' vocabulary.
-        change.purpose = "01" if bgm.get(3) == "1" else "04"
-        change.sequence = bgm.comp(2, 3)
-
     header: List[Seg] = []
     for item in message.body:
         if item.tag == "LIN":
             break
         header.append(item)
+
+    bgm = message.find("BGM")
+    if bgm is not None:
+        # BGM's message function code says whether this is a change or a
+        # cancellation; 1 is cancellation in both dialects' vocabulary.
+        change.purpose = "01" if bgm.get(3) == "1" else "04"
+        # Both forms, during the change and after it (#186). D.96A's: the
+        # order is named by RFF+ON and 1004 is the change request's own
+        # number. The one this mock wrote before: the order number in 1004
+        # and the sequence in a C106 third component D.96A does not have.
+        # A document a buyer sends either way is understood.
+        order_reference = _edifact_rff(header, "ON")
+        named = order_reference.comp(1, 2) if order_reference is not None else ""
+        if bgm.comp(2, 3):
+            change.po_number = bgm.comp(2, 1)
+            change.sequence = bgm.comp(2, 3)
+        else:
+            change.po_number = named or bgm.comp(2, 1)
+            change.sequence = change_sequence(bgm.comp(2, 1), change.po_number)
     for item in header:
         if item.tag == "DTM" and item.comp(1, 1) == "137":
             change.changed_on = _dtm_date(item)
@@ -1056,7 +1180,6 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         date_text(change.changed_on))]
     out.append(seg("CUR", "SE", order.get("currency") or "USD"))
     out.append(seg("REF", "VN", order.get("seller_order") or ""))
-    out.append(seg("DTM", "137", wire_date(when)))
     out.extend(_x12_parties(us, order, (("SE", "us"), ("ST", "order"))))
 
     for row in lines:
@@ -1070,10 +1193,10 @@ def _x12_865(us: Party, partner: Dict, order: Dict, lines: Sequence[Dict],
         if status == REJECTED:
             out.append(seg("ACK", status, "0", row["uom"]))
         else:
-            out.append(seg("ACK", status, confirmed, row["uom"], "068",
+            out.append(seg("ACK", status, confirmed, row["uom"], SCHEDULED_X12,
                            _iso(row.get("scheduled_on"))))
         if row.get("description"):
-            out.append(seg("PID", "F", "", "", "", row["description"]))
+            out.extend(description_x12(row["description"]))
         if row.get("reason"):
             out.append(seg("REF", "ZZ", "", row["reason"]))
     out.append(seg("CTT", str(len(lines))))
@@ -1224,7 +1347,7 @@ def _order_line_x12(row: Dict) -> List[Seg]:
                "VP", row["sku"],
                *(("UP", row["upc"]) if row.get("upc") else ()))]
     if row.get("description"):
-        out.append(seg("PID", "F", "", "", "", row["description"]))
+        out.extend(description_x12(row["description"]))
     # A real 850 often dates each line too. Not written here: `Line` has no
     # field for a line-level date, so nothing would read it back and no
     # round-trip could check it. Give `Line` the field first.
@@ -1269,7 +1392,7 @@ def _x12_860(us: Party, partner: Dict, order: Dict, change: Change,
                        "VP", line.sku,
                        *(("UP", line.upc) if line.upc else ())))
         if line.description:
-            out.append(seg("PID", "F", "", "", "", line.description))
+            out.extend(description_x12(line.description))
     out.append(seg("CTT", str(len(change.lines))))
     return out
 
@@ -1298,7 +1421,7 @@ def _edifact_order_line(row: Dict) -> List[Seg]:
     if row.get("upc"):
         out.append(seg("PIA", "1", [row["upc"], "UP"]))
     if row.get("description"):
-        out.append(seg("IMD", "F", "", ["", "", "", row["description"]]))
+        out.extend(description_edifact(row["description"]))
     out.append(seg("QTY", ["21", quantity_text(number(row["quantity"])), unit]))
     out.append(seg("PRI", ["AAA", unit_price(number(row.get("price"), "0.00"))]))
     return out
@@ -1325,8 +1448,18 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
     """An ORDCHG.
 
     EDIFACT says "change" and "cancel" in BGM's 1225 rather than in a purpose
-    code of its own, and carries the change's sequence as C106's third
-    component - which is what `_read_change_edifact` reads it back out of.
+    code of its own.
+
+    BGM's 1004 is the change request's *own* number, not the order's: D.96A's
+    note is "a segment by which the sender must uniquely identify the order
+    change by means of its number and when necessary its function", and the
+    order being amended is named by the `RFF+ON` below, which this message has
+    always written. So the number is the order's and the sequence together -
+    `PO4711-2` - because a bare `2` does not uniquely identify anything
+    (#186).
+
+    Before #186 this wrote the order number in 1004 and the sequence in
+    C106's third component, which D.96A's BGM does not have at all.
     """
     po_number = change.po_number or order["po_number"]
     # 230 is "Purchase order change request" in 1001, which is what an ORDCHG
@@ -1334,7 +1467,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
     # 4 rather than 5: "change" is what a buyer amending some lines means, and
     # "replace" would tell the supplier to read the message as the whole order.
     out: List[Seg] = [seg(
-        "BGM", ["230"], [po_number, "", change.sequence or "1"],
+        "BGM", ["230"], change_number(po_number, change.sequence),
         "1" if change.cancels else "4")]
     out.append(seg("DTM", ["137", date_text(change.changed_on)
                            or wire_date(when), "102"]))
@@ -1350,7 +1483,7 @@ def _edifact_ordchg(us: Party, partner: Dict, order: Dict, change: Change,
         if line.upc:
             out.append(seg("PIA", "1", [line.upc, "UP"]))
         if line.description:
-            out.append(seg("IMD", "F", "", ["", "", "", line.description]))
+            out.extend(description_edifact(line.description))
         out.append(seg("QTY", ["21", quantity_text(line.quantity), unit]))
         out.append(seg("PRI", ["AAA", unit_price(line.price)]))
     out.append(seg("UNS", "S"))
@@ -1445,10 +1578,20 @@ def _reason_x12(block: Sequence[Seg]) -> str:
 
 
 def _description_x12(block: Sequence[Seg]) -> str:
-    for item in block[1:]:
-        if item.tag == "PID" and item.get(5):
-            return item.get(5)
-    return ""
+    """A line's description: every free-form `PID` of it, as one text.
+
+    A description longer than `PID05` holds is sent as several `PID*F`
+    segments, by this mock (#291) and by anyone else, so they are read as the
+    one description they are. A structured `PID` is something else - a
+    colour code, a size - and is not folded in; where a line has no
+    free-form one at all, the first `PID` with any text is taken, as it
+    always was.
+    """
+    described = [item for item in block[1:] if item.tag == "PID" and item.get(5)]
+    free = [item.get(5) for item in described if item.get(1) in ("F", "")]
+    if free:
+        return joined(free)
+    return described[0].get(5) if described else ""
 
 
 def _response_line_x12(block: Sequence[Seg], fallback: int,
@@ -1521,7 +1664,7 @@ def _finish_response_x12(message: Message, response: Response, trigger: str,
                 break
     if response.responded_on is None:
         for item in header:
-            if item.tag == "DTM" and item.get(1) == "137":
+            if item.tag == "DTM" and item.get(1) in ISSUED_X12:
                 response.responded_on = parse_date(item.get(2))
                 break
     detail = message.body[len(header):]
@@ -1789,11 +1932,46 @@ def _edifact_ids(block: Sequence[Seg]) -> Dict[str, str]:
     return ids
 
 
+# The 7077 codes whose 7008s hold free text, best first. F is what this mock
+# writes and the plainest thing a sender can say; A is D.96A's "Free-form
+# long description" and E its "Free-form short description", so A loses less
+# where a sender offers both; D is "Free-form price look up", a description
+# for a till display, and is only better than nothing. B and X pair a code
+# with a gloss and C and S are codes alone, so none of those is a
+# description - they keep the older fallback below (#317).
+#
+# Nothing published says which to prefer where a sender offers two, so this
+# order is a choice. It shows in /_mock/orders and in every document the mock
+# answers with.
+# An absent code sits with F: a sender that omits 7077 on a continuation
+# segment is saying nothing, not saying something else, and joining the two
+# is what this did before (#291).
+FREE_FORM_EDIFACT = (("F", ""), ("A",), ("E",), ("D",))
+
+
 def _edifact_description(block: Sequence[Seg]) -> str:
-    for item in block[1:]:
-        if item.tag == "IMD" and item.comp(3, 4):
-            return item.comp(3, 4)
-    return ""
+    """A line's description: the `7008`s of its `IMD`s, by 7077 code.
+
+    C273 has two `7008` components of 35 characters and a line may carry
+    several `IMD`s, which is how D.96A says a long description (#291).
+    Reading only the first component of the first segment returned the
+    mock's own long description cut short.
+
+    **Repetition continues a description; a different 7077 code starts a
+    different one.** So the `IMD`s sharing one code are joined - which is
+    what the mock itself writes, several `IMD+F` - and where a line carries
+    two codes the better one is taken whole rather than both being run
+    together (#317). A long description with a short one appended is worse
+    than the cut-short string this replaced.
+    """
+    described = [item for item in block[1:]
+                 if item.tag == "IMD" and (item.comp(3, 4) or item.comp(3, 5))]
+    for codes in FREE_FORM_EDIFACT:
+        parts = [part for item in described if item.get(1) in codes
+                 for part in (item.comp(3, 4), item.comp(3, 5)) if part]
+        if parts:
+            return joined(parts)
+    return described[0].comp(3, 4) if described else ""
 
 
 def _edifact_unit_back(code: str) -> str:
@@ -1868,7 +2046,7 @@ def _read_response_edifact(message: Message) -> Response:
             # No element carries the verdict: an ORDRSP says it by how much it
             # confirms, so this is `acknowledgment_type` run backwards.
             status=_verdict(ordered, confirmed),
-            scheduled_on=_edifact_dtm(block[1:], ("2", "67")),
+            scheduled_on=_edifact_dtm(block[1:], SCHEDULED_READ_EDIFACT),
             reason=reason,
             action=EDIFACT_ACTION_TO_CHANGE.get(head.get(2), "")
                    if head.get(2) else "",

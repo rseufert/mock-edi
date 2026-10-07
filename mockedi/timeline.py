@@ -19,7 +19,7 @@ from __future__ import annotations
 import json
 from typing import Any, Dict, List, Optional
 
-from . import db, reconcile
+from . import db, reconcile, schema
 
 # Within one second, the order things must have happened in - for rows
 # written before the sequence existed. Timestamps are second-precision on
@@ -124,7 +124,10 @@ def _documents(conn, po_number: str, partner_id: str,
             "findings": findings,
             "document": int(row["id"]),
         }
+        event.update(_carries(row))
         if row["direction"] == "out":
+            if row["kind"] not in reconcile.ACKNOWLEDGMENT_KINDS:
+                event["promise"] = _promise(row)
             event["delivery"] = _delivery(conn, row)
         if raw:
             event["payload"] = row["payload"] or ""
@@ -135,7 +138,11 @@ def _documents(conn, po_number: str, partner_id: str,
             # was then left out of the event (#197).
             event["answers"] = reconcile.answers(
                 row["dialect"], row["kind"], row["control"], row["reference"],
-                row["payload"] or "")
+                row["payload"] or "",
+                # So the note names an element as the reconciliation did.
+                # An acknowledgment answers what went the other way.
+                reconcile.sent_by(conn, row["partner"],
+                                  "in" if row["direction"] == "out" else "out"))
         if row["direction"] == "in":
             # What this document said that the order does not (#126), on the
             # event that said it rather than in a list of its own.
@@ -170,6 +177,45 @@ def _documents(conn, po_number: str, partner_id: str,
                               ": %s" % row["ack_note"] if row["ack_note"] else ""),
             })
     return out
+
+
+def _carries(row) -> Dict[str, str]:
+    """Which business document a sent or received set is (#273).
+
+    In the names the business events beside it use, so a reader can match
+    the 810 to its `invoiced` event by a field and not by where it sits:
+    `order` on anything about the order, `shipment` on a despatch advice,
+    `invoice` and the `shipment` it bills on an invoice. An acknowledgment
+    has `answers` instead; it is about an interchange, not an order.
+
+    The shipment and the invoice were recorded when the document was
+    written or read. A row from before they were is empty there, and says
+    so with an empty field rather than a guess from its payload.
+    """
+    if row["kind"] in reconcile.ACKNOWLEDGMENT_KINDS:
+        return {}
+    carries = {"order": row["reference"]}
+    if row["kind"] == schema.DESPATCH:
+        carries["shipment"] = row["shipment_id"]
+    elif row["kind"] == schema.INVOICE:
+        carries["invoice"] = row["invoice_number"]
+        carries["shipment"] = row["shipment_id"]
+    return carries
+
+
+def _promise(row) -> Optional[int]:
+    """The promise something was done in keeping: a `promised` event's own
+    `promise`, which is also its id on `/_mock/scheduled` (#211).
+
+    An order can hold two promises of one kind - a second consignment after
+    a change - and without this a reader could pair a `packed` with its
+    promise only by kind and by counting. None when no promise was being
+    kept: a document sent on demand, or a row from before this was kept.
+    Each event names the promise in whose keeping it happened, which is not
+    always one of its own kind: a seller that bills before it despatches
+    packs in keeping the invoice's.
+    """
+    return int(row["promise_id"]) or None
 
 
 def _delivery(conn, row) -> Dict[str, Any]:
@@ -229,6 +275,7 @@ def _promised(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "at": row["at"],
             "event": "promised",
             "direction": "",
+            "promise": int(row["id"]),
             "kind": row["kind"],
             "dueAt": row["due_at"],
             "doneAt": row["done_at"],
@@ -254,6 +301,7 @@ def _packed(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "event": "packed",
             "direction": "",
             "shipment": row["shipment_id"],
+            "promise": _promise(row),
             "lines": len(lines),
             "cartons": row["cartons"],
             "weight": row["weight"],
@@ -279,6 +327,7 @@ def _invoiced(conn, po_number: str, partner_id: str) -> List[Dict[str, Any]]:
             "direction": "",
             "invoice": row["invoice_number"],
             "shipment": row["shipment_id"],
+            "promise": _promise(row),
             "total": row["total"],
             "currency": row["currency"],
             "summary": "invoiced %s for %s: %s %s"

@@ -28,7 +28,8 @@ from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from . import (ack, charsets, claims, db, documents, edifact, partners,
                profiles, reconcile, remittance, schema, transactions, x12)
-from .envelope import EdiSyntaxError, Interchange, Seg, local, sniff
+from .envelope import (DocumentZone, EdiSyntaxError, Interchange, Seg, local,
+                       sniff)
 from .transactions import Party
 from .validate import (FATAL, ElementFinding, EnvelopeFinding, InterchangeReport,
                        SegmentFinding, validate, validate_message)
@@ -112,6 +113,46 @@ class Receipt:
         return self.ok and bool(self.report) and self.report.accepted > 0
 
 
+def parse_start(text: str) -> datetime.datetime:
+    """A `--start-at` value as a moment in the zone it was written in.
+
+    ISO 8601 with a `Z` or an offset. One with neither is refused: read as
+    UTC or as the host's zone it would be a guess, and the point of a start
+    time is that it means the same on every machine.
+    """
+    given = (text or "").strip()
+    try:
+        moment = datetime.datetime.fromisoformat(
+            given[:-1] + "+00:00" if given[-1:] in ("Z", "z") else given)
+    except ValueError:
+        raise ValueError(
+            "start time %r is not an ISO 8601 time such as "
+            "2026-11-02T09:00:00Z" % text) from None
+    if moment.tzinfo is None:
+        raise ValueError(
+            "start time %r says no zone; write it with Z or an offset, as "
+            "in %sZ or %s+01:00" % (text, given, given))
+    return moment.replace(tzinfo=DocumentZone(moment.utcoffset()))
+
+
+def start_text(moment: datetime.datetime) -> str:
+    """A start time as `--start-at` takes it."""
+    text = moment.replace(tzinfo=datetime.timezone(moment.utcoffset())).isoformat()
+    return text[:-6] + "Z" if text.endswith("+00:00") else text
+
+
+_EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
+
+
+def _microseconds(moment: datetime.datetime) -> int:
+    return (moment - _EPOCH) // datetime.timedelta(microseconds=1)
+
+
+def _unkept(pin) -> datetime.datetime:
+    zone = DocumentZone(datetime.timedelta(seconds=pin[1]))
+    return (_EPOCH + datetime.timedelta(microseconds=pin[0])).astimezone(zone)
+
+
 class Pipeline:
     """The mock's own behaviour as a trading partner."""
 
@@ -124,6 +165,10 @@ class Pipeline:
         # It is kept in the file as well as here, so a mock restarted on a
         # file database comes back as far ahead as it was stopped (#228).
         self._offset = db.clock_offset(self.conn)
+        # Where the clock was pinned at start, if it was (#280): it then
+        # reads this plus the advance and never the host's clock, so two
+        # runs of one script write the same times.
+        self.pin = self._pinned(config)
         # The connection tells everything that writes a stamp what time it
         # is, and it is this clock (#196): `db.now(conn)` anywhere below the
         # pipeline is `self.now()`, moved by the same advance.
@@ -151,8 +196,56 @@ class Pipeline:
         self._offset = value
         db.keep_clock_offset(self.conn, value)
 
+    def _pinned(self, config) -> Optional[datetime.datetime]:
+        """The start time this mock runs from, checked against its file.
+
+        A file remembers the clock its stamps were written by. Starting it
+        on another one - a different start time, or the host's clock for a
+        file that was pinned, or a pin for a file that has already traded by
+        the host's clock - would put later stamps before earlier ones, so
+        each of those is refused and says what the file wants.
+        """
+        text = getattr(config, "start_at", "") or ""
+        kept = db.clock_pin(self.conn)
+        if not text:
+            if kept is not None:
+                raise db.DatabaseError(
+                    "%s was started at %s and its clock stands where it was "
+                    "left; start it with --start-at %s, or use another file"
+                    % (config.db_path, start_text(_unkept(kept)),
+                       start_text(_unkept(kept))))
+            return None
+        start = parse_start(text)
+        wanted = (_microseconds(start), int(start.utcoffset().total_seconds()))
+        if kept is None:
+            if db.has_traded(self.conn):
+                raise db.DatabaseError(
+                    "%s already holds documents stamped by the host's clock, "
+                    "so it cannot be given a start time; --start-at is for a "
+                    "new file" % config.db_path)
+            db.keep_clock_pin(self.conn, wanted)
+        elif kept != wanted:
+            raise db.DatabaseError(
+                "%s was started at %s, not %s; a file keeps the clock it was "
+                "started on. Start it with --start-at %s, or use another file"
+                % (config.db_path, start_text(_unkept(kept)), start_text(start),
+                   start_text(_unkept(kept))))
+        return start
+
+    def keep_pin(self) -> None:
+        """Write the start time back into the file, after a reset cleared it."""
+        if self.pin is not None:
+            db.keep_clock_pin(self.conn, (
+                _microseconds(self.pin),
+                int(self.pin.utcoffset().total_seconds())))
+
     def now(self) -> datetime.datetime:
         """The mock's clock: the real time in UTC, plus how far it was advanced.
+
+        Pinned (`--start-at`), it is the start time plus how far it was
+        advanced, and it stands still between advances. It then carries the
+        zone the start time was written in, which is the zone its documents
+        are dated in.
 
         Aware, and the only clock anything about the conversation reads:
         every `at` as well as every `due_at`, through `db.now(conn)`.
@@ -160,6 +253,8 @@ class Pipeline:
         string comparisons in `release` and in the `unacknowledged` cutoff
         are between values of the same shape.
         """
+        if self.pin is not None:
+            return self.pin + self.offset
         return db.utcnow() + self.offset
 
     # -- inbound
@@ -270,14 +365,17 @@ class Pipeline:
         for (_group, message), message_report in zip(interchange.messages(),
                                                      report.messages):
             reference = None
+            # The shipment or invoice a filed document is, as it was read.
+            numbers: Dict[str, str] = {}
             if (message_report.kind in SUPPLIER_DOCUMENTS
                     and message_report.accepted):
                 # Only a supplier's can get here: the role table refused the
                 # same documents from a customer.
                 reference = self._file(partner, message, message_report,
-                                       dialect, receipt, interchange.control)
+                                       dialect, receipt, interchange.control,
+                                       numbers)
             self._record(interchange_id, partner, message, message_report,
-                         dialect, reference)
+                         dialect, reference, numbers)
             if (message_report.kind == schema.ORDER and message_report.accepted):
                 order = transactions.read_order(message, dialect)
                 if order.po_number:
@@ -403,7 +501,8 @@ class Pipeline:
                  "%s at %s" % (interchange.control, partner_id, seen["at"]))]
 
     def _file(self, partner: Dict[str, Any], message, message_report,
-              dialect: str, receipt: Receipt, interchange_control: str) -> str:
+              dialect: str, receipt: Receipt, interchange_control: str,
+              numbers: Dict[str, str]) -> str:
         """Match a supplier's document to the order the mock placed with it.
 
         One that names an order the mock never placed with this supplier is
@@ -415,6 +514,9 @@ class Pipeline:
         A document that is filed is also reconciled against the order (#126):
         where it disagrees goes on `message_report.disagreements`, which
         nothing that decides the 997 reads.
+
+        `numbers` is filled with the supplier's shipment or invoice number
+        when the document is filed, for the transaction set to record (#273).
         """
         kind = message_report.kind
         document = SUPPLIER_DOCUMENTS[kind](message, dialect)
@@ -428,6 +530,11 @@ class Pipeline:
                 self.conn, partner, kind, message.code, message.control,
                 interchange_control, document))
             self._promise_buyer_change(partner, kind, po_number)
+            if kind == schema.DESPATCH:
+                numbers["shipment"] = document.shipment_id
+            elif kind == schema.INVOICE:
+                numbers["invoice"] = document.invoice_number
+                numbers["shipment"] = document.shipment_id
             return po_number
         message_report.segments.append(
             _unknown_order(message, dialect, po_number, partner["id"]))
@@ -437,8 +544,10 @@ class Pipeline:
         return ""
 
     def _record(self, interchange_id: int, partner: Dict[str, Any], message,
-                message_report, dialect: str, reference: Optional[str] = None) -> str:
+                message_report, dialect: str, reference: Optional[str] = None,
+                numbers: Optional[Dict[str, str]] = None) -> str:
         """Log one inbound transaction set and what validation made of it."""
+        numbers = numbers or {}
         # A set from the wrong direction is archived, as everything received
         # is, but not under the PO number it names: it is not part of that
         # order's story, and ?reference= would otherwise show a stranger's
@@ -448,11 +557,13 @@ class Pipeline:
                          else _reference_of(message, dialect, message_report.kind))
         self.conn.execute(
             "INSERT INTO transaction_set (interchange_id, direction, dialect,"
-            " partner, code, kind, control, group_control, reference, accepted,"
-            " findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " partner, code, kind, control, group_control, reference,"
+            " shipment_id, invoice_number, accepted, findings, at, seq)"
+            " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (interchange_id, "in", dialect, partner["id"], message.code,
              message_report.kind, message.control, message_report.group_control,
-             reference, 1 if message_report.accepted else 0,
+             reference, numbers.get("shipment", ""), numbers.get("invoice", ""),
+             1 if message_report.accepted else 0,
              json.dumps(_findings(message_report)), db.now(self.conn),
              db.next_seq(self.conn)))
         self.conn.commit()
@@ -767,7 +878,8 @@ class Pipeline:
         order = documents.order_row(self.conn, po_number, partner["id"])
         body = transactions.write_change(partner["dialect"], self.us, partner,
                                          order, change, moment)
-        self._send(partner, schema.CHANGE, body, po_number, receipt, moment)
+        self._send(partner, schema.CHANGE, body, po_number, receipt, moment,
+                   promise=int(row["id"]))
 
     def _fulfil(self, row, moment, receipt: Optional[Receipt] = None) -> None:
         """Keep one promise: pack the goods, or bill for them.
@@ -780,6 +892,9 @@ class Pipeline:
         if partner is None:
             return
         po_number = row["po_number"]
+        # What is packed, billed and sent below is done in keeping this
+        # promise, and says so (#211).
+        promise = int(row["id"])
 
         if row["kind"] in (CHANGE_LINE, CANCEL_ORDER):
             self._send_buyer_change(row, moment, receipt)
@@ -787,7 +902,7 @@ class Pipeline:
 
         if row["kind"] == schema.DESPATCH:
             shipment = documents.create_shipment(self.conn, po_number,
-                                                 partner["id"], moment)
+                                                 partner["id"], moment, promise)
             if shipment is None:
                 return
             order = documents.order_row(self.conn, po_number, partner["id"])
@@ -795,7 +910,8 @@ class Pipeline:
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order, lines, shipment,
                 moment)
-            self._send(partner, schema.DESPATCH, body, po_number, receipt, moment)
+            self._send(partner, schema.DESPATCH, body, po_number, receipt, moment,
+                       shipment=shipment["shipment_id"], promise=promise)
             if partner["behaviour"] == "out-of-order" and not self._sent(
                     partner["id"], schema.RESPONSE, po_number):
                 self._queue_response(partner, order, receipt, moment)
@@ -812,12 +928,12 @@ class Pipeline:
         # to come, and this invoice bills what has shipped and no more (#222).
         if not self._packing_is_promised(partner, po_number):
             documents.create_shipment(self.conn, po_number, partner["id"],
-                                      moment)
+                                      moment, promise)
         for shipment in documents.uninvoiced_shipments(self.conn, po_number,
                                                        partner["id"]):
             invoice = documents.create_invoice(
                 self.conn, po_number, partner["id"], shipment["shipment_id"],
-                moment, self.config.tax_rate)
+                moment, self.config.tax_rate, promise)
             if invoice is None:
                 continue
             order = documents.order_row(self.conn, po_number, partner["id"])
@@ -825,13 +941,17 @@ class Pipeline:
             body = transactions.write_invoice(
                 partner["dialect"], self.us, partner, order, lines, invoice,
                 shipment, moment)
-            self._send(partner, schema.INVOICE, body, po_number, receipt, moment)
+            numbers = {"invoice": invoice["invoice_number"],
+                       "shipment": invoice["shipment_id"], "promise": promise}
+            self._send(partner, schema.INVOICE, body, po_number, receipt, moment,
+                       **numbers)
             if partner["behaviour"] == "duplicate-invoice":
                 # The same invoice number, sent twice, a few moments apart: a
                 # partner with a retry bug, which is where duplicate-payment
                 # incidents come from.
                 self._send(partner, schema.INVOICE, body, po_number, receipt,
-                           moment, 1000, note="duplicate of the invoice above")
+                           moment, 1000, note="duplicate of the invoice above",
+                           **numbers)
 
     def _packing_is_promised(self, partner, po_number) -> bool:
         """Whether a despatch and an invoice after it still wait for the order.
@@ -889,8 +1009,14 @@ class Pipeline:
     def _send(self, partner: Dict[str, Any], kind: str, body: Sequence[Seg],
               reference: str, receipt: Optional[Receipt],
               moment: datetime.datetime, delay_ms: int = 0,
-              dialect: str = "", note: str = "") -> Queued:
-        """Envelope a document, number it, and put it in the queue."""
+              dialect: str = "", note: str = "", shipment: str = "",
+              invoice: str = "", promise: int = 0) -> Queued:
+        """Envelope a document, number it, and put it in the queue.
+
+        `shipment` and `invoice` are the consignment and the invoice the
+        document was written from, for the timeline to name (#273), and
+        `promise` the promise it is sent in keeping, if any (#211).
+        """
         delay_ms += self._lateness(partner)
         dialect = dialect or partner["dialect"]
         code = schema.set_code(dialect, kind)
@@ -932,12 +1058,18 @@ class Pipeline:
                 [message], self.config.as2_id, partner_id, interchange_control,
                 sender_qualifier=self.config.qualifier,
                 receiver_qualifier=partner["qualifier"], moment=moment,
+                # The syntax the partner is set to, not the one the mock
+                # happens to default to. `render` fits every value to the
+                # character set this declares (#199), so a UNOY partner keeps
+                # the characters a UNOC answer used to substitute away (#263).
+                syntax=partner["syntax"] or "UNOC",
                 test=bool(partner["test"]))
             payload = edifact.render(interchange, newline=self.config.pretty)
 
         return self._enqueue(partner_id, dialect, code, kind, reference, payload,
                              interchange_control, group_control, set_control,
-                             receipt, moment, delay_ms, note)
+                             receipt, moment, delay_ms, note, shipment, invoice,
+                             promise)
 
     @staticmethod
     def _lateness(partner) -> int:
@@ -1002,17 +1134,20 @@ class Pipeline:
                  reference: str, payload: str, interchange_control: str,
                  group_control: str, set_control: str,
                  receipt: Optional[Receipt], moment: datetime.datetime,
-                 delay_ms: int = 0, note: str = "") -> Queued:
+                 delay_ms: int = 0, note: str = "", shipment: str = "",
+                 invoice: str = "", promise: int = 0) -> Queued:
         message_id = "<%s.%s@%s>" % (
             db.next_number(self.conn, "message"), code, self.config.as2_id)
         due = moment + datetime.timedelta(milliseconds=delay_ms)
         cursor = self.conn.execute(
             "INSERT INTO outbound (partner, dialect, code, kind, reference,"
-            " payload, message_id, control, group_control, set_control, status,"
-            " due_at, note, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+            " payload, message_id, control, group_control, set_control,"
+            " shipment_id, invoice_number, promise_id, status, due_at, note,"
+            " at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
             (partner_id, dialect, code, kind, reference, payload, message_id,
-             interchange_control, group_control, set_control, PENDING,
-             db.stamp(due), note, db.now(self.conn), db.next_seq(self.conn)))
+             interchange_control, group_control, set_control, shipment, invoice,
+             promise, PENDING, db.stamp(due), note, db.now(self.conn),
+             db.next_seq(self.conn)))
         self.conn.commit()
 
         queued = Queued(id=int(cursor.lastrowid), kind=kind, code=code,
@@ -1063,6 +1198,7 @@ class Pipeline:
             raise ValueError("purchase order %s is one the mock placed; the "
                              "supplier answers it, not the mock" % po_number)
         lines = documents.order_lines(self.conn, po_number, partner_id)
+        numbers: Dict[str, str] = {}
 
         if kind == schema.RESPONSE:
             body = transactions.write_response(
@@ -1075,6 +1211,7 @@ class Pipeline:
             body = transactions.write_despatch(
                 partner["dialect"], self.us, partner, order,
                 self._lines_of(shipment, po_number, partner_id), shipment, moment)
+            numbers = {"shipment": shipment.get("shipment_id", "")}
         elif kind == schema.INVOICE:
             shipment = self._consignment(partner_id, po_number, shipment_id)
             # The invoice asked for: the named consignment's, or the latest.
@@ -1099,11 +1236,14 @@ class Pipeline:
                 partner["dialect"], self.us, partner, order,
                 self._lines_of(shipment, po_number, partner_id), invoice,
                 shipment, moment)
+            numbers = {"invoice": invoice["invoice_number"],
+                       "shipment": invoice["shipment_id"]}
         else:
             raise ValueError("unknown document kind %r; known: %s"
                              % (kind, ", ".join(FOLLOW_UPS)))
 
-        queued = self._send(partner, kind, body, po_number, None, moment, delay_ms)
+        queued = self._send(partner, kind, body, po_number, None, moment, delay_ms,
+                            **numbers)
         self.release(self.now())
         return queued
 
@@ -1296,10 +1436,12 @@ class Pipeline:
             self.conn.execute(
                 "INSERT INTO transaction_set (interchange_id, direction, dialect,"
                 " partner, code, kind, control, group_control, reference,"
-                " accepted, findings, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
+                " shipment_id, invoice_number, promise_id, accepted, findings,"
+                " at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
                 (interchange_id, "out", row["dialect"], row["partner"], row["code"],
                  row["kind"], row["set_control"], row["group_control"],
-                 row["reference"], 1, "", sent_at, sent_seq))
+                 row["reference"], row["shipment_id"], row["invoice_number"],
+                 row["promise_id"], 1, "", sent_at, sent_seq))
             self.conn.execute(
                 "UPDATE outbound SET status = ?, released_at = ? WHERE id = ?",
                 (READY, db.now(self.conn), row["id"]))
@@ -1309,15 +1451,22 @@ class Pipeline:
             self.on_release(released)
         return released
 
-    def redeliver(self, outbound_id: int = 0, partner_id: str = "") -> List[int]:
-        """Hand failed deliveries back to the courier, unchanged.
+    def redeliver(self, outbound_id: int = 0, partner_id: str = "",
+                  again: bool = False) -> List[int]:
+        """Hand deliveries back to the courier, unchanged.
 
-        Not a resend: `/_mock/send` builds a *new* document with a *new*
-        control number, which is a different event on the wire. This is the
-        same bytes and the same control numbers going out a second time,
-        which is what happens when a partner's listener was down and their
-        AS2 software retried - and the only way to test that a listener is
-        idempotent about a control number it has already seen.
+        Not `/_mock/send`, which writes a *new* document with a *new* control
+        number, a different event on the wire. This is the same bytes and the
+        same control numbers going out a second time, which is what happens
+        when a partner's listener was down and their AS2 software retried -
+        and the only way to test that a listener is idempotent about a
+        control number it has already seen.
+
+        Failed deliveries only, unless `again`: then one that was delivered,
+        or collected from the mailbox, goes out a second time too (#262).
+        That is the idempotency case itself - a listener that got the
+        document and is given it again - which retrying a failure never
+        reaches, because a delivery that failed may not have arrived at all.
 
         The document is not released again: it was released once, and its
         interchange and transaction set are already recorded. Only its
@@ -1325,7 +1474,9 @@ class Pipeline:
 
         Nothing here runs on a timer. A test that wants a retry asks for one.
         """
-        clauses, params = ["status = ?"], [FAILED]
+        wanted = (FAILED, DELIVERED, COLLECTED) if again else (FAILED,)
+        clauses = ["status IN (%s)" % ",".join("?" * len(wanted))]
+        params: List[Any] = list(wanted)
         if outbound_id:
             clauses.append("id = ?")
             params.append(outbound_id)
@@ -1341,7 +1492,7 @@ class Pipeline:
         self.conn.execute(
             "UPDATE outbound SET status = ?, note = ? WHERE id IN (%s)"
             % ",".join("?" * len(ids)),
-            tuple([READY, "redelivering"] + ids))
+            tuple([READY, "sending again" if again else "redelivering"] + ids))
         self.conn.commit()
         if self.on_release is not None:
             self.on_release(ids)

@@ -51,6 +51,7 @@ which records what the mock asked for and nothing else.
 from __future__ import annotations
 
 import datetime
+import decimal
 import math
 import sqlite3
 from dataclasses import dataclass, field
@@ -75,6 +76,8 @@ FINISHED = ("invoiced", "cancelled", "rejected")
 PRICE_CHANGED = "IP"
 UNITS_PER_CARTON = 24
 SHORT_SHIP_FRACTION = Decimal("0.8")
+# What an over-shipping seller packs for each unit it confirmed (#212).
+OVER_SHIP_FRACTION = Decimal("1.3")
 
 
 def record_order(conn: sqlite3.Connection, partner: Dict[str, Any], order: Order,
@@ -226,6 +229,40 @@ def place_order(conn: sqlite3.Connection, partner: Dict[str, Any], us,
 CHANGE_ACTIONS = {"add": "AI", "change": "CA", "delete": "DI"}
 
 
+def _refuse_an_unwritable_change_number(conn, partner_id: str, po_number: str,
+                                        sequence: str) -> None:
+    """Refuse a change the ORDCHG could not carry the number of (#186).
+
+    An ORDCHG identifies itself by the order's number and the sequence
+    together, in BGM's 1004, which D.96A makes `an..35`. A long enough order
+    number overflows it, and then the mock would write a document its own
+    dictionary reports - the fault #291 is about, one element over. Refused at
+    the door instead, the way `/_mock/purchase` refuses what the dictionary
+    would reject (#237).
+
+    EDIFACT only. The 860 carries the sequence in `BCH05` on its own and the
+    order number in `BCH03`, so nothing is packed together and nothing
+    overflows; refusing an X12 change for an EDIFACT limit would be a lie
+    about the document being written.
+    """
+    from . import schema, transactions
+    row = conn.execute("SELECT dialect FROM partner WHERE id = ?",
+                       (partner_id,)).fetchone()
+    if row is None or row["dialect"] != "EDIFACT":
+        return
+    # The width is the dictionary's, read rather than repeated.
+    limit = schema.BGM.elements[1].max_len
+    number = transactions.change_number(po_number, sequence)
+    if len(number) <= limit:
+        return
+    raise Refused([
+        "an ORDCHG for %s would be numbered %r, which is %d characters; "
+        "BGM's 1004 allows %d. A change request is numbered by the order and "
+        "the sequence together, so an order number of %d characters leaves "
+        "no room for one. Place the order under a shorter number."
+        % (po_number, number, len(number), limit, len(po_number))])
+
+
 def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                   request: Dict[str, Any],
                   when: Optional[datetime.datetime] = None):
@@ -249,6 +286,9 @@ def change_placed(conn: sqlite3.Connection, po_number: str, partner_id: str,
                     currency=order["currency"],
                     sequence=str(db.next_number(conn, "purchase_change",
                                                 "%s/%s" % (partner_id, po_number))))
+
+    _refuse_an_unwritable_change_number(conn, partner_id, po_number,
+                                        change.sequence)
 
     if not isinstance(request.get("cancel", False), bool):
         # "no" is a string, and a string is true.
@@ -565,7 +605,8 @@ def consignment_lines(conn: sqlite3.Connection,
 # ---------------------------------------------------------------------------
 
 def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
-                    when: Optional[datetime.datetime] = None) -> Optional[Dict[str, Any]]:
+                    when: Optional[datetime.datetime] = None,
+                    promise: int = 0) -> Optional[Dict[str, Any]]:
     """Pack what has been confirmed and not yet shipped.
 
     Returns the shipment a despatch advice should name, which is not always a
@@ -600,6 +641,9 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
         # consignment to name, not another one.
         return latest_shipment(conn, po_number, partner_id) or None
 
+    if _behaviour(conn, partner_id) == "over-ship":
+        shipping = [(row, over_shipped(delta)) for row, delta in shipping]
+
     units = sum(delta for _row, delta in shipping)
     shipment_id = "SHP%d" % db.next_number(conn, "shipment")
     for row, delta in shipping:
@@ -613,17 +657,41 @@ def create_shipment(conn: sqlite3.Connection, po_number: str, partner_id: str,
 
     conn.execute(
         "INSERT INTO shipment (shipment_id, po_number, partner, shipped_on, carrier,"
-        " scac, tracking, bol, cartons, weight, at, seq)"
-        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+        " scac, tracking, bol, cartons, weight, promise_id, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (shipment_id, po_number, order["partner"], local(moment).date().isoformat(),
          "United Parcel Service", "UPSN", _tracking(shipment_id),
          str(db.next_number(conn, "bol")),
          max(1, int(math.ceil(float(units) / UNITS_PER_CARTON))),
-         quantity_text(units * 2), db.now(conn), db.next_seq(conn)))
+         quantity_text(units * 2), promise, db.now(conn), db.next_seq(conn)))
     conn.execute("UPDATE purchase_order SET status = 'shipped'"
                  " WHERE partner = ? AND po_number = ?", (partner_id, po_number))
     conn.commit()
     return shipment_row(conn, shipment_id)
+
+
+def over_shipped(quantity: Decimal) -> Decimal:
+    """What an over-shipping seller packs where it should have packed `quantity`.
+
+    Three in ten more, rounded up to a whole unit, and never less than one
+    whole unit extra: 100 is 130, 10 is 13, and 1 is 2. A quantity that is
+    not whole stays not whole when the one extra unit is what applies - half
+    a kilogram is a kilogram and a half - since a weight ships in fractions
+    and rounding it would bill for goods that were never packed. The
+    acknowledgment said the
+    ordered quantity, which is how a real over-shipment goes - the warehouse
+    packed a full carton, and the buyer finds out from the ship notice and
+    at the dock, not from a promise (#212).
+    """
+    more = (quantity * OVER_SHIP_FRACTION).to_integral_value(
+        rounding=decimal.ROUND_CEILING)
+    return max(more, quantity + 1)
+
+
+def _behaviour(conn: sqlite3.Connection, partner_id: str) -> str:
+    row = conn.execute("SELECT behaviour FROM partner WHERE id = ?",
+                       (partner_id,)).fetchone()
+    return row["behaviour"] if row else ""
 
 
 def _tracking(shipment_id: str) -> str:
@@ -639,7 +707,8 @@ def _tracking(shipment_id: str) -> str:
 def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
                    shipment_id: str = "",
                    when: Optional[datetime.datetime] = None,
-                   tax_rate: str = "0") -> Optional[Dict[str, Any]]:
+                   tax_rate: str = "0",
+                   promise: int = 0) -> Optional[Dict[str, Any]]:
     """Invoice one consignment, at the price the acknowledgment confirmed.
 
     One invoice per consignment, so each 810 names the one shipment it bills
@@ -669,11 +738,12 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
     conn.execute(
         "INSERT INTO invoice (invoice_number, po_number, partner, shipment_id,"
         " invoiced_on, currency, subtotal, tax, total, terms_days, discount_pct,"
-        " discount_days, at, seq) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
+        " discount_days, promise_id, at, seq)"
+        " VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)",
         (invoice_number, po_number, order["partner"], shipment_id,
          local(moment).date().isoformat(), order["currency"], db.money(subtotal),
-         db.money(tax), db.money(subtotal + tax), 30, "2", 10, db.now(conn),
-         db.next_seq(conn)))
+         db.money(tax), db.money(subtotal + tax), 30, "2", 10, promise,
+         db.now(conn), db.next_seq(conn)))
     billed_total = sum((number(row["total"], "0.00") for row in db.rows(
         conn, "SELECT total FROM invoice WHERE partner = ? AND po_number = ?",
         (partner_id, po_number))), Decimal("0.00"))

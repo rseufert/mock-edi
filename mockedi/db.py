@@ -27,6 +27,7 @@ import sqlite3
 from decimal import Decimal
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
 
+from .envelope import DocumentZone
 from .money import cents
 
 SCHEMA = """
@@ -36,6 +37,14 @@ CREATE TABLE IF NOT EXISTS partner (
     qualifier    TEXT NOT NULL DEFAULT 'ZZ',
     dialect      TEXT NOT NULL DEFAULT 'X12',
     version      TEXT NOT NULL DEFAULT '004010',
+    -- The syntax identifier an EDIFACT answer declares in UNB S001, and so
+    -- the character set it is written in. Set per partner rather than read
+    -- back off the mock's own UNB, which answered UNOC whatever the partner
+    -- had declared; and configured rather than mirrored from the last
+    -- inbound interchange, so that what a partner receives does not depend
+    -- on which document arrived first (#263). Ignored for X12, which
+    -- declares no character set at all.
+    syntax       TEXT NOT NULL DEFAULT 'UNOC',
     behaviour    TEXT NOT NULL DEFAULT 'accept',
     as2_url      TEXT NOT NULL DEFAULT '',
     mdn_mode     TEXT NOT NULL DEFAULT 'sync',
@@ -99,6 +108,15 @@ CREATE TABLE IF NOT EXISTS transaction_set (
     control        TEXT NOT NULL DEFAULT '',
     group_control  TEXT NOT NULL DEFAULT '',
     reference      TEXT NOT NULL DEFAULT '',
+    -- The business document the set carries, where it is one consignment's:
+    -- the shipment an 856 advises, the invoice an 810 is and the shipment it
+    -- bills. Recorded from the row the document was written from, or from
+    -- the supplier's document as it was read; never parsed back out of the
+    -- payload. Empty for other sets, and for rows from before 0.8.0 (#273).
+    shipment_id    TEXT NOT NULL DEFAULT '',
+    invoice_number TEXT NOT NULL DEFAULT '',
+    -- The promise the mock sent this in keeping, or 0 for none (#211).
+    promise_id     INTEGER NOT NULL DEFAULT 0,
     accepted       INTEGER NOT NULL DEFAULT 1,
     findings       TEXT NOT NULL DEFAULT '',
     -- Filled in when the other side acknowledges a document we sent.
@@ -206,6 +224,9 @@ CREATE TABLE IF NOT EXISTS shipment (
     bol          TEXT NOT NULL DEFAULT '',
     cartons      INTEGER NOT NULL DEFAULT 0,
     weight       TEXT NOT NULL DEFAULT '0',
+    -- The promise (`scheduled.id`) this was done in keeping, or 0 for none:
+    -- sent on demand, or written before promises were recorded (#211).
+    promise_id   INTEGER NOT NULL DEFAULT 0,
     at           TEXT NOT NULL,
     seq          INTEGER NOT NULL DEFAULT 0
 );
@@ -232,6 +253,9 @@ CREATE TABLE IF NOT EXISTS invoice (
     terms_days     INTEGER NOT NULL DEFAULT 30,
     discount_pct   TEXT NOT NULL DEFAULT '0',
     discount_days  INTEGER NOT NULL DEFAULT 0,
+    -- The promise (`scheduled.id`) this was done in keeping, or 0 for none:
+    -- sent on demand, or written before promises were recorded (#211).
+    promise_id     INTEGER NOT NULL DEFAULT 0,
     at             TEXT NOT NULL,
     seq            INTEGER NOT NULL DEFAULT 0
 );
@@ -251,6 +275,10 @@ CREATE TABLE IF NOT EXISTS outbound (
     control      TEXT NOT NULL DEFAULT '',
     group_control TEXT NOT NULL DEFAULT '',
     set_control  TEXT NOT NULL DEFAULT '',
+    -- Carried to the transaction set when the document is released (#273).
+    shipment_id  TEXT NOT NULL DEFAULT '',
+    invoice_number TEXT NOT NULL DEFAULT '',
+    promise_id   INTEGER NOT NULL DEFAULT 0,
     status       TEXT NOT NULL DEFAULT 'pending',
     due_at       TEXT NOT NULL,
     released_at  TEXT NOT NULL DEFAULT '',
@@ -411,7 +439,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 12
+SCHEMA_VERSION = 15
 
 
 class DatabaseError(Exception):
@@ -658,6 +686,35 @@ def keep_clock_offset(conn: sqlite3.Connection,
     conn.commit()
 
 
+def clock_pin(conn: sqlite3.Connection) -> Optional[Tuple[int, int]]:
+    """Where the file's clock was pinned: `(microseconds since 1970, zone in seconds)`.
+
+    None for a file whose clock follows the host's. Kept beside the advance,
+    for the same reason: a mock restarted on its file has to come back on the
+    clock its stamps were written by (#280).
+    """
+    rows = {row["scope"]: int(row["value"]) for row in conn.execute(
+        "SELECT scope, value FROM control_number WHERE partner = '*'"
+        " AND scope IN ('pin', 'pin-zone')")}
+    if "pin" not in rows:
+        return None
+    return rows["pin"], rows.get("pin-zone", 0)
+
+
+def keep_clock_pin(conn: sqlite3.Connection, pin: Tuple[int, int]) -> None:
+    for scope, value in zip(("pin", "pin-zone"), pin):
+        conn.execute(
+            "INSERT OR REPLACE INTO control_number (partner, scope, value)"
+            " VALUES ('*', ?, ?)", (scope, value))
+    conn.commit()
+
+
+def has_traded(conn: sqlite3.Connection) -> bool:
+    """Whether the file holds anything stamped by a clock."""
+    return any(conn.execute("SELECT 1 FROM %s LIMIT 1" % table).fetchone()
+               for table in ("interchange", "outbound", "scheduled"))
+
+
 def next_seq(conn: sqlite3.Connection) -> int:
     """The next step in the one sequence the timeline is ordered by (#195).
 
@@ -693,6 +750,19 @@ def next_seq(conn: sqlite3.Connection) -> int:
 #
 # The dates on the wire - ISA09/10, GS04/05, UNB S004 - are a different
 # matter and stay local, as the standards' long convention has them.
+
+def today(conn: sqlite3.Connection) -> datetime.date:
+    """The date the mock would write on a document now.
+
+    The host's date, unless the clock is pinned: then the pinned clock's
+    date in its own zone, so that what is seeded on a pinned mock is dated
+    the same on every run (#280).
+    """
+    moment = conn.clock()
+    if isinstance(moment.tzinfo, DocumentZone):
+        return moment.date()
+    return datetime.date.today()
+
 
 def utcnow() -> datetime.datetime:
     """The current moment, aware and in UTC."""
@@ -800,6 +870,9 @@ BEHAVIOURS = {
     "accept": "Acknowledge everything in full and ship what was ordered.",
     "short-ship": "Confirm less than was ordered on some lines (855 IQ), and "
                   "ship and invoice the confirmed quantity.",
+    "over-ship": "Confirm every line as ordered (855 IA), then ship three in "
+                 "ten more than was confirmed on every line, and invoice "
+                 "what shipped.",
     "reject-line": "Reject one line outright (855 IR) and leave it out of the "
                    "shipment and the invoice.",
     "reject-all": "Acknowledge the syntax, then refuse the order (855 RD).",
@@ -848,6 +921,7 @@ SUPPLIER_ONLY = ("supplier",)
 BEHAVIOUR_ROLES = {
     "accept": BOTH,
     "short-ship": CUSTOMER_ONLY,
+    "over-ship": CUSTOMER_ONLY,
     "reject-line": CUSTOMER_ONLY,
     "reject-all": CUSTOMER_ONLY,
     "no-ack": BOTH,
@@ -949,11 +1023,11 @@ def seed(conn: sqlite3.Connection, seed_value: int = 42, us_id: str = "MOCKEDI")
 
 def _seed_history(conn: sqlite3.Connection, rng: random.Random) -> None:
     """Two finished orders, so the document endpoints are not empty on a cold start."""
-    today = datetime.date.today()
+    seeded_on = today(conn)
     finished = [
-        ("ACME", "4500000871", today - datetime.timedelta(days=14),
+        ("ACME", "4500000871", seeded_on - datetime.timedelta(days=14),
          [("WIDGET-001", 240), ("BRKT-050", 500)]),
-        ("EURODIS", "PO-2026-00412", today - datetime.timedelta(days=9),
+        ("EURODIS", "PO-2026-00412", seeded_on - datetime.timedelta(days=9),
          [("PANEL-A4", 12), ("CABLE-5M", 80)]),
     ]
     prices = {sku: price for sku, _desc, price, _uom, _stock in CATALOG}

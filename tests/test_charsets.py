@@ -125,12 +125,16 @@ class WhatTheCharsetCannotCarry(CharsetCase):
         self.assertEqual(elements[7], "90-001")
         self.assertEqual(elements[8], "PL")
 
-    def test_the_city_reads_as_a_question_mark_not_as_an_escape(self):
+    def test_the_city_reads_as_a_name_and_not_as_an_escape(self):
+        """It read `?\u00f3d?`, a literal question mark for each letter UNOC
+        lacks. Those letters are now said plainly (#264): the `\u00f3` UNOC
+        has is untouched, and nothing is left to be mistaken for a release
+        character. What still cannot be said at all is held, with the
+        doubling, in `test_unoa_repertoire`."""
         self.order()
         text, elements = self.nad()
-        # Doubled on the wire, single when read: a literal question mark.
-        self.assertIn("??\u00f3d??", text)
-        self.assertEqual(elements[5], "?\u00f3d?")
+        self.assertEqual(elements[5], "L\u00f3dz")
+        self.assertNotIn("?", text)
 
     def test_every_document_that_names_this_partner_is_the_same(self):
         # Not the DESADV: its delivery party is the order's ship-to, which
