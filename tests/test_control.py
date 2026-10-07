@@ -8,7 +8,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import ACME, EURODIS, FileDatabaseCase, MockServerCase, x12_order
+from mockedi.envelope import local
+
+from support import (ACME, EURODIS, FileDatabaseCase, MockServerCase, frozen,
+                     x12_order)
 
 
 class Health(MockServerCase):
@@ -160,17 +163,30 @@ class TheClockMoves(MockServerCase):
         self.assertIn("T", data["clock"])
 
     def test_documents_are_dated_by_the_moved_clock(self):
+        """The invoice carries the date the mock's clock says, three days on.
+
+        The date is asked of the mock's own clock, held still, and not of
+        the host's calendar. This used to take today's date either side of
+        sending the order and add three days - but the invoice is raised 90
+        seconds later, so run in the last 90 seconds of a day it was dated
+        the day after the test expected, correctly, and eight CI jobs in
+        step failed at once (#323).
+        """
         import datetime
-        self.post("/_mock/advance?seconds=%d" % (3 * 86400))
-        before = datetime.date.today()
-        self.send(x12_order("PO-LATER-DATE"))
-        after = datetime.date.today()
-        self.post("/_mock/advance?seconds=90")
-        invoice = self.document(ACME, "invoice").groups[0].messages[0]
+        with frozen():
+            started = datetime.date.today()
+            self.post("/_mock/advance?seconds=%d" % (3 * 86400))
+            self.send(x12_order("PO-LATER-DATE"))
+            _s, _h, moved = self.post("/_mock/advance?seconds=90")
+            invoice = self.document(ACME, "invoice").groups[0].messages[0]
         dated = invoice.find("BIG").get(1)
-        expected = {(day + datetime.timedelta(days=3)).strftime("%Y%m%d")
-                    for day in (before, after)}
-        self.assertIn(dated, expected)
+        clock = datetime.datetime.fromisoformat(moved["clock"])
+        self.assertEqual(dated, local(clock).strftime("%Y%m%d"))
+        # And that is the moved clock, not the host's: three days on, or
+        # four where the 90 seconds crossed midnight.
+        ahead = (datetime.datetime.strptime(dated, "%Y%m%d").date()
+                 - started).days
+        self.assertIn(ahead, (3, 4))
 
     def test_a_reset_puts_the_clock_back(self):
         self.post("/_mock/advance?seconds=3600")
