@@ -13,6 +13,69 @@ Entries waiting for a release are one file each in
 cannot conflict. `tools/check_changelog.py --release X.Y.Z` assembles them
 into a dated section here.
 
+## [0.9.0] - 2026-10-07
+
+0.9.0 is the release where a backorder is kept. An order for more than the
+catalogue has in stock used to be confirmed for what there was, given a date,
+and never heard of again; now the balance ships on that date as a second
+consignment, with a despatch advice and an invoice of its own, so a buyer can
+test two payables against one purchase order and a second invoice that is not
+the first arriving again. And while the balance waits the buyer can still
+lower or cancel it, even after the first consignment is invoiced.
+
+**Both change what the mock sends, so read them before upgrading.** An order
+that asks for more than is in stock now gets a second 856 and 810 where it
+got one of each, a different reason on its 855 or ORDRSP, and
+`/_mock/advance?all` moves the clock to the backorder's day. A change that
+only lowers a waiting balance is answered with an 865 or ORDRSP where it was
+refused. Orders within stock, and `short-ship`, are sent exactly as before.
+The database schema is version 16 and an older file is upgraded in place; a
+line confirmed short before the upgrade is not backordered by it.
+
+### Changed
+
+- **The balance of a line confirmed short of stock now ships, on the date the
+  line was given** ([#335]). An order for more than the catalogue holds -
+  100 of `PANEL-A3`, which has 35 - was confirmed `IQ` for what there was,
+  with a date and the reason "the balance is not available", and the rest
+  was never heard of again. The balance is now backordered: the reason reads
+  `Confirmed 35 of 100; 65 to follow on 2026-10-09`, the line carries
+  `backordered`, and `/_mock/scheduled` holds a `backorder` promised for the
+  start of that day. When the clock reaches it the balance goes out as a
+  second consignment, with a shipment number, an 856, an invoice number and
+  an 810 of its own.
+  **This puts a second despatch advice and a second invoice on the wire for
+  every order that asks for more than is in stock**, where there was one of
+  each, and changes the reason on its 855 or ORDRSP. `/_mock/advance?all`
+  moves the clock to the backorder's day for such an order, since that is
+  now the last thing due. A change, a restated order and a cancellation
+  close the promise as they close a despatch.
+  A line with no stock at all (`IB`) is the same with a first consignment of
+  nothing, and its order waits as `received` where it was `rejected`; no
+  seeded item is out of stock, so that needs a catalogue the mock was not
+  started with. `short-ship` is unchanged: it promises no balance and sends
+  none. The database schema is version 16, for `order_line.backordered`; an
+  older file is upgraded in place.
+
+- **A balance waiting for stock can be lowered or cancelled after the order
+  is invoiced** ([#337]). With no delays an order is invoiced as soon as its
+  first consignment is billed, and a change to an invoiced order is refused,
+  so a buyer told "65 to follow" who no longer wanted them could not say so:
+  the change was refused and the 65 shipped and were billed on the day. A
+  change that only lowers a waiting line's quantity, to no less than the line
+  has confirmed, is now taken. Lowered to what is confirmed, the `backorder`
+  promise is closed unkept and nothing more ships; lowered part-way, the
+  smaller balance ships on the day. A line waiting whole, with nothing
+  shipped, can be deleted. The 865 or ORDRSP says what came off:
+  `65 no longer to follow, at the buyer's request`.
+  **So an 865 or ORDRSP is now sent where there was a refusal.** Anything
+  else in a change to an invoiced order - a line with nothing waiting, a
+  quantity raised or lowered below what shipped, another price, a new line,
+  cancelling the order - still refuses the whole change with nothing
+  applied, and where the order has something waiting the refusal adds "only
+  a quantity still waiting for stock can be lowered or cancelled". An
+  invoiced order with nothing waiting is refused in the words it always was.
+
 ## [0.8.0] - 2026-10-06
 
 0.8.0 is the release where the dictionary matches the standards it names, in
@@ -2264,7 +2327,10 @@ documents a real one sends.
 [#319]: https://github.com/rseufert/mock-edi/issues/319
 [#322]: https://github.com/rseufert/mock-edi/issues/322
 [#325]: https://github.com/rseufert/mock-edi/issues/325
-[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.8.0...HEAD
+[#335]: https://github.com/rseufert/mock-edi/issues/335
+[#337]: https://github.com/rseufert/mock-edi/issues/337
+[Unreleased]: https://github.com/rseufert/mock-edi/compare/v0.9.0...HEAD
+[0.9.0]: https://github.com/rseufert/mock-edi/compare/v0.8.0...v0.9.0
 [0.8.0]: https://github.com/rseufert/mock-edi/compare/v0.7.0...v0.8.0
 [0.7.0]: https://github.com/rseufert/mock-edi/compare/v0.6.0...v0.7.0
 [0.6.0]: https://github.com/rseufert/mock-edi/compare/v0.5.0...v0.6.0
