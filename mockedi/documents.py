@@ -842,8 +842,9 @@ def create_invoice(conn: sqlite3.Connection, po_number: str, partner_id: str,
 # The rule that matters, and the one most likely to be wrong in real code:
 # **a change cannot unmake what has already happened.**  A quantity cannot be
 # lowered below what has shipped, a shipped line cannot be deleted, and an
-# order that has been invoiced cannot be changed at all.  Everything else here
-# is bookkeeping.
+# order that has been invoiced cannot be changed - except in what has not
+# happened to it yet, the balance still waiting for stock (#337).  Everything
+# else here is bookkeeping.
 #
 # The window in which a change is possible is the window before despatch, so a
 # mock running with no delays - where an order is invoiced before the POST

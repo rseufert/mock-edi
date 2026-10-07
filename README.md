@@ -1049,6 +1049,19 @@ Three things follow from it being a promise like any other:
   day. A line lowered to what is in stock, an order restated, and an order
   cancelled each close the promise unkept, and `/_mock/scheduled?all` says
   why.
+- **A waiting balance can be lowered or cancelled, even on an invoiced
+  order.** With no delays the order is invoiced as soon as its first
+  consignment is billed, and an invoiced order takes no changes - except
+  for what has not happened yet. An 860 or ORDCHG that only lowers a line's
+  quantity, to no less than the line has confirmed, takes the difference off
+  the backorder: lowered to what is confirmed, the promise is closed unkept
+  and nothing more ships; lowered part-way, the smaller balance ships on the
+  day. The 865 or ORDRSP says what came off. A line waiting whole, with
+  nothing shipped, can be deleted. Anything else in the change - a line
+  with nothing waiting, a quantity raised or lowered below what shipped, a
+  price, a new line, cancelling the order - and the whole change is
+  refused, with nothing in it applied, in words that say what may still be
+  asked.
 - **An order with no stock for any line waits** as `received`; it is not
   refused, and ships whole on its day.
 
