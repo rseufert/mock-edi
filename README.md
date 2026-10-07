@@ -57,6 +57,10 @@ pip install mock-edi
 mock-edi --port 8080
 ```
 
+`8080` is the default, so plain `mock-edi` listens there too. The three mocks
+keep distinct defaults - mock-sap on `8000`, mock-edi on `8080`, mock-bank on
+`8090` - so all three run side by side with no flag to pass.
+
 ```bash
 curl -X POST --data-binary @order.edi http://127.0.0.1:8080/edi
 ```
