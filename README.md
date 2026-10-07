@@ -321,12 +321,13 @@ the apostrophe a word processor curls is an apostrophe (`O’Brien` is
 no-break space is a space and `…` is three full stops where there is room.
 One rule is not CLDR's: a soft hyphen is dropped, where that table makes it a
 hyphen. It marks where a line may break and is not a character of the name,
-and a name is matched, not displayed - `Gross-handel` is nobody's customer. X12 declares no character set and is not touched. One place the
-two rules above meet: a long description is cut into pieces before any of
-this, and a piece that was cut to fill its 35 characters has no room left.
-So a `ß` in a full piece is a `?` while the same word in a shorter piece of
-the same description is spelled `ss`. Both are valid; it is legibility that
-depends on where the cut fell.
+and a name is matched, not displayed - `Gross-handel` is nobody's customer.
+X12 declares no character set and is not touched. One place the two rules
+above meet: a long description is cut into pieces before any of this, and a
+piece that was cut to fill its 35 characters has no room left. So a `ß` in a
+full piece is a `?` while the same word in a shorter piece of the same
+description is spelled `ss`. Both are valid; it is legibility that depends on
+where the cut fell.
 
 Both dialects are read and written from one dictionary
 ([`mockedi/schema.py`](mockedi/schema.py)), and one pipeline drives both, so
