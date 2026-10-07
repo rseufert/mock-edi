@@ -426,6 +426,48 @@ _LETTERS = {
 }
 
 
+# And what typographic punctuation becomes (#319): the apostrophe a word
+# processor curls, a dash, a no-break space. From the same file and commit,
+# its sections "Spaces", "Quotes, apostrophes" and "Dashes, hyphens" taken
+# whole, and the three dot leaders from the section after. One rule is left
+# out: U+02CB becomes a backtick, which is one of the ISO 646 positions
+# levels A and B exclude, and this table should not produce what the
+# declared level cannot say.
+#
+# And one is changed, on purpose: the soft hyphen, U+00AD. CLDR makes it a
+# hyphen, which is right for text that will be shown and wrong for a name
+# that will be matched. A soft hyphen is not a character of the name; it is
+# a typesetter's note of where a line may break. Written as `-` it turns
+# `Grosshandel` into `Gross-handel`, a company nobody has in their party
+# table. So it becomes nothing. Zack's decision on #326, at Eddie's finding.
+#
+# Ten of these become an apostrophe, which ends an EDIFACT segment. That is
+# safe for the reason `\u0149` is: `fit` runs before `escape`, so it is
+# released like any other. tests/test_transliteration.py holds which.
+_PUNCTUATION = {
+    "\u00a0": ' ', "\u2002": ' ', "\u2003": ' ',
+    "\u2004": ' ', "\u2005": ' ', "\u2006": ' ',
+    "\u2007": ' ', "\u2008": ' ', "\u2009": ' ',
+    "\u200a": ' ', "\u205f": ' ', "\u3000": ' ',
+    "\u02b9": "'", "\u02ba": '"', "\u02bb": "'",
+    "\u02bc": "'", "\u02bd": "'", "\u02c8": "'",
+    "\u2018": "'", "\u2019": "'", "\u201a": ',',
+    "\u201b": "'", "\u201c": '"', "\u201d": '"',
+    "\u201e": ',,', "\u201f": '"', "\u2032": "'",
+    "\u2033": '"', "\u301d": '"', "\u301e": '"',
+    "\uff02": '"', "\uff07": "'", "\u00ab": '<<',
+    "\u00bb": '>>', "\u2039": '<', "\u203a": '>',
+    "\u00ad": '', "\u2010": '-', "\u2011": '-',
+    "\u2012": '-', "\u2013": '-', "\u2014": '-',
+    "\u2015": '-', "\ufe31": '-', "\ufe32": '-',
+    "\ufe58": '-', "\ufe63": '-', "\uff0d": '-',
+    "\u2024": '.', "\u2025": '..', "\u2026": '...',
+}
+
+# Everything with a rule of its own, as opposed to a mark that comes off.
+_RULES = dict(_LETTERS, **_PUNCTUATION)
+
+
 @functools.lru_cache(maxsize=4096)
 def _carried(char: str, charset: str) -> bool:
     try:
@@ -437,10 +479,10 @@ def _carried(char: str, charset: str) -> bool:
 
 @functools.lru_cache(maxsize=4096)
 def _plain(char: str) -> str:
-    """One character said in unaccented Latin letters, or itself if it has
-    no such form: `\u0141` is `L`, `\u017a` is `z`, `\u00df` is `ss`."""
-    if char in _LETTERS:
-        return _LETTERS[char]
+    """One character said in unaccented Latin letters and plain
+    punctuation, or itself if it has no such form: `\u0141` is `L`, `\u017a` is `z`, `\u00df` is `ss`."""
+    if char in _RULES:
+        return _RULES[char]
     base, marks = unicodedata.normalize("NFD", char)[:1], \
         unicodedata.normalize("NFD", char)[1:]
     # Marks come off Latin letters and digits only, as in CLDR: a Greek
@@ -476,7 +518,9 @@ def transliterate(text: str, charset: str, grow: bool = True) -> str:
                 and out[-1][-1:].isascii() and out[-1][-1:].isalnum()):
             continue            # a mark with no composed form: it comes off
         plain = _plain(char)
-        out.append(plain if grow or len(plain) == 1 else char)
+        # A plain form of one character or none can never be why a value
+        # outgrows its element, so it is taken even where nothing may grow.
+        out.append(plain if grow or len(plain) <= 1 else char)
     return "".join(out)
 
 

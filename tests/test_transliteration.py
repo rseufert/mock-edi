@@ -9,6 +9,9 @@ There is no EDIFACT rule for which letters, so the mock follows a published
 one, Unicode CLDR's `Latin-ASCII`, which is language-neutral: `Müller` is
 `Muller`, never `Mueller`. Zack's choice, on the issue with the sources.
 
+Typographic punctuation follows the same table (#319): a curled apostrophe
+is an apostrophe and a dash a hyphen.
+
 Three things are held here beside the letters themselves: a character the
 set does carry is not touched; a value never outgrows its element, because
 `ß` is `ss`; and what has no plain form is still a `?`.
@@ -178,6 +181,146 @@ class ALetterThatBecomesADelimiter(unittest.TestCase):
         self.assertEqual(risky, ["\u0149"])
 
 
+class TypographicPunctuation(unittest.TestCase):
+    """The apostrophe a word processor curls, a dash, a no-break space (#319).
+
+    `O\u2019Brien` read `O?Brien` in every set but UTF-8. The rules are CLDR's
+    again, from the same file: its spaces, its quotes and apostrophes and its
+    dashes, whole, and the dot leaders.
+    """
+
+    def test_what_real_names_and_addresses_contain(self):
+        for said, plain in (("O\u2019Brien", "O'Brien"),
+                            ("\u2018t Hooft", "'t Hooft"),
+                            ("Smith\u2013Jones", "Smith-Jones"),
+                            ("A \u2014 B", "A - B"),
+                            ("\u201cAcme\u201d", '"Acme"'),
+                            ("Rue\u00a0de\u2009Paris", "Rue de Paris"),
+                            ("5\u2032 6\u2033", "5' 6\"")):
+            with self.subTest(said):
+                self.assertEqual(fit(said, "ascii"), plain)
+
+    def test_the_ones_that_grow_need_room_like_any_other(self):
+        for said, plain in (("\u201eHaus\u201c", ',,Haus"'),
+                            ("\u00abNord\u00bb", "<<Nord>>"),
+                            ("Ltd\u2026", "Ltd...")):
+            with self.subTest(said):
+                self.assertEqual(fit(said, "ascii", limit=35), plain)
+                self.assertEqual(len(fit(said, "ascii")), len(said))
+                full = said + "x" * (35 - len(said))
+                self.assertEqual(len(fit(full, "ascii", limit=35)), 35)
+
+    def test_what_the_set_carries_is_not_touched(self):
+        # ISO 8859-1 has the no-break space, the guillemets and the soft
+        # hyphen; it has no curly apostrophe and no dash.
+        self.assertEqual(fit("\u00abRue\u00a0X\u00bb", "iso-8859-1"),
+                         "\u00abRue\u00a0X\u00bb")
+        self.assertEqual(fit("O\u2019Brien \u2013 Co", "iso-8859-1"),
+                         "O'Brien - Co")
+        self.assertEqual(fit("O\u2019Brien \u2013 Co", "utf-8"),
+                         "O\u2019Brien \u2013 Co")
+
+    def test_a_soft_hyphen_is_dropped_which_is_not_what_cldr_does(self):
+        """The one exception to the table. CLDR makes U+00AD a hyphen; it is
+        a note of where a line may break and not a character of the name,
+        and `Gross-handel` is a company nobody has on file. Zack's decision
+        on #326."""
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "ascii", limit=35),
+                         "Grosshandel")
+        self.assertEqual(fit("a\u00adb", "ascii"), "ab")
+        self.assertEqual(fit("A\u00adB", "ascii", charsets.LOWER_CASE,
+                             fold=True), "AB")
+
+    def test_and_is_dropped_where_nothing_may_grow(self):
+        # Dropping it shortens the value, so it can never be why an element
+        # overflows: it goes even with no room, where `ss` does not.
+        both = "Gro\u00df\u00adstra\u00dfe"         # two that grow, one that goes
+        self.assertEqual(fit(both, "ascii"), "Gro?stra?e")
+        # And where dropping it makes the room, the room is used: the value
+        # comes out no longer than it went in, which is all `fit` promises.
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "ascii"), "Grosshandel")
+        full = "Gro\u00df\u00adstra\u00dfe" + "x" * 24      # 35 characters
+        self.assertEqual(len(full), 35)
+        self.assertNotIn("\u00ad", fit(full, "ascii", limit=35))
+        self.assertNotIn("-", fit(full, "ascii", limit=35))
+
+    def test_but_a_set_that_carries_it_keeps_it(self):
+        # The rule everything here follows: what the declared set can say
+        # is not touched. ISO 8859-1 has the soft hyphen.
+        self.assertEqual(fit("Gro\u00df\u00adhandel", "iso-8859-1"),
+                         "Gro\u00df\u00adhandel")
+
+    def test_level_a_gets_it_folded_with_the_rest(self):
+        self.assertEqual(fit("O\u2019Brien \u0141\u00f3d\u017a", "ascii",
+                             charsets.LOWER_CASE, fold=True), "O'BRIEN LODZ")
+
+    def test_nothing_in_the_table_is_a_character_level_a_excludes(self):
+        """One CLDR rule is left out for this: U+02CB is a backtick there."""
+        from mockedi.envelope import _PUNCTUATION
+        national = set("#$@[\\]^`{|}~")
+        self.assertNotIn("\u02cb", _PUNCTUATION)
+        for said, plain in _PUNCTUATION.items():
+            with self.subTest("U+%04X" % ord(said)):
+                self.assertFalse(set(plain) & national, plain)
+                plain.encode("ascii")
+        self.assertEqual(fit("a\u02cbb", "ascii"), "a?b")
+
+    def test_the_table_is_the_size_it_was_copied_at(self):
+        # 12 spaces, 24 quotes (25 less the backtick), 12 dashes, 3 leaders.
+        from mockedi.envelope import _PUNCTUATION
+        self.assertEqual(len(_PUNCTUATION), 51)
+
+    def test_no_rule_is_in_both_tables(self):
+        # `_RULES` merges the two, and the order of the merge would decide
+        # silently between a letter rule and a punctuation rule that shared
+        # a character. None does.
+        from mockedi.envelope import _LETTERS, _PUNCTUATION, _RULES
+        self.assertEqual(set(_LETTERS) & set(_PUNCTUATION), set())
+        self.assertEqual(len(_RULES), len(_LETTERS) + len(_PUNCTUATION))
+
+    def test_only_the_soft_hyphen_becomes_nothing(self):
+        from mockedi.envelope import _RULES
+        self.assertEqual([said for said, plain in _RULES.items() if not plain],
+                         ["\u00ad"])
+
+
+class PunctuationThatBecomesADelimiter(unittest.TestCase):
+    """Ten of the rules produce `'`, which ends a segment.
+
+    The same hazard as `\u0149`, ten times over and far more often met:
+    this is every curled apostrophe in every name. Safe for the same
+    reason, `fit` before `escape`, and held the same way.
+    """
+
+    def risky(self):
+        from mockedi.envelope import EDIFACT_DEFAULTS, _PUNCTUATION
+        return {said: plain for said, plain in _PUNCTUATION.items()
+                if set(plain) & set(EDIFACT_DEFAULTS.all)}
+
+    def test_which_they_are(self):
+        self.assertEqual(sorted("U+%04X" % ord(said) for said in self.risky()),
+                         ["U+02B9", "U+02BB", "U+02BC", "U+02BD", "U+02C8",
+                          "U+2018", "U+2019", "U+201B", "U+2032", "U+FF07"])
+        # An apostrophe every time: no rule produces `+`, `:` or `?`.
+        self.assertEqual(set(self.risky().values()), {"'"})
+
+    def test_each_is_released_and_the_segment_reads_back_whole(self):
+        for said in self.risky():
+            with self.subTest("U+%04X" % ord(said)):
+                message = edifact.message(
+                    "ORDERS", "1",
+                    [seg("NAD", "BY", ["ACME", "", "91"], "",
+                         "O%sBrien" % said, "Street", "City")], "D:96A:UN")
+                out = edifact.render(edifact.wrap(
+                    [message], "MOCKEDI", "ACME", "1", syntax="UNOB"))
+                self.assertIn("++O?'Brien+Street+City'", out.replace("\n", ""))
+                (read,) = [item for _g, item in edifact.parse(out).messages()]
+                (party,) = [item for item in read.segments if item.tag == "NAD"]
+                self.assertEqual(
+                    (party.get(4), party.get(5), party.get(6)),
+                    ("O'Brien", "Street", "City"))
+
+
 class AValueNeverOutgrowsItsElement(unittest.TestCase):
     """`ß` is `ss`: one character becomes two, and 35 would become 36."""
 
@@ -249,6 +392,14 @@ class ThroughARunningMock(MockServerCase):
 
     def test_and_is_clean_by_the_mocks_own_dictionary(self):
         report = validate.validate(edifact.parse(self.answer()))
+        self.assertTrue(report.clean, [m.segments for m in report.messages])
+
+    def test_a_curled_apostrophe_in_the_name_is_an_apostrophe(self):
+        self.patch("/_mock/partners/" + EURODIS,
+                   {"name": "O\u2019Brien \u2013 Sons"})
+        payload = self.answer()
+        self.assertIn("O?'Brien - Sons", payload)
+        report = validate.validate(edifact.parse(payload))
         self.assertTrue(report.clean, [m.segments for m in report.messages])
 
     def test_a_name_that_fills_its_element_still_validates(self):
