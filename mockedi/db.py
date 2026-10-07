@@ -170,6 +170,11 @@ CREATE TABLE IF NOT EXISTS order_line (
     invoiced      TEXT NOT NULL DEFAULT '0',
     reason        TEXT NOT NULL DEFAULT '',
     scheduled_on  TEXT NOT NULL DEFAULT '',
+    -- What the seller could not confirm for want of stock and will ship on
+    -- `scheduled_on`: the balance of a line confirmed short, or the whole of
+    -- one with no stock at all. Nothing under `short-ship`, which promises
+    -- no balance (#335).
+    backordered   TEXT NOT NULL DEFAULT '0',
     PRIMARY KEY (partner, po_number, line)
 );
 
@@ -439,7 +444,7 @@ class UnitOfWork:
 # The schema's version, kept in the file as `PRAGMA user_version`. 1 is
 # 0.1.0; 0 is any file made before versions were recorded. Bump it whenever
 # SCHEMA changes: a file from a newer mock is refused rather than misread.
-SCHEMA_VERSION = 15
+SCHEMA_VERSION = 16
 
 
 class DatabaseError(Exception):

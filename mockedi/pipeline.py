@@ -59,6 +59,14 @@ FOLLOW_UPS = (schema.RESPONSE, schema.DESPATCH, schema.INVOICE)
 # despatch and invoice, so `/_mock/advance` releases them the same way.
 CHANGE_LINE = "buyer-change"
 CANCEL_ORDER = "buyer-cancel"
+# What a seller promises itself when it confirms a line short of stock: on
+# the day the line is scheduled for, the balance is confirmed and a second
+# consignment is packed and billed (#335). A kind of its own and not a
+# `despatch` waiting days ahead, because work already scheduled is not
+# doubled: an 860 raising a shipped line would find that despatch still to
+# come, promise nothing, and leave the raised quantity waiting for the
+# backorder's date.
+BACKORDER = "backorder"
 
 SUPPLIER_DOCUMENTS = {
     schema.RESPONSE: transactions.read_response,
@@ -592,6 +600,7 @@ class Pipeline:
                                       "order cancelled")
             return
         self._schedule_the_difference(partner, change.po_number, self.now())
+        self._promise_backorders(partner, change.po_number)
 
     def _withdraw_fulfilment(self, partner, po_number, note: str) -> None:
         """Close what an order is still waiting for, unkept, and say why.
@@ -604,10 +613,91 @@ class Pipeline:
         self.conn.execute(
             "UPDATE scheduled SET done_at = ?, note = ?"
             " WHERE partner = ? AND po_number = ? AND done_at = ''"
-            " AND kind IN (?, ?)",
+            " AND kind IN (?, ?, ?)",
             (db.now(self.conn), note, partner["id"], po_number,
-             schema.DESPATCH, schema.INVOICE))
+             schema.DESPATCH, schema.INVOICE, BACKORDER))
         self.conn.commit()
+
+    def _promise_backorders(self, partner, po_number) -> None:
+        """Promise the balance of every line confirmed short of stock.
+
+        One promise for each date the order's lines are scheduled for, due
+        as that day starts where the mock's documents are dated, and none
+        where one already waits. Made when the 855 or ORDRSP is decided, so
+        `/_mock/scheduled` shows the backorder from the moment the buyer is
+        told of it (#335).
+        """
+        waiting = {row["due_at"] for row in db.rows(
+            self.conn, "SELECT due_at FROM scheduled WHERE partner = ?"
+                       " AND po_number = ? AND kind = ? AND done_at = ''",
+            (partner["id"], po_number, BACKORDER))}
+        wanted = [db.stamp(self._start_of(datetime.date.fromisoformat(day)))
+                  for day in documents.backorder_dates(self.conn, po_number,
+                                                       partner["id"])]
+        for due in waiting - set(wanted):
+            # A change took the line away, or moved its date: the promise is
+            # closed unkept and says so, as a withdrawn despatch does.
+            self.conn.execute(
+                "UPDATE scheduled SET done_at = ?, note = ? WHERE partner = ?"
+                " AND po_number = ? AND kind = ? AND done_at = '' AND due_at = ?",
+                (db.now(self.conn), "nothing is waiting for stock that day",
+                 partner["id"], po_number, BACKORDER, due))
+        for due in wanted:
+            if due in waiting:
+                continue
+            self.conn.execute(
+                "INSERT INTO scheduled (partner, po_number, kind, due_at, at, seq)"
+                " VALUES (?,?,?,?,?,?)",
+                (partner["id"], po_number, BACKORDER, due, db.now(self.conn),
+                 db.next_seq(self.conn)))
+        self.conn.commit()
+
+    def _start_of(self, day: datetime.date) -> datetime.datetime:
+        """The first moment of `day` where the mock's documents are dated.
+
+        The host's zone, or a pinned clock's own: the same reading of the
+        clock that put the date on the line (`envelope.local`).
+        """
+        midnight = datetime.datetime.combine(day, datetime.time.min)
+        zone = local(self.now()).tzinfo
+        if isinstance(zone, DocumentZone):
+            return midnight.replace(tzinfo=zone)
+        return midnight.astimezone()
+
+    def _release_backorder(self, partner, row, moment, receipt) -> None:
+        """Keep a backorder: confirm the balance, and have it packed and billed.
+
+        Exactly what an 865 raising a shipped line does from here on
+        (`_schedule_the_difference`, #222), so the balance is a second
+        consignment with a shipment number, an 856, an invoice number and an
+        810 of its own, and nothing about it can be taken for the first one
+        arriving again. With the default delays of zero both are due now and
+        are kept before this returns.
+        """
+        due = datetime.datetime.strptime(
+            row["due_at"], "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc)
+        # The day the promise was for, even if the clock was not allowed to
+        # reach it (#203): the promise is being kept, so the stock is in.
+        day = max(local(moment).date(),
+                  local(due.astimezone(local(moment).tzinfo)).date())
+        if not documents.release_backorders(self.conn, row["po_number"],
+                                            partner["id"], day):
+            return
+        before = self.conn.execute(
+            "SELECT COALESCE(MAX(id), 0) FROM scheduled").fetchone()[0]
+        self._schedule_the_difference(partner, row["po_number"], moment)
+        # Only what was just promised, and not `run_due` again: the caller
+        # is part-way through its own list of what is due, and anything on
+        # it kept from here would be kept a second time when it got there.
+        for made in db.rows(
+                self.conn, "SELECT * FROM scheduled WHERE id > ? AND done_at = ''"
+                           " AND due_at <= ? ORDER BY due_at, id",
+                (before, db.stamp(moment))):
+            self.conn.execute("UPDATE scheduled SET done_at = ? WHERE id = ?",
+                              (db.now(self.conn), made["id"]))
+            self.conn.commit()
+            self._fulfil(made, moment, receipt)
 
     def _schedule_the_difference(self, partner, po_number, moment) -> None:
         """Keep what a change confirmed: pack and bill it if nothing will.
@@ -670,11 +760,13 @@ class Pipeline:
                 # _fulfil. An order with nothing to ship has no despatch to
                 # wait for, and is answered now.
                 self._schedule_fulfilment(partner, po_number, moment)
+                self._promise_backorders(partner, po_number)
                 continue
             self._queue_response(partner, order, receipt, moment)
             if behaviour == "reject-all":
                 continue
             self._schedule_fulfilment(partner, po_number, moment)
+            self._promise_backorders(partner, po_number)
 
         for po_number, refused in receipt.refused_orders.items():
             # After the acknowledgment, like every other answer: the 997 says
@@ -898,6 +990,10 @@ class Pipeline:
 
         if row["kind"] in (CHANGE_LINE, CANCEL_ORDER):
             self._send_buyer_change(row, moment, receipt)
+            return
+
+        if row["kind"] == BACKORDER:
+            self._release_backorder(partner, row, moment, receipt)
             return
 
         if row["kind"] == schema.DESPATCH:
