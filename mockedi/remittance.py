@@ -59,15 +59,25 @@ CREDIT, DEBIT = "C", "D"
 class Paid:
     """One invoice an advice pays: its number, the amount, and its currency.
 
-    The currency is the document's own, from a CUX inside its DOC group
-    (D.96A's SG5), and None where the document does not state one - which is
-    the ordinary case and means "the advice's". X12 has no per-invoice
-    currency to read: `CUR` is one per message, outside the loop that holds
-    the invoices (#298).
+    The currency is the document's own and None where the document states
+    none - which is the ordinary case and means "the advice's". X12 has no
+    per-invoice currency to read: `CUR` is one per message, outside the loop
+    that holds the invoices (#298).
+
+    A document can say it two ways, as the advice itself can one level up,
+    and the two levels resolve it the same way (#322): the `MOA`'s own
+    currency, `C516`'s `6345`, is the document's, and the `CUX` in its group
+    (D.96A's SG5) is the fallback. `group_currency` keeps what that `CUX`
+    said, so that a group naming two can be reported rather than silently
+    resolved - the same reason `Advice.header_currency` is kept apart from
+    `Advice.currency`.
     """
     invoice: str = ""
     paid: Optional[Decimal] = None
     currency: Optional[str] = None
+    # What the CUX in this document's group said. The counterpart of
+    # `Advice.header_currency`, and the fallback for `currency` above.
+    group_currency: Optional[str] = None
 
 
 @dataclass
@@ -131,8 +141,9 @@ def read(message: Message, dialect: str) -> Advice:
             # so. Declared since #298; before that the segment was reported
             # as unexpected and this read nothing.
             if within == "DOC" and advice.invoices:
-                advice.invoices[-1].currency = (
-                    advice.invoices[-1].currency or item.comp(1, 2) or None)
+                advice.invoices[-1].group_currency = (
+                    advice.invoices[-1].group_currency
+                    or item.comp(1, 2) or None)
             elif not within:
                 # The header's own: before any DOC, AJT or UNS. Not `within
                 # not in ("DOC", "AJT")`, which counted a CUX *after* UNS as
@@ -145,6 +156,11 @@ def read(message: Message, dialect: str) -> Advice:
         elif item.tag == "MOA" and item.comp(1, 1) == "12":
             if within == "DOC" and advice.invoices:
                 advice.invoices[-1].paid = _amount(item.comp(1, 2))
+                # C516's third component again, which this read only at the
+                # summary level (#322). Set beside the amount and from the
+                # same segment, so a document's amount and the currency it
+                # is in can never come from two different places.
+                advice.invoices[-1].currency = item.comp(1, 3) or None
             elif within == "UNS":
                 advice.total = _amount(item.comp(1, 2))
                 # C516's third component, which the summary MOA may state
@@ -156,6 +172,10 @@ def read(message: Message, dialect: str) -> Advice:
     advice.header_currency = (reference or stated or [None])[0]
     advice.header_currencies = stated
     advice.currency = advice.currency or advice.header_currency
+    for paid in advice.invoices:
+        # After the loop, not inside it: a group's CUX may sit either side
+        # of its MOA and neither order should decide which currency wins.
+        paid.currency = paid.currency or paid.group_currency
     return advice
 
 
@@ -320,6 +340,24 @@ def _currency_findings(conn, partner: Dict[str, Any], advice: Advice,
                  "lets both state one and does not say which wins"
                  % (advice.header_currency, advice.currency),
             interchange=interchange))
+    for item in advice.invoices:
+        # The same disagreement one level down, and reported by the same
+        # rule: D.96A lets a DOC group state its currency on its CUX and on
+        # its MOA, and says no more about it there than it does at the head
+        # (#322). Before the early return below, as the header's two are,
+        # so that an advice stating a currency only inside a group is still
+        # read for this.
+        if (item.group_currency and item.currency
+                and item.group_currency != item.currency):
+            out.append(BusinessFinding(
+                rule=CURRENCY_DISAGREES, kind=kind, code=message.code,
+                control=message.control, po_number="",
+                expected=item.group_currency, found=item.currency,
+                note="the CUX in invoice %s's group says %s and its MOA "
+                     "says %s; D.96A lets both state one and does not say "
+                     "which wins"
+                     % (item.invoice, item.group_currency, item.currency),
+                interchange=interchange))
     if not advice.currency and not any(item.currency
                                        for item in advice.invoices):
         return out

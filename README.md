@@ -378,22 +378,28 @@ Two findings come with it. `remittance-currency-not-the-invoice` is an advice
 in one currency paying an invoice the mock issued in another — the amounts can
 agree to the penny and still be two different sums of money. And
 `remittance-currency-disagrees` is a REMADV that contradicts itself: a header
-`CUX` and a summary `MOA` naming different currencies, or several header `CUX`
-segments naming different ones — the group repeats up to nine times. D.96A
+`CUX` and a summary `MOA` naming different currencies, several header `CUX`
+segments naming different ones — the group repeats up to nine times — or the
+same disagreement inside one `DOC` group. D.96A
 permits all of it and gives no rule for which wins, so the mock takes the
 **reference** currency (`6347` code 2, "the currency applicable to amounts
 stated") and reports the rest rather than keeping one quietly. An advice naming
 an invoice the mock never issued to that partner draws neither finding: it
 can only say two currencies differ about an invoice it wrote.
 
-A REMADV may state a currency **per document**, in a `CUX` inside the `DOC`
-group, which is how one advice pays invoices in two currencies. Each entry of
-`invoices` answers its own `currency`, falling back to the advice's where the
-document states none, and the comparison is made per document — so an advice
-can be right about one invoice and wrong about another, and where the header
-and a document disagree the document is what that entry is judged on. D.96A
-has a third `CUX`, inside the line group; this message declares no line group,
-so a `CUX` inside a line is still an unexpected segment.
+A REMADV may state a currency **per document**, which is how one advice pays
+invoices in two currencies. It can say it two ways, as the advice itself can
+one level up, and both levels resolve it alike: the document's own `MOA`
+carries a currency in its third component and that is the document's, with a
+`CUX` inside the `DOC` group as the fallback. A guide may use either — D.96A
+gives the `CUX` in SG5, and EANCOM puts the invoice's currency on the `MOA`.
+Each entry of `invoices` answers its own `currency`, falling back to the
+advice's where the document states none, and the comparison is made per
+document — so an advice can be right about one invoice and wrong about
+another, and where the header and a document disagree the document is what
+that entry is judged on. D.96A has a third `CUX`, inside the line group; this
+message declares no line group, so a `CUX` inside a line is still an
+unexpected segment.
 
 Coverage is the commonly traded core of each set, not the full standard. A
 real 850 admits some fifty segment types and almost nobody sends more than a
