@@ -271,19 +271,28 @@ class TheClockMovesToAMoment(unittest.TestCase):
         error = self.refused("to=2026-11-02T10:01:30+01:00")
         self.assertIn("%2B", error)
 
+    # These four assert the words the collision is refused in, not just a
+    # 400: before `to` was a parameter at all each of them was already
+    # refused, by `only`, for not knowing the name - so a test that asked
+    # only for a 400 would pass without the change and guard nothing.
+
     def test_to_with_seconds(self):
         error = self.refused("to=2026-11-02T09:01:30Z&seconds=90")
-        self.assertIn("seconds", error)
+        self.assertEqual(error, "to and seconds each say where the clock "
+                                "stops; give one, not both")
 
     def test_to_with_an_empty_seconds_collides_too(self):
-        self.assertIn("seconds",
+        self.assertIn("give one, not both",
                       self.refused("to=2026-11-02T09:01:30Z&seconds="))
 
     def test_to_with_all(self):
-        self.assertIn("all", self.refused("to=2026-11-02T09:01:30Z&all"))
+        self.assertEqual(self.refused("to=2026-11-02T09:01:30Z&all"),
+                         "to and all each say where the clock stops; give "
+                         "one, not both")
 
     def test_to_with_failed(self):
-        self.assertIn("failed", self.refused("to=2026-11-02T09:01:30Z&failed"))
+        self.assertIn("moves no clock",
+                      self.refused("to=2026-11-02T09:01:30Z&failed"))
 
     def test_beyond_the_limit_is_the_refusal_seconds_gives(self):
         error = self.refused("to=2200-01-01T00:00:00Z")

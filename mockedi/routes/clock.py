@@ -27,10 +27,19 @@ def scheduled(h) -> Tuple[int, int]:
 @route("POST", "/_mock/advance", refuse="POST to advance the queue")
 def advance(h) -> Tuple[int, int]:
     try:
-        only(h.query, "seconds", "all", "failed", "partner")
+        only(h.query, "seconds", "to", "all", "failed", "partner")
     except BadQuery as error:
         raise BadQuery(error.parameter, "%s (partner goes with failed)%s"
                        % (error, _in_seconds(h.query))) from None
+    if "to" in h.query:
+        clash = _clashes_with_to(h.query)
+        if clash:
+            return h.json(400, {"error": clash, "parameter": "to"})
+        try:
+            released = h.mock.pipeline.advance_to(first(h.query, "to"))
+        except ValueError as error:
+            return h.json(400, {"error": str(error), "parameter": "to"})
+        return _where_the_clock_is(h, released)
     if flag(h.query, "failed"):
         # Everything a partner's listener missed while it was down,
         # in queue order, unchanged.
@@ -43,12 +52,38 @@ def advance(h) -> Tuple[int, int]:
         released = h.mock.pipeline.advance(seconds, everything)
     except ValueError as error:
         return h.json(400, {"error": str(error), "parameter": "seconds"})
+    return _where_the_clock_is(h, released)
+
+
+def _where_the_clock_is(h, released) -> Tuple[int, int]:
+    """The one answer every advance gives, whichever way it was asked for."""
     h.mock.prune()
     clock = h.mock.pipeline
     return h.json(200, {
         "released": released, "count": len(released),
         "clock": clock.now().isoformat(timespec="seconds"),
         "advancedSeconds": clock.offset.total_seconds()})
+
+
+def _clashes_with_to(query) -> str:
+    """Why `to` cannot be given beside another parameter, or nothing.
+
+    `seconds` and `all` are two more answers to the one question `to`
+    answers - where the clock should stop - so taking both would mean
+    choosing one without saying so. `failed` moves no clock at all, so a
+    `to` beside it is a parameter that does nothing, which is what `only`
+    exists to refuse (#203). Empty or not: a caller who wrote `seconds=`
+    meant to pass seconds and built the query wrong, and that is worth
+    saying rather than guessing at (#341).
+    """
+    for name in ("seconds", "all"):
+        if name in query:
+            return ("to and %s each say where the clock stops; give one, not "
+                    "both" % name)
+    if "failed" in query:
+        return ("failed releases what a listener missed and moves no clock, "
+                "so to has nothing to do beside it")
+    return ""
 
 
 def _in_seconds(query) -> str:
