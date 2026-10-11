@@ -213,7 +213,7 @@ class TheClockMoves(MockServerCase):
         # is due to ACME" was told it had worked (#344).
         self.send(x12_order("PO-PARTNER-ALONE"))
         for query in ("seconds=60&partner=ACME", "all&partner=ACME",
-                      "partner=ACME", "partner=", "failed=no&partner=ACME"):
+                      "partner=ACME", "partner="):
             with self.subTest(query=query):
                 status, _h, data = self.post("/_mock/advance?" + query)
                 self.assertEqual(status, 400, data)
@@ -221,6 +221,12 @@ class TheClockMoves(MockServerCase):
                 self.assertIn("partner goes with failed", data["error"])
                 self.assertIn("every partner", data["error"])
         self.assertEqual(self.mailbox(ACME, "invoice"), [])
+        _s, _h, data = self.post("/_mock/advance?seconds=0")
+        self.assertEqual(data["advancedSeconds"], 0.0)
+        # A `failed` that says no is refused for itself (#346), before the
+        # partner is looked at; either way nothing moved.
+        status, _h, data = self.post("/_mock/advance?failed=no&partner=ACME")
+        self.assertEqual((status, data["parameter"]), (400, "failed"))
         _s, _h, data = self.post("/_mock/advance?seconds=0")
         self.assertEqual(data["advancedSeconds"], 0.0)
         status, _h, data = self.post("/_mock/advance?failed&partner=ACME")
