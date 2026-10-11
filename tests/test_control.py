@@ -535,6 +535,65 @@ class BadQueryValues(MockServerCase):
                 status, _h, data = self.post("/_mock/advance?" + query)
                 self.assertEqual(status, 200, data)
 
+    def test_a_flag_is_a_bare_word_and_a_value_it_does_not_know_is_refused(self):
+        # `?all=false` was read as no `all` at all: accepted, and an advance
+        # of zero seconds. A value nobody reads looks like one that worked
+        # (#346, and #203 before it).
+        for value in ("false", "0", "no", "off", "maybe", "False", "2"):
+            with self.subTest(value=value):
+                status, _h, data = self.post("/_mock/advance?all=" + value)
+                self.assertEqual(status, 400, data)
+                self.assertEqual(data["parameter"], "all")
+                self.assertIn(repr(value), data["error"])
+                self.assertIn("?all", data["error"])
+
+    def test_the_values_a_flag_always_took_as_set_still_set_it(self):
+        self.send(x12_order("PO-FLAG-SET"))
+        for value in ("all", "all=", "all=1", "all=true", "all=yes", "all=TRUE"):
+            with self.subTest(value=value):
+                status, _h, data = self.get("/_mock/scheduled?" + value)
+                self.assertEqual(status, 200, data)
+                self.assertEqual(data, self.get("/_mock/scheduled?all")[2])
+
+    def test_every_flag_is_read_the_same_way(self):
+        self.send(x12_order("PO-FLAG-EVERYWHERE"))
+        for path, name in (("/_mock/advance?failed=no", "failed"),
+                           ("/_mock/scheduled?all=no", "all"),
+                           ("/_mock/mailbox?leave=no", "leave"),
+                           ("/_mock/mailbox?raw=no", "raw"),
+                           ("/_mock/mailbox?leave&raw=no", "raw"),
+                           ("/_mock/orders/PO-FLAG-EVERYWHERE/timeline?raw=no", "raw")):
+            with self.subTest(path=path):
+                self.assertRefused(path, name)
+
+    def test_a_refused_flag_takes_nothing_from_the_mailbox(self):
+        # `?raw=no` was read after the documents had been collected.
+        self.send(x12_order("PO-FLAG-MAILBOX"))
+        waiting = self.mailbox(ACME)
+        self.assertTrue(waiting)
+        for query in ("leave=no", "raw=no", "raw=no&leave=no"):
+            self.assertRefused("/_mock/mailbox?" + query, query.split("=")[0])
+        self.assertEqual(self.mailbox(ACME, leave=False), waiting)
+
+    def test_acknowledged_is_a_question_with_two_answers_not_a_flag(self):
+        # `?acknowledged=false` is the useful one, so it is not refused; but
+        # `=maybe` was read as false and answered with the unanswered.
+        self.send(x12_order("PO-FLAG-ACK"))
+        _s, _h, unanswered = self.get("/_mock/documents?acknowledged=false")
+        _s, _h, answered = self.get("/_mock/documents?acknowledged=true")
+        self.assertTrue(unanswered)
+        self.assertNotEqual(unanswered, answered)
+        for value, expected in (("0", unanswered), ("no", unanswered),
+                                ("False", unanswered), ("1", answered),
+                                ("yes", answered), ("", answered)):
+            with self.subTest(value=value):
+                status, _h, data = self.get("/_mock/documents?acknowledged=" + value)
+                self.assertEqual((status, data), (200, expected))
+        for value in ("maybe", "off", "2"):
+            with self.subTest(value=value):
+                self.assertRefused("/_mock/documents?acknowledged=" + value,
+                                   "acknowledged")
+
     def test_unacknowledged_older_than(self):
         self.assertRefused("/_mock/unacknowledged?older-than=soon", "older-than")
 
