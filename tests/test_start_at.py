@@ -30,10 +30,11 @@ sys.path.insert(0, HERE)
 
 from mockedi import db
 from mockedi.__main__ import main
+from mockedi.pipeline import start_text
 from mockedi.server import BadConfig
 from mockedi.testing import Document, Mock
 
-from support import ACME, x12_order
+from support import ACME, instant, x12_order
 
 START = "2026-11-02T09:00:00Z"
 DAY = 86400
@@ -200,17 +201,17 @@ class TheClockMovesToAMoment(unittest.TestCase):
 
     def test_the_clock_stands_at_the_moment_it_was_given(self):
         answer = self.mock.advance(to="2026-11-02T09:01:30Z")
-        self.assertEqual(answer["clock"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
         self.assertEqual(answer["advancedSeconds"], 90.0)
 
     def test_and_stands_there_however_long_the_host_waits(self):
         self.mock.advance(to="2026-11-02T09:01:30Z")
         time.sleep(1.1)
-        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30Z")
 
     def test_an_offset_names_the_same_moment_as_a_z_does(self):
         answer = self.mock.advance(to="2026-11-02T10:01:30+01:00")
-        self.assertEqual(answer["clock"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
         self.assertEqual(answer["advancedSeconds"], 90.0)
 
     def test_a_second_to_moves_it_on_from_where_it_stands(self):
@@ -230,7 +231,7 @@ class TheClockMovesToAMoment(unittest.TestCase):
         self.mock.send(x12_order("PIN-TO-EARLY"))
         answer = self.mock.advance(to="2026-11-03T08:59:59Z")
         self.assertEqual(self.mock.mailbox(ACME, "invoice"), [])
-        self.assertEqual(answer["clock"], "2026-11-03T08:59:59+00:00")
+        self.assertEqual(answer["clock"], "2026-11-03T08:59:59Z")
 
     def test_it_releases_what_the_same_distance_in_seconds_releases(self):
         with Mock.start(start_at=START, invoice_delay_ms=DAY * 1000) as other:
@@ -307,7 +308,7 @@ class TheClockMovesToAMoment(unittest.TestCase):
             with self.subTest(query=query):
                 self.mock.post("/_mock/advance?" + query)
                 self.assertEqual(self.clock()["now"],
-                                 "2026-11-02T09:01:30+00:00")
+                                 "2026-11-02T09:01:30Z")
 
     def test_the_parameters_it_does_take_are_still_named(self):
         status, _headers, data = self.mock.post("/_mock/advance?days=30")
@@ -327,14 +328,12 @@ class ToOnAClockThatWasNotPinned(unittest.TestCase):
 
     def test_it_moves_forward_by_the_distance_to_the_moment(self):
         with Mock.start() as mock:
-            now = datetime.datetime.strptime(
-                mock.expect("GET", "/_mock/state")["clock"]["now"][:19],
-                "%Y-%m-%dT%H:%M:%S").replace(tzinfo=datetime.timezone.utc)
-            wanted = now + datetime.timedelta(hours=1)
-            answer = mock.advance(
-                to=wanted.isoformat().replace("+00:00", "Z"))
+            now = instant(mock.expect("GET", "/_mock/state")["clock"]["now"])
+            wanted = (now + datetime.timedelta(hours=1)).replace(
+                microsecond=0)
+            answer = mock.advance(to=start_text(wanted))
             self.assertAlmostEqual(answer["advancedSeconds"], 3600, delta=30)
-            self.assertEqual(answer["clock"][:16], wanted.isoformat()[:16])
+            self.assertEqual(instant(answer["clock"]), wanted)
 
 
 class WithDeliveryHeld(unittest.TestCase):
