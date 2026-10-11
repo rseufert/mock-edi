@@ -571,8 +571,9 @@ class BadQueryValues(MockServerCase):
         self.send(x12_order("PO-FLAG-MAILBOX"))
         waiting = self.mailbox(ACME)
         self.assertTrue(waiting)
-        for query in ("leave=no", "raw=no", "raw=no&leave=no"):
-            self.assertRefused("/_mock/mailbox?" + query, query.split("=")[0])
+        for query, name in (("leave=no", "leave"), ("raw=no", "raw"),
+                            ("raw=no&leave=no", "leave")):
+            self.assertRefused("/_mock/mailbox?" + query, name)
         self.assertEqual(self.mailbox(ACME, leave=False), waiting)
 
     def test_acknowledged_is_a_question_with_two_answers_not_a_flag(self):

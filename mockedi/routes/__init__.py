@@ -174,17 +174,44 @@ def first(query: Dict[str, List[str]], name: str, default: str = "") -> str:
     return values[0] if values else default
 
 
-def flag(query: Dict[str, List[str]], name: str) -> bool:
-    value = first(query, name, "").lower()
-    return value in ("", "1", "true", "yes") and name in query
-
-
 class BadQuery(ValueError):
     """A query-string value that cannot be read; answered 400, naming it."""
 
     def __init__(self, parameter: str, message: str):
         super().__init__(message)
         self.parameter = parameter
+
+
+_SET = ("", "1", "true", "yes")
+_NOT = ("0", "false", "no")
+
+
+def flag(query: Dict[str, List[str]], name: str) -> bool:
+    """Whether a flag is there. A flag is a bare word: `?all`.
+
+    `=1`, `=true` and `=yes` are read as the bare word. Any other value is
+    refused, `=false` among them: it was read as the flag being absent, so
+    `advance?all=false` was an advance of zero seconds that answered 200
+    (#346). There is one way to not set a flag, which is to leave it out.
+    """
+    if name not in query:
+        return False
+    raw = first(query, name, "")
+    if raw.lower() not in _SET:
+        raise BadQuery(name, "%s is a flag, a bare word (?%s), and takes no "
+                             "value; got %r. Leave it out to not set it"
+                       % (name, name, raw))
+    return True
+
+
+def yes_or_no(query: Dict[str, List[str]], name: str) -> bool:
+    """A parameter that asks a question with two answers, where `flag` is a
+    switch: `?acknowledged=false` is as good a thing to ask as `=true`.
+    The bare word is yes."""
+    raw = first(query, name, "")
+    if raw.lower() not in _SET + _NOT:
+        raise BadQuery(name, "%s is true or false, got %r" % (name, raw))
+    return raw.lower() in _SET
 
 
 def number(query: Dict[str, List[str]], name: str, default: float = 0.0) -> float:
