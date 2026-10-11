@@ -15,7 +15,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 sys.path.insert(0, os.path.dirname(HERE))
 sys.path.insert(0, HERE)
 
-from support import FileDatabaseCase, x12_order
+from support import FileDatabaseCase, instant, x12_order
 
 DAY = 86400
 
@@ -90,7 +90,7 @@ class WorkStillWaitingSurvivesIt(_Restarted):
         _s, _h, waiting = self.get("/_mock/scheduled")
         self.assertEqual([row["kind"] for row in waiting], ["invoice"])
         left = (moment(waiting[0]["due_at"])
-                - datetime.datetime.fromisoformat(self.clock()["clock"]))
+                - instant(self.clock()["clock"]))
         # A day less the 3,700 seconds already gone; back at real time it
         # would be the whole day again.
         self.assertAlmostEqual(left.total_seconds(), DAY - 3700, delta=5)
@@ -104,7 +104,7 @@ class WorkStillWaitingSurvivesIt(_Restarted):
         last = max(row["due_at"] for row in done)
         self.restart()
         self.assertGreaterEqual(
-            datetime.datetime.fromisoformat(self.clock()["clock"]), moment(last))
+            instant(self.clock()["clock"]), moment(last))
         self.assertAlmostEqual(self.ahead(), DAY, delta=5)
 
 

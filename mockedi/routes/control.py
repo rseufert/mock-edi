@@ -41,7 +41,7 @@ def state(h) -> Tuple[int, int]:
                   for status in ("pending", "ready", "delivered",
                                  "collected", "failed")},
         "clock": {
-            "now": h.mock.pipeline.now().isoformat(timespec="seconds"),
+            "now": pipeline.clock_text(h.mock.pipeline.now()),
             "startAt": (pipeline.start_text(h.mock.pipeline.pin)
                         if h.mock.pipeline.pin is not None else None),
             "advancedSeconds": h.mock.pipeline.offset.total_seconds()},

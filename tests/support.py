@@ -186,6 +186,15 @@ def frozen():
         yield
 
 
+def instant(text: str) -> datetime.datetime:
+    """A moment the mock wrote, an `at` or its clock, as an aware datetime.
+
+    `datetime.fromisoformat` does not read the `Z` before Python 3.11.
+    """
+    return datetime.datetime.fromisoformat(
+        text[:-1] + "+00:00" if text.endswith("Z") else text)
+
+
 def spans_more_than_a_second(timeline) -> bool:
     """Whether a timeline's events do not all share one second.
 

@@ -15,6 +15,7 @@ the request log's times, `started` in `/_mock/health`, the HTTP and AS2 `Date`
 headers, and an MDN's random `Message-ID` and MIME boundary.
 """
 import contextlib
+import datetime
 import io
 import os
 import shutil
@@ -123,7 +124,7 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
     def test_it_reads_the_start_time_however_long_the_host_waits(self):
         time.sleep(1.1)
         self.assertEqual(self.clock(), {
-            "now": "2026-11-02T09:00:00+00:00", "startAt": START,
+            "now": "2026-11-02T09:00:00Z", "startAt": START,
             "advancedSeconds": 0.0})
 
     def test_everything_between_two_advances_shares_one_time(self):
@@ -137,15 +138,15 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
 
     def test_an_advance_moves_it_and_it_stands_again(self):
         answer = self.mock.advance(seconds=90)
-        self.assertEqual(answer["clock"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
         time.sleep(1.1)
-        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30Z")
         self.assertEqual(self.clock()["advancedSeconds"], 90.0)
 
     def test_advancing_to_everything_due_stops_at_the_last_due_time(self):
         self.mock.send(x12_order("PIN-DUE"))
         self.mock.advance(everything=True)
-        self.assertEqual(self.clock()["now"], "2026-11-03T09:00:00+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-03T09:00:00Z")
         invoice = self.mock.document(ACME, "invoice")
         self.assertEqual(invoice.find("BIG").get(1), "20261103")
 
@@ -153,7 +154,7 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
         seeded = self.mock.expect("GET", "/_mock/orders")
         self.mock.advance(seconds=7200)
         self.mock.reset()
-        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00Z")
         self.assertEqual(self.mock.expect("GET", "/_mock/orders"), seeded)
 
     def test_what_the_mock_dates_on_its_own_initiative_follows_it(self):
@@ -225,6 +226,41 @@ class TheZoneTheStartTimeIsWrittenIn(unittest.TestCase):
         self.assertEqual(clock["startAt"], "2026-11-03T00:30:00+01:00")
         self.assertEqual(clock["now"], "2026-11-03T00:30:00+01:00")
 
+    def clocks(self, **config):
+        """The clock as `state` says it, as `advance` says it, and the `at`
+        of what that advance released."""
+        with Mock.start(invoice_delay_ms=DAY * 1000, **config) as mock:
+            mock.send(x12_order("PIN-SPELT"))
+            moved = mock.advance(everything=True)
+            return (mock.expect("GET", "/_mock/state")["clock"]["now"],
+                    moved["clock"], mock.timeline("PIN-SPELT")["events"][-1]["at"])
+
+    def test_the_clock_is_spelt_as_every_at_is(self):
+        # One instant, one spelling (#340): a client may compare the clock
+        # with the next event's `at` as strings.
+        now, moved, at = self.clocks(start_at="2026-11-02T23:30:00Z")
+        self.assertEqual((now, moved), (at, at))
+        self.assertEqual(at, "2026-11-03T23:30:00Z")
+
+    def test_so_is_the_hosts_clock_which_is_never_on_a_whole_second(self):
+        real = db.utcnow
+        host = real().replace(microsecond=987654)
+        db.utcnow = lambda: host
+        self.addCleanup(setattr, db, "utcnow", real)
+        with Mock.start() as mock:
+            now = mock.expect("GET", "/_mock/state")["clock"]["now"]
+            mock.send(x12_order("PIN-HOST"))
+            moved = mock.advance(seconds=90)["clock"]
+            at = mock.timeline("PIN-HOST")["events"][0]["at"]
+        self.assertEqual(now, at)
+        self.assertEqual(at, db.stamp(host))
+        self.assertEqual(moved, db.stamp(host + datetime.timedelta(seconds=90)))
+
+    def test_a_clock_pinned_in_another_zone_still_says_its_zone(self):
+        now, moved, at = self.clocks(start_at="2026-11-03T00:30:00+01:00")
+        self.assertEqual((now, moved), ("2026-11-04T00:30:00+01:00",) * 2)
+        self.assertEqual(at, "2026-11-03T23:30:00Z")
+
 
 class AMomentFromAPinnedClock(unittest.TestCase):
 
@@ -289,7 +325,7 @@ class AFileKeepsTheClockItWasStartedOn(unittest.TestCase):
         mock.close()
         again = self.start(start_at=START)
         clock = again.expect("GET", "/_mock/state")["clock"]
-        self.assertEqual(clock["now"], "2026-11-02T11:00:00+00:00")
+        self.assertEqual(clock["now"], "2026-11-02T11:00:00Z")
         self.assertEqual(clock["advancedSeconds"], 7200.0)
 
     def test_a_different_start_time_is_refused_and_names_the_files(self):
