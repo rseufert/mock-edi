@@ -28,7 +28,7 @@ sys.path.insert(0, HERE)
 from mockedi import db, x12
 from mockedi.envelope import local
 
-from support import ACME, MockServerCase, x12_order
+from support import ACME, MockServerCase, instant, x12_order
 
 # Second precision, and a zone.
 STAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
@@ -245,7 +245,7 @@ class NothingIsStampedBeforeItWasDue(MockServerCase):
         self.assertGreaterEqual(answer["advancedSeconds"], 2 * HOUR - 5)
         self.assertLess(answer["advancedSeconds"], 2 * HOUR + 60)
         self.assertGreaterEqual(
-            datetime.datetime.fromisoformat(answer["clock"]), moment(last))
+            instant(answer["clock"]), moment(last))
 
     def test_each_piece_of_work_is_stamped_when_it_came_due_not_at_the_end(self):
         self.send(x12_order("CLOCK-STEPS"))

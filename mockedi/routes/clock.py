@@ -47,7 +47,7 @@ def advance(h) -> Tuple[int, int]:
     clock = h.mock.pipeline
     return h.json(200, {
         "released": released, "count": len(released),
-        "clock": clock.now().isoformat(timespec="seconds"),
+        "clock": pipeline.clock_text(clock.now()),
         "advancedSeconds": clock.offset.total_seconds()})
 
 

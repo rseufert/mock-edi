@@ -124,7 +124,7 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
     def test_it_reads_the_start_time_however_long_the_host_waits(self):
         time.sleep(1.1)
         self.assertEqual(self.clock(), {
-            "now": "2026-11-02T09:00:00+00:00", "startAt": START,
+            "now": "2026-11-02T09:00:00Z", "startAt": START,
             "advancedSeconds": 0.0})
 
     def test_everything_between_two_advances_shares_one_time(self):
@@ -138,15 +138,15 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
 
     def test_an_advance_moves_it_and_it_stands_again(self):
         answer = self.mock.advance(seconds=90)
-        self.assertEqual(answer["clock"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
         time.sleep(1.1)
-        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30Z")
         self.assertEqual(self.clock()["advancedSeconds"], 90.0)
 
     def test_advancing_to_everything_due_stops_at_the_last_due_time(self):
         self.mock.send(x12_order("PIN-DUE"))
         self.mock.advance(everything=True)
-        self.assertEqual(self.clock()["now"], "2026-11-03T09:00:00+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-03T09:00:00Z")
         invoice = self.mock.document(ACME, "invoice")
         self.assertEqual(invoice.find("BIG").get(1), "20261103")
 
@@ -154,7 +154,7 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
         seeded = self.mock.expect("GET", "/_mock/orders")
         self.mock.advance(seconds=7200)
         self.mock.reset()
-        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00+00:00")
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00Z")
         self.assertEqual(self.mock.expect("GET", "/_mock/orders"), seeded)
 
     def test_what_the_mock_dates_on_its_own_initiative_follows_it(self):
@@ -320,7 +320,7 @@ class AFileKeepsTheClockItWasStartedOn(unittest.TestCase):
         mock.close()
         again = self.start(start_at=START)
         clock = again.expect("GET", "/_mock/state")["clock"]
-        self.assertEqual(clock["now"], "2026-11-02T11:00:00+00:00")
+        self.assertEqual(clock["now"], "2026-11-02T11:00:00Z")
         self.assertEqual(clock["advancedSeconds"], 7200.0)
 
     def test_a_different_start_time_is_refused_and_names_the_files(self):
