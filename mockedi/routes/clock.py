@@ -61,7 +61,7 @@ def _where_the_clock_is(h, released) -> Tuple[int, int]:
     clock = h.mock.pipeline
     return h.json(200, {
         "released": released, "count": len(released),
-        "clock": clock.now().isoformat(timespec="seconds"),
+        "clock": pipeline.clock_text(clock.now()),
         "advancedSeconds": clock.offset.total_seconds()})
 
 

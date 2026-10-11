@@ -10,7 +10,7 @@ sys.path.insert(0, HERE)
 
 from mockedi.envelope import local
 
-from support import (ACME, EURODIS, FileDatabaseCase, MockServerCase, frozen,
+from support import (ACME, EURODIS, FileDatabaseCase, MockServerCase, frozen, instant,
                      x12_order)
 
 
@@ -180,7 +180,7 @@ class TheClockMoves(MockServerCase):
             _s, _h, moved = self.post("/_mock/advance?seconds=90")
             invoice = self.document(ACME, "invoice").groups[0].messages[0]
         dated = invoice.find("BIG").get(1)
-        clock = datetime.datetime.fromisoformat(moved["clock"])
+        clock = instant(moved["clock"])
         self.assertEqual(dated, local(clock).strftime("%Y%m%d"))
         # And that is the moved clock, not the host's: three days on, or
         # four where the 90 seconds crossed midnight.

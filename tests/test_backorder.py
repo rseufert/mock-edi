@@ -24,7 +24,7 @@ sys.path.insert(0, HERE)
 
 from mockedi import db, documents, partners, transactions
 
-from support import (ACME, EURODIS, edifact_order, parse, x12_change,
+from support import (ACME, EURODIS, edifact_order, instant, parse, x12_change,
                      x12_order)
 from test_document_numbers import TimelineCase, events
 
@@ -119,7 +119,7 @@ class TheBalanceShips(BackorderCase):
 
     def test_the_clock_went_to_the_date_and_no_further(self):
         status, _headers, state = self.get("/_mock/state")
-        now = datetime.datetime.fromisoformat(state["clock"]["now"]).astimezone()
+        now = instant(state["clock"]["now"]).astimezone()
         self.assertEqual(now.date().isoformat(), self.scheduled_on)
 
     def test_the_line_is_whole_and_waits_for_nothing(self):

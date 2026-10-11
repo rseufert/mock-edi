@@ -814,6 +814,9 @@ and on any machine.
   `/_mock/reset` puts it back to the start time.
   `/_mock/state` says where it is under `clock`: `now`, `startAt` (`null`
   when there is none) and `advancedSeconds`.
+  `now`, and `clock` in the answer to an advance, are spelt as every `at`
+  is: whole seconds, and `Z` for UTC. A clock started with an offset keeps
+  saying that offset.
 - **A `--db` file keeps the clock it was started on.** Started again with the
   same `--start-at`, it comes back as far on as it was left. A different
   start time, or none, is refused and names the one the file has; so is a

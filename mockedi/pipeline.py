@@ -182,6 +182,12 @@ def start_text(moment: datetime.datetime) -> str:
     return text[:-6] + "Z" if text.endswith("+00:00") else text
 
 
+def clock_text(moment: datetime.datetime) -> str:
+    """The clock as it is reported: in whole seconds as every `at` is, and
+    spelt as a start time is, so that a clock in UTC reads as an `at` does."""
+    return start_text(moment.replace(microsecond=0))
+
+
 _EPOCH = datetime.datetime(1970, 1, 1, tzinfo=datetime.timezone.utc)
 
 
