@@ -31,6 +31,17 @@ def advance(h) -> Tuple[int, int]:
     except BadQuery as error:
         raise BadQuery(error.parameter, "%s (partner goes with failed)%s"
                        % (error, _in_seconds(h.query))) from None
+    if "partner" in h.query and not flag(h.query, "failed"):
+        # It says whose missed deliveries to try again. Read by nobody on
+        # an advance of the clock, it would look as though it had narrowed
+        # one.
+        #
+        # First, and above `to` (#345 beside #341): an advance to a moment
+        # is an advance for every partner too, so `to` with a `partner`
+        # has to be refused here - `_clashes_with_to` speaks only for the
+        # parameters that say where the clock stops.
+        raise BadQuery("partner", "partner goes with failed: an advance moves"
+                                  " the clock for every partner")
     if "to" in h.query:
         clash = _clashes_with_to(h.query)
         if clash:

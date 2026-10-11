@@ -774,7 +774,8 @@ leaves the clock where it was - `to` included, in the same words. A parameter
 the endpoint does not take is a
 400 as well, naming the ones it does - `seconds`, `to`, `all`, `failed`, and
 `partner` with `failed` - so `?days=30` is refused and told what it is in
-seconds, where it used to answer 200 and move nothing.
+seconds, where it used to answer 200 and move nothing. A `partner` without
+`failed` is refused the same way: the clock moves for every partner.
 
 ### Starting the clock at a chosen time
 

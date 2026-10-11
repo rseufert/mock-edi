@@ -295,6 +295,18 @@ class TheClockMovesToAMoment(unittest.TestCase):
         self.assertIn("moves no clock",
                       self.refused("to=2026-11-02T09:01:30Z&failed"))
 
+    def test_to_with_partner(self):
+        # The one case neither #341 nor #345 covers on its own: `partner`
+        # is refused above `to`, so an advance to a moment is told it
+        # moves the clock for everybody rather than landing and ignoring
+        # the partner it was given.
+        status, _headers, data = self.mock.post(
+            "/_mock/advance?to=2026-11-03T09:00:00Z&partner=ACME")
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["parameter"], "partner")
+        self.assertIn("partner goes with failed", data["error"])
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00Z")
+
     def test_beyond_the_limit_is_the_refusal_seconds_gives(self):
         error = self.refused("to=2200-01-01T00:00:00Z")
         self.assertIn(str(100 * 365 * 86400), error)

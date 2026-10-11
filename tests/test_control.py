@@ -207,6 +207,25 @@ class TheClockMoves(MockServerCase):
         _s, _h, data = self.post("/_mock/advance?seconds=0")
         self.assertEqual(data["advancedSeconds"], 0.0)
 
+    def test_a_partner_without_failed_moves_and_releases_nothing(self):
+        # `partner` says whose missed deliveries to try again. On an advance
+        # of the clock nobody read it, and the caller who meant "only what
+        # is due to ACME" was told it had worked (#344).
+        self.send(x12_order("PO-PARTNER-ALONE"))
+        for query in ("seconds=60&partner=ACME", "all&partner=ACME",
+                      "partner=ACME", "partner=", "failed=no&partner=ACME"):
+            with self.subTest(query=query):
+                status, _h, data = self.post("/_mock/advance?" + query)
+                self.assertEqual(status, 400, data)
+                self.assertEqual(data["parameter"], "partner")
+                self.assertIn("partner goes with failed", data["error"])
+                self.assertIn("every partner", data["error"])
+        self.assertEqual(self.mailbox(ACME, "invoice"), [])
+        _s, _h, data = self.post("/_mock/advance?seconds=0")
+        self.assertEqual(data["advancedSeconds"], 0.0)
+        status, _h, data = self.post("/_mock/advance?failed&partner=ACME")
+        self.assertEqual((status, data["count"]), (200, 0))
+
     def test_it_does_not_go_backwards(self):
         status, _h, data = self.post("/_mock/advance?seconds=-60")
         self.assertEqual(status, 400, data)
