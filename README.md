@@ -221,7 +221,7 @@ Both are walked through, test by test, in
 | Mailbox | `GET /_mock/mailbox` — collect what is waiting; `?leave` to peek, `?raw` for payloads |
 | Outbox | `GET /_mock/outbox` — the queue, including what is not due yet; `POST /_mock/outbox/<id>/retry` for a failed delivery, `POST /_mock/outbox/<id>/resend` to send one again unchanged |
 | Deliver one | `POST /_mock/deliver` — with `--hold-delivery`, send the next held document or asynchronous MDN and say what it was; `?all` sends everything held |
-| Release the queue | `POST /_mock/advance` — `?seconds=N` or `?all` |
+| Release the queue | `POST /_mock/advance` — `?seconds=N`, `?to=<time>` or `?all` |
 | Send out of band | `POST /_mock/send` — replay an invoice or a despatch advice, or send one unprompted; `"shipment"` names the consignment when an order shipped more than once, and the latest is meant without it |
 | Partners | `GET/POST /_mock/partners`, `GET/PATCH/DELETE /_mock/partners/<id>`, `GET/PUT/DELETE /_mock/partners/<id>/profile` |
 | Orders | `GET /_mock/orders`, `GET /_mock/orders/<po>`, `?partner=` when two partners hold the number |
@@ -750,10 +750,29 @@ where the clock is (`clock`) and how far it has been moved in all
 On a `--db` file the advance is kept with the data, so a mock that is
 restarted comes back as far ahead as it was stopped, and nothing it stamps
 afterwards is earlier than what the file already holds.
+`POST /_mock/advance?to=<time>` is the same move named the other way round:
+the clock goes forward **to** that moment, releasing whatever falls due on
+the way, exactly as `?seconds=` does for the same distance. The time is ISO
+8601 with a `Z` or an offset - `2026-11-02T08:12:33Z`, or
+`2026-11-02T09:12:33%2B01:00` - and a time with neither is refused rather
+than read as a guess. Write the `+` of an offset as `%2B`: a bare `+` in a
+query string means a space, and the mock says so rather than guessing which
+you meant. A moment the clock is already at or past is a 400 that says where
+the clock stands, since it only goes forward; so is `to` given together with
+`seconds` or `?all`, which would be two answers to one question, or with
+`?failed`, which moves no clock at all.
+
+Use `to` when a script drives more than one mock to the same moment - a
+settlement day a month out, say - so that each of them is told the moment
+rather than each caller working out its own distance. With `--start-at` the
+clock then reads exactly that time; without it the clock is the host's plus
+the advance, so it lands there as of the instant the mock read its own clock.
+
 It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
 that would take it further is a 400 that says how much room is left, and
-leaves the clock where it was. A parameter the endpoint does not take is a
-400 as well, naming the ones it does - `seconds`, `all`, `failed`, and
+leaves the clock where it was - `to` included, in the same words. A parameter
+the endpoint does not take is a
+400 as well, naming the ones it does - `seconds`, `to`, `all`, `failed`, and
 `partner` with `failed` - so `?days=30` is refused and told what it is in
 seconds, where it used to answer 200 and move nothing.
 
@@ -789,8 +808,10 @@ and on any machine.
 - **Many events share one time.** Everything between two advances carries the
   same `at`. The timeline's order is still the order things happened in: it
   is decided by a sequence the mock keeps, not by the time.
-- **`/_mock/advance` is unchanged.** `?seconds=N` and `?all` move the clock
-  from where it stands. `/_mock/reset` puts it back to the start time.
+- **`/_mock/advance` moves the clock from where it stands.** `?seconds=N`
+  and `?all` as they always did, and `?to=<time>` to a moment - which is
+  exact on a pinned clock, and is the reason to pin one.
+  `/_mock/reset` puts it back to the start time.
   `/_mock/state` says where it is under `clock`: `now`, `startAt` (`null`
   when there is none) and `advancedSeconds`.
 - **A `--db` file keeps the clock it was started on.** Started again with the
