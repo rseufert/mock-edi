@@ -15,6 +15,7 @@ the request log's times, `started` in `/_mock/health`, the HTTP and AS2 `Date`
 headers, and an MDN's random `Message-ID` and MIME boundary.
 """
 import contextlib
+import datetime
 import io
 import os
 import shutil
@@ -224,6 +225,36 @@ class TheZoneTheStartTimeIsWrittenIn(unittest.TestCase):
             clock = mock.expect("GET", "/_mock/state")["clock"]
         self.assertEqual(clock["startAt"], "2026-11-03T00:30:00+01:00")
         self.assertEqual(clock["now"], "2026-11-03T00:30:00+01:00")
+
+    def clocks(self, **config):
+        """The clock as `state` says it, as `advance` says it, and the `at`
+        of what that advance released."""
+        with Mock.start(invoice_delay_ms=DAY * 1000, **config) as mock:
+            mock.send(x12_order("PIN-SPELT"))
+            moved = mock.advance(everything=True)
+            return (mock.expect("GET", "/_mock/state")["clock"]["now"],
+                    moved["clock"], mock.timeline("PIN-SPELT")["events"][-1]["at"])
+
+    def test_the_clock_is_spelt_as_every_at_is(self):
+        # One instant, one spelling (#340): a client may compare the clock
+        # with the next event's `at` as strings.
+        now, moved, at = self.clocks(start_at="2026-11-02T23:30:00Z")
+        self.assertEqual((now, moved), (at, at))
+        self.assertEqual(at, "2026-11-03T23:30:00Z")
+
+    def test_so_is_the_hosts_clock_which_is_never_on_a_whole_second(self):
+        real = db.utcnow
+        host = real().replace(microsecond=987654)
+        db.utcnow = lambda: host
+        self.addCleanup(setattr, db, "utcnow", real)
+        now, moved, at = self.clocks()
+        self.assertEqual((now, moved), (at, at))
+        self.assertEqual(at, db.stamp(host + datetime.timedelta(days=1)))
+
+    def test_a_clock_pinned_in_another_zone_still_says_its_zone(self):
+        now, moved, at = self.clocks(start_at="2026-11-03T00:30:00+01:00")
+        self.assertEqual((now, moved), ("2026-11-04T00:30:00+01:00",) * 2)
+        self.assertEqual(at, "2026-11-03T23:30:00Z")
 
 
 class AMomentFromAPinnedClock(unittest.TestCase):
