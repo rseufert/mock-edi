@@ -247,9 +247,14 @@ class TheZoneTheStartTimeIsWrittenIn(unittest.TestCase):
         host = real().replace(microsecond=987654)
         db.utcnow = lambda: host
         self.addCleanup(setattr, db, "utcnow", real)
-        now, moved, at = self.clocks()
-        self.assertEqual((now, moved), (at, at))
-        self.assertEqual(at, db.stamp(host + datetime.timedelta(days=1)))
+        with Mock.start() as mock:
+            now = mock.expect("GET", "/_mock/state")["clock"]["now"]
+            mock.send(x12_order("PIN-HOST"))
+            moved = mock.advance(seconds=90)["clock"]
+            at = mock.timeline("PIN-HOST")["events"][0]["at"]
+        self.assertEqual(now, at)
+        self.assertEqual(at, db.stamp(host))
+        self.assertEqual(moved, db.stamp(host + datetime.timedelta(seconds=90)))
 
     def test_a_clock_pinned_in_another_zone_still_says_its_zone(self):
         now, moved, at = self.clocks(start_at="2026-11-03T00:30:00+01:00")
