@@ -33,7 +33,7 @@ classifiers = [
 dependencies = []
 
 [project.urls]
-Homepage = "https://rickseufert.com/#projects"
+Homepage = "https://rickseufert.com/mock-edi/"
 Repository = "https://github.com/rseufert/mock-edi"
 Issues = "https://github.com/rseufert/mock-edi/issues"
 Changelog = "https://github.com/rseufert/mock-edi/blob/main/CHANGELOG.md"
