@@ -64,7 +64,7 @@ jobs:
       # the only third-party action here and it runs with `id-token: write`,
       # so whatever it points at is what gets the token. Dependabot moves the
       # pin and the version in the comment together (.github/dependabot.yml).
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
 
   testpypi:
     name: publish to TestPyPI
@@ -82,7 +82,7 @@ jobs:
           name: distributions
           path: dist
       # The same pin as the `pypi` job, for the same reason.
-      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33  # v1.14.2
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086  # v1.14.3
         with:
           repository-url: https://test.pypi.org/legacy/
           skip-existing: true
