@@ -762,11 +762,12 @@ the clock stands, since it only goes forward; so is `to` given together with
 `seconds` or `?all`, which would be two answers to one question, or with
 `?failed`, which moves no clock at all.
 
-Use `to` when a script drives more than one mock to the same moment - a
-settlement day a month out, say - so that each of them is told the moment
-rather than each caller working out its own distance. With `--start-at` the
-clock then reads exactly that time; without it the clock is the host's plus
-the advance, so it lands there as of the instant the mock read its own clock.
+Use `to` when what you hold is the moment rather than the distance to it: a
+capture that walks several mocks to a settlement day a month out had to
+subtract to drive this one. This mock's clock is second-precision, so a
+moment is the natural unit for it. With `--start-at` the clock then reads
+exactly that time; without it the clock is the host's plus the advance, so it
+lands there as of the instant the mock read its own clock.
 
 It can be at most 100 years (3,153,600,000 seconds) ahead in total: an advance
 that would take it further is a 400 that says how much room is left, and
