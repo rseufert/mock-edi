@@ -428,16 +428,26 @@ class Mock:
         return self.expect("POST", "/_mock/reset")
 
     def advance(self, seconds: Optional[float] = None, everything: bool = False,
-                failed: bool = False) -> Dict[str, Any]:
+                failed: bool = False, to: Optional[str] = None
+                ) -> Dict[str, Any]:
         """Release what is due, everything, or what failed to be delivered.
 
         `everything` moves the mock's clock to the last due time it releases.
+        `to` moves it forward to a moment - an ISO 8601 time with a `Z` or an
+        offset - releasing what falls due on the way, which is `seconds` for
+        the same distance said the other way round (#341). The `+` of an
+        offset is encoded here, so it reaches the mock as an offset and not
+        as the space a query string would decode it to.
+
+        `to` beside `seconds` is sent as the caller wrote it and refused by
+        the mock, rather than quietly resolved in favour of one of them.
         """
         if failed:
             return self.expect("POST", "/_mock/advance?failed")
         if everything:
             return self.expect("POST", "/_mock/advance?all")
-        return self.expect("POST", "/_mock/advance" + _query(seconds=seconds))
+        return self.expect("POST", "/_mock/advance"
+                           + _query(seconds=seconds, to=to))
 
     @property
     def held(self) -> bool:

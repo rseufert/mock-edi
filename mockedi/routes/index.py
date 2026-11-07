@@ -75,7 +75,9 @@ def page(mock, base: str) -> str:
         ("GET", "/_mock/scheduled", "Work promised but not done: the unpacked despatch, the unwritten invoice, the backorder waiting for its day."),
         ("GET", "/_mock/drop", "The drop and pickup directories, and what they have seen."),
         ("POST", "/_mock/drop/scan", "Read the drop directory now, without waiting for a poll."),
-        ("POST", "/_mock/advance", "Release what is due. <code>?all</code> for everything, "
+        ("POST", "/_mock/advance", "Release what is due. <code>?seconds=N</code> or "
+                                   "<code>?to=&lt;time&gt;</code> to move the clock, "
+                                   "<code>?all</code> for everything, "
                                    "<code>?failed</code> to redeliver what failed."),
         ("POST", "/_mock/outbox/{id}/retry", "Deliver a failed document again, unchanged."),
         ("POST", "/_mock/outbox/{id}/resend", "Send a document again, unchanged, whatever became of it."),
