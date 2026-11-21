@@ -30,10 +30,11 @@ sys.path.insert(0, HERE)
 
 from mockedi import db
 from mockedi.__main__ import main
+from mockedi.pipeline import start_text
 from mockedi.server import BadConfig
 from mockedi.testing import Document, Mock
 
-from support import ACME, x12_order
+from support import ACME, instant, x12_order
 
 START = "2026-11-02T09:00:00Z"
 DAY = 86400
@@ -171,6 +172,180 @@ class TheClockStandsWhereItWasPut(unittest.TestCase):
         dates = sorted(row["ordered_on"]
                        for row in self.mock.expect("GET", "/_mock/orders"))
         self.assertEqual(dates, ["2026-10-19", "2026-10-24"])
+
+
+class TheClockMovesToAMoment(unittest.TestCase):
+    """`advance?to=<time>`: the move `?seconds=` makes, named as a moment (#341).
+
+    A script that walks three mocks to the bank's settlement day had to
+    subtract on the client side for this one alone. `to` is the same advance
+    measured the other way round: the clock goes forward to the moment, and
+    what falls due on the way is released exactly as it is for the same
+    distance in seconds.
+    """
+
+    def setUp(self):
+        self.mock = Mock.start(start_at=START, invoice_delay_ms=DAY * 1000)
+        self.addCleanup(self.mock.close)
+
+    def clock(self):
+        return self.mock.expect("GET", "/_mock/state")["clock"]
+
+    def refused(self, query):
+        status, _headers, data = self.mock.post("/_mock/advance?" + query)
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["parameter"], "to")
+        return data["error"]
+
+    # -- where it leaves the clock
+
+    def test_the_clock_stands_at_the_moment_it_was_given(self):
+        answer = self.mock.advance(to="2026-11-02T09:01:30Z")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
+        self.assertEqual(answer["advancedSeconds"], 90.0)
+
+    def test_and_stands_there_however_long_the_host_waits(self):
+        self.mock.advance(to="2026-11-02T09:01:30Z")
+        time.sleep(1.1)
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:01:30Z")
+
+    def test_an_offset_names_the_same_moment_as_a_z_does(self):
+        answer = self.mock.advance(to="2026-11-02T10:01:30+01:00")
+        self.assertEqual(answer["clock"], "2026-11-02T09:01:30Z")
+        self.assertEqual(answer["advancedSeconds"], 90.0)
+
+    def test_a_second_to_moves_it_on_from_where_it_stands(self):
+        self.mock.advance(to="2026-11-02T09:01:30Z")
+        answer = self.mock.advance(to="2026-11-02T09:03:00Z")
+        self.assertEqual(answer["advancedSeconds"], 180.0)
+
+    # -- what it releases on the way
+
+    def test_it_releases_what_falls_due_before_the_moment(self):
+        self.mock.send(x12_order("PIN-TO"))
+        self.mock.advance(to="2026-11-03T09:00:00Z")
+        invoice = self.mock.document(ACME, "invoice")
+        self.assertEqual(invoice.find("BIG").get(1), "20261103")
+
+    def test_and_nothing_that_falls_due_after_it(self):
+        self.mock.send(x12_order("PIN-TO-EARLY"))
+        answer = self.mock.advance(to="2026-11-03T08:59:59Z")
+        self.assertEqual(self.mock.mailbox(ACME, "invoice"), [])
+        self.assertEqual(answer["clock"], "2026-11-03T08:59:59Z")
+
+    def test_it_releases_what_the_same_distance_in_seconds_releases(self):
+        with Mock.start(start_at=START, invoice_delay_ms=DAY * 1000) as other:
+            other.send(x12_order("PIN-SAME"))
+            self.mock.send(x12_order("PIN-SAME"))
+            by_seconds = other.advance(seconds=DAY)
+            by_moment = self.mock.advance(to="2026-11-03T09:00:00Z")
+            self.assertEqual(by_seconds["count"], by_moment["count"])
+            self.assertEqual(by_seconds["clock"], by_moment["clock"])
+            self.assertEqual(by_seconds["advancedSeconds"],
+                             by_moment["advancedSeconds"])
+
+    # -- what it refuses
+
+    def test_the_moment_the_clock_is_already_at_is_refused_and_names_it(self):
+        error = self.refused("to=2026-11-02T09:00:00Z")
+        self.assertIn("2026-11-02T09:00:00Z", error)
+        self.assertIn("only moves forward", error)
+
+    def test_and_so_is_a_moment_behind_it(self):
+        self.assertIn("2026-11-02T09:00:00Z",
+                      self.refused("to=2026-11-02T08:59:59Z"))
+
+    def test_a_time_with_no_zone(self):
+        error = self.refused("to=2026-11-02T09:01:30")
+        self.assertIn("Z or an offset", error)
+
+    def test_something_that_is_not_a_time(self):
+        self.assertIn("ISO 8601", self.refused("to=tomorrow"))
+
+    def test_nothing_at_all(self):
+        self.assertIn("ISO 8601", self.refused("to="))
+
+    def test_an_unencoded_offset_is_refused_and_says_how_to_write_it(self):
+        # `+` in a query string decodes to a space, so this arrives as
+        # "2026-11-02T10:01:30 01:00". Refused rather than repaired: a URL
+        # that only this mock accepts is a script that breaks elsewhere.
+        error = self.refused("to=2026-11-02T10:01:30+01:00")
+        self.assertIn("%2B", error)
+
+    # These four assert the words the collision is refused in, not just a
+    # 400: before `to` was a parameter at all each of them was already
+    # refused, by `only`, for not knowing the name - so a test that asked
+    # only for a 400 would pass without the change and guard nothing.
+
+    def test_to_with_seconds(self):
+        error = self.refused("to=2026-11-02T09:01:30Z&seconds=90")
+        self.assertEqual(error, "to and seconds each say where the clock "
+                                "stops; give one, not both")
+
+    def test_to_with_an_empty_seconds_collides_too(self):
+        self.assertIn("give one, not both",
+                      self.refused("to=2026-11-02T09:01:30Z&seconds="))
+
+    def test_to_with_all(self):
+        self.assertEqual(self.refused("to=2026-11-02T09:01:30Z&all"),
+                         "to and all each say where the clock stops; give "
+                         "one, not both")
+
+    def test_to_with_failed(self):
+        self.assertIn("moves no clock",
+                      self.refused("to=2026-11-02T09:01:30Z&failed"))
+
+    def test_to_with_partner(self):
+        # The one case neither #341 nor #345 covers on its own: `partner`
+        # is refused above `to`, so an advance to a moment is told it
+        # moves the clock for everybody rather than landing and ignoring
+        # the partner it was given.
+        status, _headers, data = self.mock.post(
+            "/_mock/advance?to=2026-11-03T09:00:00Z&partner=ACME")
+        self.assertEqual(status, 400, data)
+        self.assertEqual(data["parameter"], "partner")
+        self.assertIn("partner goes with failed", data["error"])
+        self.assertEqual(self.clock()["now"], "2026-11-02T09:00:00Z")
+
+    def test_beyond_the_limit_is_the_refusal_seconds_gives(self):
+        error = self.refused("to=2200-01-01T00:00:00Z")
+        self.assertIn(str(100 * 365 * 86400), error)
+        self.assertIn("/_mock/reset", error)
+
+    def test_a_refused_to_leaves_the_clock_where_it_was(self):
+        self.mock.advance(to="2026-11-02T09:01:30Z")
+        for query in ("to=2026-11-02T09:00:00Z", "to=tomorrow", "to=",
+                      "to=2200-01-01T00:00:00Z",
+                      "to=2026-11-02T09:05:00Z&seconds=1"):
+            with self.subTest(query=query):
+                self.mock.post("/_mock/advance?" + query)
+                self.assertEqual(self.clock()["now"],
+                                 "2026-11-02T09:01:30Z")
+
+    def test_the_parameters_it_does_take_are_still_named(self):
+        status, _headers, data = self.mock.post("/_mock/advance?days=30")
+        self.assertEqual(status, 400, data)
+        for name in ("seconds", "to", "all", "failed", "partner"):
+            self.assertIn(name, data["error"])
+
+
+class ToOnAClockThatWasNotPinned(unittest.TestCase):
+    """The same move, measured from the host's clock.
+
+    Unpinned the clock is the host's plus the advance, so it lands on the
+    moment as of the instant it was read and the host's clock keeps running.
+    That is why `--start-at` is what the reproducible case uses; the distance
+    is still the right one.
+    """
+
+    def test_it_moves_forward_by_the_distance_to_the_moment(self):
+        with Mock.start() as mock:
+            now = instant(mock.expect("GET", "/_mock/state")["clock"]["now"])
+            wanted = (now + datetime.timedelta(hours=1)).replace(
+                microsecond=0)
+            answer = mock.advance(to=start_text(wanted))
+            self.assertAlmostEqual(answer["advancedSeconds"], 3600, delta=30)
+            self.assertEqual(instant(answer["clock"]), wanted)
 
 
 class WithDeliveryHeld(unittest.TestCase):

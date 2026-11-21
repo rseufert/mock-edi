@@ -121,12 +121,15 @@ class Receipt:
         return self.ok and bool(self.report) and self.report.accepted > 0
 
 
-def parse_start(text: str) -> datetime.datetime:
+def parse_start(text: str, name: str = "start time") -> datetime.datetime:
     """A `--start-at` value as a moment in the zone it was written in.
 
     ISO 8601 with a `Z` or an offset. One with neither is refused: read as
     UTC or as the host's zone it would be a guess, and the point of a start
     time is that it means the same on every machine.
+
+    `name` is what the refusals call the value, so `advance?to=` is told
+    about `to` and not about a start time it was never given (#341).
     """
     given = (text or "").strip()
     try:
@@ -134,13 +137,43 @@ def parse_start(text: str) -> datetime.datetime:
             given[:-1] + "+00:00" if given[-1:] in ("Z", "z") else given)
     except ValueError:
         raise ValueError(
-            "start time %r is not an ISO 8601 time such as "
-            "2026-11-02T09:00:00Z" % text) from None
+            "%s %r is not an ISO 8601 time such as "
+            "2026-11-02T09:00:00Z" % (name, text)) from None
     if moment.tzinfo is None:
         raise ValueError(
-            "start time %r says no zone; write it with Z or an offset, as "
-            "in %sZ or %s+01:00" % (text, given, given))
+            "%s %r says no zone; write it with Z or an offset, as "
+            "in %sZ or %s+01:00" % (name, text, given, given))
     return moment.replace(tzinfo=DocumentZone(moment.utcoffset()))
+
+
+def _parse_advance_to(text: str) -> datetime.datetime:
+    """`advance?to=` as a moment, refused in words about `to`."""
+    try:
+        return parse_start(text, name="to")
+    except ValueError as error:
+        raise ValueError("%s%s" % (error, _plus_hint(text))) from None
+
+
+def _plus_hint(text: str) -> str:
+    """The advice a value whose `+` a query string ate has earned.
+
+    `+` in a query string decodes to a space, so `?to=2026-11-02T10:01:30
+    +01:00` arrives as `...30 01:00` and does not parse. Said rather than
+    repaired: there is only one character that space could have been, but a
+    URL this mock alone accepts is a script that breaks against every other
+    server, and `to` is for a script that drives several (#341). Offered
+    only where putting the `+` back would in fact have parsed, so a value
+    that is wrong some other way is not sent looking for a plus it never
+    had.
+    """
+    head, space, tail = (text or "").rpartition(" ")
+    if not space:
+        return ""
+    try:
+        parse_start("%s+%s" % (head, tail))
+    except ValueError:
+        return ""
+    return "; a + offset must be written %2B in a query string"
 
 
 def start_text(moment: datetime.datetime) -> str:
@@ -1635,6 +1668,31 @@ class Pipeline:
                    _seconds(limit - ahead), _seconds(seconds)))
         self.offset += datetime.timedelta(seconds=seconds)
         return self.release(self.now())
+
+    def advance_to(self, text: str) -> List[int]:
+        """Move the clock forward to a moment, releasing what that makes due.
+
+        `advance(seconds=...)` measured the other way round, for a caller
+        walking several mocks to one moment: the distance is taken from a
+        single reading of `now()`, and everything after that - the ceiling,
+        the release, what the documents are stamped with - is that method's.
+
+        Forward only, and not to where the clock already stands: a caller
+        that computed the moment from a reading it took a moment ago would
+        otherwise be answered 200 for an advance that moved nothing.
+
+        Pinned (`--start-at`) the clock then reads exactly the moment given.
+        Unpinned it is the host's clock plus the advance, so it lands there
+        as of the reading and the host's clock carries on - which is why the
+        reproducible case is a pinned one.
+        """
+        moment = _parse_advance_to(text)
+        standing = self.now()
+        if moment <= standing:
+            raise ValueError(
+                "the clock only moves forward; it stands at %s and to was %s"
+                % (db.stamp(standing), db.stamp(moment)))
+        return self.advance((moment - standing).total_seconds())
 
     def _advance_to_the_last_due_time(self) -> List[int]:
         released = self.release(self.now())
