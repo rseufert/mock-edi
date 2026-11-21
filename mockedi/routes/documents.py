@@ -8,7 +8,7 @@ import json
 from typing import Dict, List, Tuple
 
 from .. import db
-from . import first, flag, limit, route
+from . import first, flag, limit, route, yes_or_no
 
 
 @route("GET", "/_mock/documents")
@@ -75,7 +75,7 @@ def _document_query(query: Dict[str, List[str]]) -> str:
         # `?acknowledged=false` is the useful one: what have we sent that
         # nobody has answered for?
         clauses.append("ack_status %s ''"
-                       % ("!=" if flag(query, "acknowledged") else "="))
+                       % ("!=" if yes_or_no(query, "acknowledged") else "="))
     if first(query, "direction"):
         clauses.append("direction = ?")
     if first(query, "partner"):

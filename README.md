@@ -248,7 +248,11 @@ have been configured with: `/as2/`, `/as2/receive`, `/as2/mdn/` and `/edi/`.
 
 Every `GET` also answers `HEAD`, for a liveness probe, and `OPTIONS` answers
 with the methods the mock takes. A query value that cannot be read -
-`?seconds=abc`, `?limit=ten` - is a `400` naming the parameter. A `500` is
+`?seconds=abc`, `?limit=ten` - is a `400` naming the parameter. A flag
+(`?all`, `?leave`, `?raw`, `?failed`) is a bare word: `=1`, `=true` and
+`=yes` are read as the word, and any other value is that `400`, `=false`
+included - leave the flag out to not set it. `?acknowledged=`, which asks a
+question, takes `true` or `false`. A `500` is
 always a bug: its traceback goes to stderr, even with `-q`.
 
 ## The documents

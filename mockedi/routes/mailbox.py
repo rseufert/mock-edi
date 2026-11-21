@@ -15,10 +15,13 @@ TEXT = "text/plain; charset=utf-8"
 
 @route("GET", "/_mock/mailbox")
 def mailbox(h) -> Tuple[int, int]:
+    # Both flags are read before anything is collected: one that is refused
+    # must not have taken the documents first.
+    leave, raw = flag(h.query, "leave"), flag(h.query, "raw")
     rows = h.mock.pipeline.collect(
         partner_id=first(h.query, "partner"), kind=first(h.query, "kind"),
-        leave=flag(h.query, "leave"))
-    if flag(h.query, "raw"):
+        leave=leave)
+    if raw:
         joined = b"\n".join(h.mock.pipeline.wire(row)[0] for row in rows)
         return h.raw(200, joined, {"Content-Type": TEXT})
     # Without the mock's own bookkeeping (#195). These rows are answered
